@@ -1,0 +1,6 @@
+/target
+*.dae
+*.pof
+*.txt
+*.log
+Cargo.lock

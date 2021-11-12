@@ -1,0 +1,17 @@
+[package]
+name = "pof-tools-gui"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+eframe = "0.15"
+egui = "0.15"
+epi = "0.15"
+glium = "0.30"
+egui_glium = "0.15"
+pof = { path = "pof" }
+nalgebra-glm = "0.15"
+native-dialog = "0.5.5"
+crossbeam = "0.8.1"

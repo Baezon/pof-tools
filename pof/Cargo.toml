@@ -1,0 +1,19 @@
+[package]
+name = "pof"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+byteorder = "1.2"
+# dae-parser = {path = "../pcs3/dae-parser", features = ["nalgebra"]}
+dae-parser = {version = "0.7.1", features = ["nalgebra"]}
+walkdir = "2"
+nalgebra = "0.29"
+nalgebra-glm = "0.15"
+
+[[bin]]
+name = "pof"
+path = "src/main.rs"
+doc = false

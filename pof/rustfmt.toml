@@ -1,0 +1,5 @@
+max_width = 150
+fn_args_layout = "Compressed"
+fn_call_width = 150
+fn_single_line = true
+struct_lit_width = 60

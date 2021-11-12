@@ -558,7 +558,6 @@ impl UiState {
         let response = CollapsingHeader::new(name)
             .selectable(true)
             .id_source(&tree_value)
-            .default_open(tree_value == self.tree_view_selection)
             .selected(tree_value == self.tree_view_selection)
             .show(ui, |ui| f(self, ui));
         if response.header_response.clicked() {
@@ -567,49 +566,6 @@ impl UiState {
             self.viewport_3d_dirty = true;
         }
     }
-
-    // fn tree<T>(
-    //     &mut self, model: &Model, ui: &mut Ui, tree_value: TreeSelection)
-    // {
-    //     let name = tree_value.name(model);
-    //     let collapsing = tree_value.is_always_collapsing(model);
-    //     let children = tree_value.children(model);
-    //     if !collapsing && children.is_empty() {
-    //         self.tree_selectable_item(model, ui, name, tree_value);
-    //     } else {
-    //         self.tree_collapsing_item(model, ui, name, tree_value, |ui_state, ui| {
-    //             for item in children {
-    //                 self.tree(model, ui, item)
-    //             }
-    //         })
-    //     }
-    // }
-
-    // #[must_use]
-    // fn indexing_buttons(ui: &mut Ui, current_num: Option<usize>, max_num: Option<usize>, index_name: &str) -> IndexingButtonsResponse {
-    //     let mut result = IndexingButtonsResponse::Nothing;
-    //     ui.horizontal(|ui| {
-    //         let side_button_size = 50.0;
-    //         let remaining_width = ui.available_width() - 20.0 - side_button_size * 2.0;
-    //         ui.add_enabled_ui(current_num != None && current_num != Some(0), |ui| {
-    //             if ui.add_sized([side_button_size, 30.0], egui::Button::new("◀")).clicked() {
-    //                 result = IndexingButtonsResponse::Switch(current_num.unwrap() - 1)
-    //             }
-    //         });
-
-    //         ui.vertical_centered(|ui| {
-    //             ui.label(current_num.map_or_else(|| format!("-"), |num| format!("{} {}", index_name, num + 1)));
-    //         });
-    //         //ui.add_sized([remaining_width, 30.0], egui::Label::new(current_num.map_or_else(|| format!("-"), |num| format!("{} {}", index_name, num + 1))));
-
-    //         ui.add_enabled_ui(max_num != None && current_num != Some(max_num.unwrap() - 1), |ui| {
-    //             if ui.add_sized([side_button_size, 30.0], egui::Button::new("▶")).clicked() {
-    //                 result = IndexingButtonsResponse::Switch(current_num.map_or(0,|num| num + 1))
-    //             }
-    //         });
-    //     });
-    //     result
-    // }
 
     #[must_use]
     fn list_manipulator_widget(
@@ -635,6 +591,8 @@ impl UiState {
             let side_button_size = 40.0;
             let height = 50.0;
             let remaining_width = ui.available_width() - ui.spacing().item_spacing.x * 2.0 - side_button_size * 2.0;
+
+            // the left/previous item button
             ui.add_enabled_ui(left.is_some(), |ui| {
                 if ui
                     .add_sized([side_button_size, height], egui::Button::new("◀"))
@@ -645,6 +603,7 @@ impl UiState {
                 }
             });
 
+            // the copy/delete buttons (and label)
             ui.vertical(|ui| {
                 ui.add_sized(
                     [remaining_width, (height - ui.spacing().item_spacing.y) / 2.0],
@@ -687,6 +646,7 @@ impl UiState {
                 });
             });
 
+            // the right/new button
             ui.add_enabled_ui(right.is_some(), |ui| {
                 if matches!(right, Some(Icon::Plus)) {
                     if ui
@@ -710,6 +670,7 @@ impl UiState {
         ret
     }
 
+    // a text edit field attached to a model value that will show up red if it cannot parse
     fn parsable_text_edit<T: FromStr>(ui: &mut Ui, model_value: &mut T, parsable_string: &mut String) -> bool {
         if let Err(_) = parsable_string.parse::<T>() {
             ui.visuals_mut().override_text_color = Some(egui::Color32::RED);
@@ -723,6 +684,7 @@ impl UiState {
         false
     }
 
+    // a combo box for subobjects
     fn subobject_combo_box(
         ui: &mut Ui, name_list: &Vec<String>, mut_selection: &mut usize, selector_value: Option<usize>, label: &str,
     ) -> Option<ObjectId> {
@@ -758,6 +720,7 @@ impl UiState {
         val_changed
     }
 
+    // fills the properties panel based on the current tree selection, taking all the relevant data from the model
     pub(crate) fn refresh_properties_panel(&mut self, model: &Model) {
         match &self.tree_view_selection {
             TreeSelection::Header => {
@@ -957,9 +920,11 @@ impl UiState {
 }
 
 impl PofToolsGui {
+    // =====================================================
+    // The big top-level function for drawing and interacting with all of the UI
+    // ====================================================
     pub fn show_ui(&mut self, ctx: &egui::CtxRef) {
         egui::TopBottomPanel::top("menu").default_height(33.0).min_height(33.0).show(ctx, |ui| {
-            // ui.fonts()
             Ui::add_space(ui, 6.0);
             ui.horizontal(|ui| {
                 if ui.add(Button::new("🗁").text_style(TextStyle::Heading)).clicked() {
@@ -980,7 +945,6 @@ impl PofToolsGui {
                     self.wireframe_enabled = !self.wireframe_enabled;
                 }
             });
-            // ui.spacing(). = Vec2::new(5.0, 5.0);
         });
         let mut warnings = egui::TopBottomPanel::bottom("info bar")
             .resizable(true)
@@ -1005,7 +969,13 @@ impl PofToolsGui {
         if warnings.response.clicked() {
             println!("clicked!")
         }
-        egui::SidePanel::left("headers_tree_view")
+
+        // ==============================================================================================================
+        // The 'tree view' is the section on the left of the UI which contains selections for the various kinds of things
+        // the user can edit, turrets, hardpoints, subobjects, etc
+        // ==============================================================================================================
+
+        egui::SidePanel::left("tree_view")
             .resizable(true)
             .default_width(200.0)
             .width_range(150.0..=500.0)
@@ -1332,7 +1302,12 @@ impl PofToolsGui {
                 });
             });
 
-        egui::SidePanel::right("properties_view")
+        // ==============================================================================================================
+        // The 'properties panel' is the section on the right of the UI which contains the specific fields ready for
+        // manipulation of whatever it is they have selected in the tree view
+        // ==============================================================================================================
+
+        egui::SidePanel::right("properties_panel")
             .resizable(true)
             .default_width(200.0)
             .width_range(200.0..=500.0)
@@ -2092,6 +2067,7 @@ impl PofToolsGui {
             });
     }
 
+    // rechecks just one or all of the warnings on the model
     pub fn recheck_warnings(warnings: &mut BTreeSet<Warning>, model: &Model, warning_to_check: Set<Warning>) {
         if let One(warning) = warning_to_check {
             let failed_check;
@@ -2122,6 +2098,7 @@ impl PofToolsGui {
         }
     }
 
+    // tests if the radius for a subobjects or the header is too small for its geometry
     // None means the header/entire model's radius
     fn radius_test_failed(model: &Model, subobj_opt: Option<ObjectId>) -> bool {
         if let Some(subobj) = subobj_opt {

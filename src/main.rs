@@ -271,8 +271,7 @@ glium::implement_vertex!(Normal, normal);
 
 impl PofToolsGui {
     fn save_model(model: &Model) {
-        // let (sender, receiver) = std::sync::mpsc::channel();
-        // self.loading_thread = Some(receiver);
+        // use a scoped thread here, its ok to block the main window for now i guess
         crossbeam::thread::scope(|s| {
             s.spawn(|_| {
                 let path = FileDialog::new().add_filter("Parallax Object File", &["pof"]).show_save_single_file();
@@ -290,6 +289,7 @@ impl PofToolsGui {
         .unwrap();
     }
 
+    // opens a thread which opens the dialog and starts parsing a model
     fn start_loading_model(&mut self) {
         let (sender, receiver) = std::sync::mpsc::channel();
         self.loading_thread = Some(receiver);
@@ -321,6 +321,7 @@ impl PofToolsGui {
         });
     }
 
+    // after the above thread has returned, stuffs the new model in
     fn finish_loading_model(&mut self, display: &Display) {
         self.buffer_objects.clear();
         self.buffer_shield = None;
@@ -361,13 +362,13 @@ fn main() {
     let display = create_display(&event_loop);
 
     let mut egui = egui_glium::EguiGlium::new(&display);
-    //let mut fonts = egui::FontDefinitions::default();
 
     pt_gui.start_loading_model();
     egui.ctx().output().cursor_icon = egui::CursorIcon::Wait;
 
     let model = &pt_gui.model;
 
+    // lots of graphics stuff to initialize
     let default_material_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, DEFAULT_MAT_FRAGMENT_SHADER, None).unwrap();
     let shield_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, SHIELD_FRAGMENT_SHADER, None).unwrap();
     let wireframe_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, WIRE_FRAGMENT_SHADER, None).unwrap();
@@ -427,19 +428,16 @@ fn main() {
                         pt_gui.finish_loading_model(&display);
 
                         pt_gui.loading_thread = None;
-                        println!("drop! ok some");
 
                         egui.ctx().output().cursor_icon = egui::CursorIcon::Default;
                     }
 
                     Err(TryRecvError::Disconnected) => {
                         pt_gui.loading_thread = None;
-                        println!("drop! err disconnected");
                     }
 
                     Ok(None) => {
                         pt_gui.loading_thread = None;
-                        println!("drop! ok none");
                     }
 
                     Err(TryRecvError::Empty) => {}
@@ -466,10 +464,12 @@ fn main() {
 
                 target.clear_color_and_depth((0.0, 0.0, 0.0, 1.0), 1.0);
 
+                // maybe redo lollipops and stuff
                 pt_gui.maybe_recalculate_3d_helpers(&display);
 
                 let model = &pt_gui.model;
 
+                // handle user interactions like rotating the camera
                 let rect = egui.ctx().available_rect();
                 let input = egui.ctx().input();
                 if rect.is_positive() {
@@ -485,9 +485,8 @@ fn main() {
                         pt_gui.camera_scale *= 1.0 + (input.scroll_delta.y * -0.001)
                     }
                 }
-                //println!("{:#?}", egui.ctx().available_rect());
-                //println!("{:?}", egui.ctx().input().scroll_delta);
 
+                // set up the camera matrix
                 let perspective_matrix = {
                     let (width, height) = target.get_dimensions();
                     let aspect_ratio = height as f32 / width as f32;
@@ -514,13 +513,11 @@ fn main() {
                 view_mat *= glm::rotation(pt_gui.camera_heading, &glm::vec3(0., 1., 0.)); // heading
                 view_mat.prepend_translation_mut(&glm::vec3(-model.auto_center.x, -model.auto_center.y, -model.auto_center.z));
 
-                let view_mat: [[f32; 4]; 4] = view_mat.into();
-
-                // draw things behind egui here
+                let view_mat: [[f32; 4]; 4] = view_mat.into(); // the final matrix used by the graphics
 
                 let displayed_subobjects = get_list_of_display_subobjects(model, &pt_gui.ui_state.tree_view_selection);
 
-                // brighten up the dark bits so all the
+                // brighten up the dark bits so wireframe is easier to see
                 let dark_color;
                 if pt_gui.wireframe_enabled {
                     default_material_draw_params.polygon_mode = glium::draw_parameters::PolygonMode::Line;
@@ -532,6 +529,7 @@ fn main() {
                     dark_color = [0.01, 0.01, 0.01f32];
                 }
 
+                // dim down the bright bits when lollipops are on screen
                 let light_color;
                 match &pt_gui.ui_state.tree_view_selection {
                     TreeSelection::Thrusters(_)
@@ -542,8 +540,7 @@ fn main() {
                     | TreeSelection::Turrets(_)
                     | TreeSelection::Paths(_)
                     | TreeSelection::EyePoints(_)
-                    | TreeSelection::AutoCenter
-                    | TreeSelection::Textures(_) => light_color = [0.3, 0.3, 0.3f32],
+                    | TreeSelection::AutoCenter => light_color = [0.3, 0.3, 0.3f32],
                     _ => light_color = [0.9, 0.9, 0.9f32],
                 }
 
@@ -577,6 +574,7 @@ fn main() {
                     }
                 }
 
+                // maybe draw the insignias
                 if let TreeSelection::Insignia(insignia_select) = &pt_gui.tree_view_selection {
                     let (current_detail_level, current_insignia_idx) = match *insignia_select {
                         InsigniaSelection::Header => (0, None),
@@ -621,6 +619,7 @@ fn main() {
                     }
                 }
 
+                // maybe draw the shield
                 if let TreeSelection::Shield = pt_gui.tree_view_selection {
                     if let Some(shield) = &pt_gui.buffer_shield {
                         let uniforms = glium::uniform! {
@@ -641,6 +640,7 @@ fn main() {
                 }
 
                 // draw 'helpers'
+                // bounding boxes, lollipops, etc
                 match &pt_gui.ui_state.tree_view_selection {
                     &TreeSelection::SubObjects(SubObjectSelection::SubObject(obj_id)) => {
                         // draw wireframe bounding boxes
@@ -734,13 +734,7 @@ fn main() {
                     _ => {}
                 }
 
-                // draw things behind egui here
-
                 egui.paint(&display, &mut target, shapes);
-
-                // draw things on top of egui here
-
-                // draw things on top of egui here
 
                 target.finish().unwrap();
             }
@@ -871,7 +865,6 @@ impl PofToolsGui {
                 }
             }
             TreeSelection::Thrusters(thruster_selection) => {
-                // first determine exactly what they have selected
                 let mut selected_bank = None;
                 let mut selected_point = None;
                 match *thruster_selection {
@@ -907,8 +900,6 @@ impl PofToolsGui {
                 );
             }
             TreeSelection::Weapons(weapons_selection) => {
-                // first determine exactly what they have selected
-                // (None of everything means the top level "Weapons" header)
                 let mut selected_bank = None;
                 let mut selected_point = None;
                 let mut selected_weapon_system = None;
@@ -970,7 +961,6 @@ impl PofToolsGui {
                 );
             }
             TreeSelection::DockingBays(docking_selection) => {
-                // first determine exactly what they have selected
                 let mut selected_bank = None;
                 let mut selected_point = None;
                 match *docking_selection {
@@ -1006,7 +996,6 @@ impl PofToolsGui {
                 );
             }
             TreeSelection::Glows(glow_selection) => {
-                // first determine exactly what they have selected
                 let mut selected_bank = None;
                 let mut selected_point = None;
                 match *glow_selection {
@@ -1042,7 +1031,6 @@ impl PofToolsGui {
                 );
             }
             TreeSelection::SpecialPoints(special_selection) => {
-                // first determine exactly what they have selected
                 let mut selected_point = None;
                 if let SpecialPointSelection::Point(point) = special_selection {
                     selected_point = Some(*point);
@@ -1062,7 +1050,6 @@ impl PofToolsGui {
                 );
             }
             TreeSelection::Turrets(turret_selection) => {
-                // first determine exactly what they have selected
                 let mut selected_turret = None;
                 let mut selected_point = None;
                 match *turret_selection {
@@ -1101,7 +1088,6 @@ impl PofToolsGui {
                 );
             }
             TreeSelection::Paths(path_selection) => {
-                // first determine exactly what they have selected
                 let mut selected_path = None;
                 let mut selected_point = None;
                 match *path_selection {
@@ -1147,7 +1133,6 @@ impl PofToolsGui {
                 );
             }
             TreeSelection::EyePoints(eye_selection) => {
-                // first determine exactly what they have selected
                 let mut selected_eye = None;
                 match *eye_selection {
                     EyeSelection::EyePoint(point) => selected_eye = Some(point),

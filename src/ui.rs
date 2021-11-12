@@ -541,6 +541,10 @@ impl std::ops::DerefMut for PofToolsGui {
     }
 }
 impl PofToolsGui {
+    fn warnings_contains_any_subobj_radius_too_small(&self) -> bool {
+        matches!(self.warnings.range(Warning::RadiusTooSmall(Some(ObjectId(0)))..).next(), Some(Warning::RadiusTooSmall(Some(_))))
+    }
+
     fn tree_selectable_item(&mut self, ui: &mut Ui, name: &str, selection: TreeSelection) {
         self.ui_state.tree_selectable_item(&self.model, ui, name, selection);
     }
@@ -700,11 +704,15 @@ impl UiState {
         ret
     }
 
-    fn model_value_edit<T: FromStr>(viewport_3d_dirty: &mut bool, ui: &mut Ui, model_value: Option<&mut T>, parsable_string: &mut String) -> bool {
+    fn model_value_edit<T: FromStr>(
+        viewport_3d_dirty: &mut bool, ui: &mut Ui, active_warning: bool, model_value: Option<&mut T>, parsable_string: &mut String,
+    ) -> bool {
         let mut val_changed = false;
         if let Some(value) = model_value {
             if let Err(_) = parsable_string.parse::<T>() {
                 ui.visuals_mut().override_text_color = Some(egui::Color32::RED);
+            } else if active_warning {
+                ui.visuals_mut().override_text_color = Some(egui::Color32::YELLOW);
             }
             if ui.text_edit_singleline(parsable_string).changed() {
                 if let Ok(parsed_string) = parsable_string.parse() {
@@ -956,7 +964,7 @@ impl PofToolsGui {
                         match warning {
                             Warning::RadiusTooSmall(id_opt) => {
                                 let str = format!(
-                                    "⚠ {}'s radius does not encompass all of it's geometry",
+                                    "⚠ {}'s radius does not encompass all of its geometry",
                                     id_opt.map_or("The header", |id| &self.model.sub_objects[id.0 as usize].name)
                                 );
                                 ui.add(Label::new(str).text_style(TextStyle::Button).text_color(egui::Color32::YELLOW));
@@ -1339,17 +1347,23 @@ impl PofToolsGui {
                             };
 
                             ui.label("Bounding Box Min:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, bbox_min, bbox_min_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, bbox_min, bbox_min_string);
                             ui.label("Bounding Box Max:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, bbox_max, bbox_max_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, bbox_max, bbox_max_string);
                             ui.label("Radius:");
-                            let radius_changed = UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, radius, radius_string);
+                            let radius_changed = UiState::model_value_edit(
+                                &mut self.ui_state.viewport_3d_dirty,
+                                ui,
+                                self.warnings.contains(&Warning::RadiusTooSmall(None)),
+                                radius,
+                                radius_string,
+                            );
                             ui.label("Mass:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, mass, mass_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, mass, mass_string);
                             ui.label("Moment of Intertia:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, moi_r, moir_string);
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, moi_u, moiu_string);
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, moi_f, moif_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, moi_r, moir_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, moi_u, moiu_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, moi_f, moif_string);
 
                             if radius_changed {
                                 PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::RadiusTooSmall(None)));
@@ -1401,13 +1415,19 @@ impl PofToolsGui {
                                 };
 
                             ui.label("Bounding Box Min:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, bbox_min, bbox_min_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, bbox_min, bbox_min_string);
                             ui.label("Bounding Box Max:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, bbox_max, bbox_max_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, bbox_max, bbox_max_string);
                             ui.label("Offset:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, offset, offset_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, offset, offset_string);
                             ui.label("Radius:");
-                            if UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, radius, radius_string) {
+                            if UiState::model_value_edit(
+                                &mut self.ui_state.viewport_3d_dirty,
+                                ui,
+                                self.warnings.contains(&Warning::RadiusTooSmall(selected_id)),
+                                radius,
+                                radius_string,
+                            ) {
                                 PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::RadiusTooSmall(selected_id)));
                             }
 
@@ -1442,7 +1462,7 @@ impl PofToolsGui {
                             };
 
                             ui.label("Texture Name:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, tex, texture_name);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, tex, texture_name);
                         }
                         PropertiesPanel::Thruster { position_string, normal_string, radius_string, properties } => {
                             ui.heading("Thruster");
@@ -1484,11 +1504,11 @@ impl PofToolsGui {
                                     (None, None, None)
                                 };
                             ui.label("Radius:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, radius, radius_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, radius, radius_string);
                             ui.label("Position:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, pos, position_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
                             ui.label("Normal:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, norm, normal_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
 
                             if let Some(response) = bank_idx_response {
                                 let new_idx = response.apply(&mut self.model.thruster_banks);
@@ -1568,11 +1588,11 @@ impl PofToolsGui {
                             };
 
                             ui.label("Position:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, pos, position_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
                             ui.label("Normal:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, norm, normal_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
                             ui.label("Offset:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, offset, offset_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, offset, offset_string);
 
                             if let Some(response) = bank_idx_response {
                                 let (weapon_system, is_primary) = weapon_system.unwrap();
@@ -1631,9 +1651,9 @@ impl PofToolsGui {
                                     (None, None)
                                 };
                             ui.label("Position:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, pos, position_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
                             ui.label("Normal:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, norm, normal_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
 
                             if let Some(response) = bay_idx_response {
                                 let new_idx = response.apply(&mut self.model.docking_bays);
@@ -1717,25 +1737,25 @@ impl PofToolsGui {
 
                             ui.horizontal(|ui| {
                                 ui.label("LOD:");
-                                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, lod, lod_string);
+                                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, lod, lod_string);
                             });
 
                             ui.horizontal(|ui| {
                                 ui.label("Type:");
-                                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, glow_type, glow_type_string);
+                                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, glow_type, glow_type_string);
                             });
 
                             ui.label("Displacement Time:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, disp_time, disp_time_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, disp_time, disp_time_string);
 
                             ui.horizontal(|ui| {
                                 ui.label("On Time:");
-                                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, on_time, on_time_string);
+                                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, on_time, on_time_string);
                             });
 
                             ui.horizontal(|ui| {
                                 ui.label("Off Time:");
-                                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, off_time, off_time_string);
+                                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, off_time, off_time_string);
                             });
 
                             if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, attached_subobj_idx, bank_num, "SubObject")
@@ -1759,11 +1779,11 @@ impl PofToolsGui {
                             ui.add_space(10.0);
 
                             ui.label("Radius:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, radius, radius_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, radius, radius_string);
                             ui.label("Position:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, pos, position_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
                             ui.label("Normal:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, norm, normal_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
 
                             if let Some(response) = bank_idx_response {
                                 let new_idx = response.apply(&mut self.model.glow_banks);
@@ -1819,9 +1839,9 @@ impl PofToolsGui {
                                     (None, None)
                                 };
                             ui.label("Radius:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, radius, radius_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, radius, radius_string);
                             ui.label("Position:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, pos, position_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
 
                             if let Some(response) = spec_point_idx_response {
                                 let new_idx = response.apply(&mut self.model.special_points);
@@ -1865,7 +1885,7 @@ impl PofToolsGui {
                             }
 
                             ui.label("Normal:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, norm, normal_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
 
                             ui.separator();
                             ui.add(Label::new("Turret Fire Points").text_style(TextStyle::Button));
@@ -1887,7 +1907,7 @@ impl PofToolsGui {
                             };
 
                             ui.label("Position:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, pos, position_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
 
                             if let Some(response) = turret_idx_response {
                                 let new_idx = response.apply(&mut self.model.turrets);
@@ -1948,9 +1968,9 @@ impl PofToolsGui {
                             };
 
                             ui.label("Radius:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, radius, radius_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, radius, radius_string);
                             ui.label("Position:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, pos, position_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
 
                             if let Some(response) = path_idx_response {
                                 let new_idx = response.apply(&mut self.model.paths);
@@ -1990,9 +2010,9 @@ impl PofToolsGui {
                             };
 
                             ui.label("Detail Level:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, lod, lod_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, lod, lod_string);
                             ui.label("Offset:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, offset, offset_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, offset, offset_string);
                         }
                         PropertiesPanel::EyePoint { position_string, normal_string, attached_subobj_idx } => {
                             ui.heading("Eye Point");
@@ -2033,9 +2053,9 @@ impl PofToolsGui {
                                 (None, None)
                             };
                             ui.label("Position:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, pos, position_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
                             ui.label("Normal:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, norm, normal_string);
+                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
 
                             if let Some(response) = eye_idx_response {
                                 let new_idx = response.apply(&mut self.model.eye_points);
@@ -2106,7 +2126,6 @@ impl PofToolsGui {
             let radius_with_margin = (1.0 + f32::EPSILON) * subobj.radius;
             for vert in &subobj.bsp_data.verts {
                 if vert.magnitude() > radius_with_margin {
-                    println!("dist is {}", vert.magnitude());
                     return true;
                 }
             }
@@ -2121,7 +2140,6 @@ impl PofToolsGui {
                 let offset = model.get_total_subobj_offset(subobj.obj_id);
                 for vert in &subobj.bsp_data.verts {
                     if (*vert + offset).magnitude() > radius_with_margin {
-                        println!("dist is {}, subobj: {}", (*vert + offset).magnitude(), subobj.name);
                         return true;
                     }
                 }

@@ -178,7 +178,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
             detail_levels: details.into_iter().map(|pair| pair.1).collect(),
             ..Default::default()
         },
-        sub_objects,
+        sub_objects: ObjVec(sub_objects),
         textures: Default::default(),
         paths: Default::default(),
         special_points: Default::default(),
@@ -214,7 +214,7 @@ impl<R: Read + Seek> Parser<R> {
     pub fn parse(&mut self) -> io::Result<Model> {
         // println!("parsing new model!");
         let mut header = None;
-        let mut sub_objects = vec![];
+        let mut sub_objects = ObjVec::default();
         let mut textures = None;
         let mut paths = None;
         let mut special_points = None;
@@ -586,14 +586,14 @@ impl<R: Read + Seek> Parser<R> {
         //println!("{:#?}", shield_data);
 
         for i in 0..sub_objects.len() {
-            if let Some(parent) = sub_objects[i].parent {
-                let id = sub_objects[i].obj_id;
-                sub_objects[parent.0 as usize].children.push(id);
+            if let Some(parent) = sub_objects.0[i].parent {
+                let id = sub_objects.0[i].obj_id;
+                sub_objects[parent].children.push(id);
             }
         }
 
         for id in debris_objs {
-            sub_objects[id.0 as usize].is_debris_model = true;
+            sub_objects[id].is_debris_model = true;
         }
 
         Ok(Model {

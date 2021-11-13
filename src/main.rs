@@ -4,7 +4,7 @@ use std::{collections::HashMap, fs::File, sync::mpsc::TryRecvError};
 
 //use egui::{FontFamily, TextStyle};
 use glium::{glutin, BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer};
-use pof::{Insignia, Model, ObjectId, Parser, ShieldData, SubObject, TextureId, Texturing, Vec3d};
+use pof::{Insignia, Model, ObjVec, ObjectId, Parser, ShieldData, SubObject, TextureId, Texturing, Vec3d};
 extern crate nalgebra_glm as glm;
 
 mod sphere;
@@ -546,7 +546,7 @@ fn main() {
 
                 // draw the actual subobjects of the model
                 for buffer_obj in &pt_gui.buffer_objects {
-                    if displayed_subobjects[buffer_obj.obj_id.0 as usize] {
+                    if displayed_subobjects[buffer_obj.obj_id] {
                         let mut mat = glm::identity::<f32, 4>();
                         mat.append_translation_mut(&pt_gui.model.get_total_subobj_offset(buffer_obj.obj_id).into());
 
@@ -644,7 +644,7 @@ fn main() {
                 match &pt_gui.ui_state.tree_view_selection {
                     &TreeSelection::SubObjects(SubObjectSelection::SubObject(obj_id)) => {
                         // draw wireframe bounding boxes
-                        let bbox = &pt_gui.model.sub_objects[obj_id.0 as usize].bbox;
+                        let bbox = &pt_gui.model.sub_objects[obj_id].bbox;
 
                         let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
                         mat.append_translation_mut(&(bbox.min + pt_gui.model.get_total_subobj_offset(obj_id)).into());
@@ -776,8 +776,8 @@ fn main() {
 
 // based on the current selection which submodels should be displayed
 // TODO show destroyed models
-fn get_list_of_display_subobjects(model: &Model, tree_selection: &TreeSelection) -> Vec<bool> {
-    let mut out = vec![false; model.sub_objects.len()];
+fn get_list_of_display_subobjects(model: &Model, tree_selection: &TreeSelection) -> ObjVec<bool> {
+    let mut out = ObjVec(vec![false; model.sub_objects.len()]);
 
     // if they have something selected...
     if let TreeSelection::SubObjects(SubObjectSelection::SubObject(selected_id)) = *tree_selection {
@@ -792,20 +792,20 @@ fn get_list_of_display_subobjects(model: &Model, tree_selection: &TreeSelection)
         // if so, display it and all its children
         if let Some(detail_level) = detail_selected {
             for (i, sub_object) in model.sub_objects.iter().enumerate() {
-                out[i] = model.is_obj_id_ancestor(sub_object.obj_id, detail_level) && !sub_object.is_destroyed_model();
+                out.0[i] = model.is_obj_id_ancestor(sub_object.obj_id, detail_level) && !sub_object.is_destroyed_model();
             }
-        } else if model.sub_objects[selected_id.0 as usize].is_debris_model {
+        } else if model.sub_objects[selected_id].is_debris_model {
             // if they have debris selected show all the debris
             for (i, sub_object) in model.sub_objects.iter().enumerate() {
-                out[i] = sub_object.is_debris_model;
+                out.0[i] = sub_object.is_debris_model;
             }
         } else {
-            out[selected_id.0 as usize] = true
+            out[selected_id] = true
         }
     } else if let TreeSelection::Insignia(InsigniaSelection::Insignia(idx)) = *tree_selection {
         // show the LOD objects according to the detail level of the currently selected insignia
         for (i, sub_object) in model.sub_objects.iter().enumerate() {
-            out[i] = model.is_obj_id_ancestor(sub_object.obj_id, model.header.detail_levels[model.insignias[idx].detail_level as usize])
+            out.0[i] = model.is_obj_id_ancestor(sub_object.obj_id, model.header.detail_levels[model.insignias[idx].detail_level as usize])
                 && !sub_object.is_destroyed_model();
         }
     } else {
@@ -813,10 +813,10 @@ fn get_list_of_display_subobjects(model: &Model, tree_selection: &TreeSelection)
         for (i, sub_object) in model.sub_objects.iter().enumerate() {
             if model.header.detail_levels.is_empty() {
                 // wut, no detail levels? ok just show only the currently selected one...
-                out[i] = sub_object.obj_id == ObjectId(0);
+                out.0[i] = sub_object.obj_id == ObjectId(0);
             } else {
                 let detail0 = model.header.detail_levels[0];
-                out[i] = model.is_obj_id_ancestor(sub_object.obj_id, detail0) && !sub_object.is_destroyed_model();
+                out.0[i] = model.is_obj_id_ancestor(sub_object.obj_id, detail0) && !sub_object.is_destroyed_model();
             }
         }
     }

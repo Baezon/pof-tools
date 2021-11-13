@@ -228,7 +228,7 @@ impl TreeSelection {
     //         TreeSelection::SubObjects(_) => todo!(),
     //         TreeSelection::Textures(tex) => match tex {
     //             TextureSelection::Header => "Textures",
-    //             TextureSelection::Texture(tex) => &model.textures[tex.0 as usize],
+    //             TextureSelection::Texture(tex) => &model.textures[tex],
     //         },
     //         TreeSelection::Weapons(_) => todo!(),
     //         TreeSelection::DockingBays(_) => todo!(),
@@ -691,12 +691,16 @@ impl UiState {
     // a combo box for subobjects
     fn subobject_combo_box(
         ui: &mut Ui, name_list: &Vec<String>, mut_selection: &mut usize, selector_value: Option<usize>, label: &str,
-    ) -> Option<ObjectId> {
+    ) -> Option<usize> {
         let mut ret = None;
         ui.add_enabled_ui(selector_value.is_some(), |ui| {
             if let Some(_) = selector_value {
-                egui::ComboBox::from_label(label).show_index(ui, mut_selection, name_list.len(), |i| name_list[i].to_owned());
-                ret = Some(ObjectId(*mut_selection as u32));
+                if egui::ComboBox::from_label(label)
+                    .show_index(ui, mut_selection, name_list.len(), |i| name_list[i].to_owned())
+                    .changed()
+                {
+                    ret = Some(*mut_selection);
+                }
             } else {
                 egui::ComboBox::from_label(label).show_index(ui, mut_selection, 1, |_| format!(""));
             }
@@ -751,18 +755,18 @@ impl UiState {
                     ),
                 }
             }
-            TreeSelection::SubObjects(subobj_tree_select) => match subobj_tree_select {
+            TreeSelection::SubObjects(subobj_tree_select) => match *subobj_tree_select {
                 SubObjectSelection::Header => self.properties_panel = PropertiesPanel::default_subobject(),
                 SubObjectSelection::SubObject(id) => {
                     self.properties_panel = PropertiesPanel::SubObject {
-                        bbox_max_string: format!("{}", model.sub_objects[id.0 as usize].bbox.max),
-                        bbox_min_string: format!("{}", model.sub_objects[id.0 as usize].bbox.min),
-                        offset_string: format!("{}", model.sub_objects[id.0 as usize].offset),
-                        radius_string: format!("{}", model.sub_objects[id.0 as usize].radius),
-                        is_debris_check: model.sub_objects[id.0 as usize].is_debris_model,
-                        properties: format!("{}", model.sub_objects[id.0 as usize].properties),
-                        name: format!("{}", model.sub_objects[id.0 as usize].name),
-                        rot_axis: model.sub_objects[id.0 as usize].movement_axis,
+                        bbox_max_string: format!("{}", model.sub_objects[id].bbox.max),
+                        bbox_min_string: format!("{}", model.sub_objects[id].bbox.min),
+                        offset_string: format!("{}", model.sub_objects[id].offset),
+                        radius_string: format!("{}", model.sub_objects[id].radius),
+                        is_debris_check: model.sub_objects[id].is_debris_model,
+                        properties: format!("{}", model.sub_objects[id].properties),
+                        name: format!("{}", model.sub_objects[id].name),
+                        rot_axis: model.sub_objects[id].movement_axis,
                     }
                 }
             },
@@ -867,7 +871,7 @@ impl UiState {
                     self.properties_panel = PropertiesPanel::Turret {
                         normal_string: format!("{}", model.turrets[turret].normal),
                         base_idx: model.turrets[turret].base_obj.0 as usize,
-                        gun_idx: model.turrets[turret].gun_obj.0 as usize,
+                        gun_idx: 0,
                         position_string: format!("{}", model.turrets[turret].fire_points[point]),
                     }
                 }
@@ -876,7 +880,7 @@ impl UiState {
                     self.properties_panel = PropertiesPanel::Turret {
                         normal_string: format!("{}", model.turrets[turret].normal),
                         base_idx: model.turrets[turret].base_obj.0 as usize,
-                        gun_idx: model.turrets[turret].gun_obj.0 as usize,
+                        gun_idx: 0,
                         position_string: Default::default(),
                     }
                 }
@@ -965,7 +969,7 @@ impl PofToolsGui {
                             Warning::RadiusTooSmall(id_opt) => {
                                 let str = format!(
                                     "⚠ {}'s radius does not encompass all of its geometry",
-                                    id_opt.map_or("The header", |id| &self.model.sub_objects[id.0 as usize].name)
+                                    id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
                                 );
                                 ui.add(Label::new(str).text_style(TextStyle::Button).text_color(egui::Color32::YELLOW));
                             }
@@ -1004,8 +1008,8 @@ impl PofToolsGui {
                                     ui_state.tree_selectable_item(model, ui, &name, selection);
                                 } else {
                                     ui_state.tree_collapsing_item(model, ui, &name, selection, |ui_state, ui| {
-                                        for i in &obj.children {
-                                            make_subobject_child_list(ui_state, model, &model.sub_objects[i.0 as usize], ui)
+                                        for &i in &obj.children {
+                                            make_subobject_child_list(ui_state, model, &model.sub_objects[i], ui)
                                         }
                                     });
                                 }
@@ -1228,7 +1232,7 @@ impl PofToolsGui {
                                 ui_state.tree_collapsing_item(
                                     &self.model,
                                     ui,
-                                    &self.model.sub_objects[turret.base_obj.0 as usize].name,
+                                    &self.model.sub_objects[turret.base_obj].name,
                                     TreeSelection::Turrets(TurretSelection::Turret(i)),
                                     |ui_state, ui| {
                                         for j in 0..turret.fire_points.len() {
@@ -1296,7 +1300,7 @@ impl PofToolsGui {
                                 ui_state.tree_selectable_item(
                                     &self.model,
                                     ui,
-                                    &format!("{} {}", self.model.sub_objects[eye.attached_subobj.0 as usize].name, i + 1),
+                                    &format!("{} {}", self.model.sub_objects[eye.attached_subobj].name, i + 1),
                                     TreeSelection::EyePoints(EyeSelection::EyePoint(i)),
                                 );
                             }
@@ -1391,7 +1395,7 @@ impl PofToolsGui {
 
                             ui.label("Name:");
                             if let Some(id) = selected_id {
-                                ui.add(egui::TextEdit::singleline(&mut self.model.sub_objects[id.0 as usize].name));
+                                ui.add(egui::TextEdit::singleline(&mut self.model.sub_objects[id].name));
                             } else {
                                 ui.add_enabled(false, egui::TextEdit::singleline(name));
                             }
@@ -1400,7 +1404,7 @@ impl PofToolsGui {
 
                             ui.add_enabled_ui(selected_id.is_some(), |ui| {
                                 if ui.checkbox(is_debris_check, "Debris Subobject").changed() {
-                                    self.model.sub_objects[selected_id.unwrap().0 as usize].is_debris_model = *is_debris_check;
+                                    self.model.sub_objects[selected_id.unwrap()].is_debris_model = *is_debris_check;
                                 }
                             });
 
@@ -1408,7 +1412,7 @@ impl PofToolsGui {
 
                             let (bbox_min, bbox_max, offset, radius) =
                                 if let TreeSelection::SubObjects(SubObjectSelection::SubObject(id)) = self.ui_state.tree_view_selection {
-                                    let SubObject { bbox, offset, radius, .. } = &mut self.model.sub_objects[id.0 as usize];
+                                    let SubObject { bbox, offset, radius, .. } = &mut self.model.sub_objects[id];
                                     (Some(&mut bbox.min), Some(&mut bbox.max), Some(offset), Some(radius))
                                 } else {
                                     (None, None, None, None)
@@ -1433,7 +1437,7 @@ impl PofToolsGui {
 
                             ui.label("Properties:");
                             if let Some(id) = selected_id {
-                                ui.add(egui::TextEdit::multiline(&mut self.model.sub_objects[id.0 as usize].properties).desired_rows(2));
+                                ui.add(egui::TextEdit::multiline(&mut self.model.sub_objects[id].properties).desired_rows(2));
                             } else {
                                 ui.add_enabled(false, egui::TextEdit::multiline(properties).desired_rows(2));
                             }
@@ -1448,7 +1452,7 @@ impl PofToolsGui {
                                 ui.radio_value(rot_axis, SubsysMovementAxis::OTHER, "Other");
                             });
                             if old_val != *rot_axis {
-                                self.model.sub_objects[selected_id.unwrap().0 as usize].movement_axis = *rot_axis;
+                                self.model.sub_objects[selected_id.unwrap()].movement_axis = *rot_axis;
                             }
                         }
                         PropertiesPanel::Texture { texture_name } => {
@@ -1704,35 +1708,26 @@ impl PofToolsGui {
 
                             let subobj_names_list = self.model.get_subobj_names();
 
-                            let (disp_time, on_time, off_time, lod, glow_type, attached_subobj, glow_points) =
+                            if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, attached_subobj_idx, bank_num, "SubObject")
+                            {
+                                self.model.glow_banks[bank_num.unwrap()].obj_parent = ObjectId(new_subobj as u32);
+                            }
+
+                            let (disp_time, on_time, off_time, lod, glow_type, glow_points) =
                                 if let TreeSelection::Glows(GlowSelection::BankPoint(bank, _)) = self.ui_state.tree_view_selection {
                                     let GlowPointBank {
-                                        disp_time,
-                                        on_time,
-                                        off_time,
-                                        lod,
-                                        glow_type,
-                                        obj_parent,
-                                        glow_points,
-                                        ..
+                                        disp_time, on_time, off_time, lod, glow_type, glow_points, ..
                                     } = &mut self.model.glow_banks[bank as usize];
 
-                                    (Some(disp_time), Some(on_time), Some(off_time), Some(lod), Some(glow_type), Some(obj_parent), Some(glow_points))
+                                    (Some(disp_time), Some(on_time), Some(off_time), Some(lod), Some(glow_type), Some(glow_points))
                                 } else if let TreeSelection::Glows(GlowSelection::Bank(bank)) = self.ui_state.tree_view_selection {
                                     let GlowPointBank {
-                                        disp_time,
-                                        on_time,
-                                        off_time,
-                                        lod,
-                                        glow_type,
-                                        obj_parent,
-                                        glow_points,
-                                        ..
+                                        disp_time, on_time, off_time, lod, glow_type, glow_points, ..
                                     } = &mut self.model.glow_banks[bank as usize];
 
-                                    (Some(disp_time), Some(on_time), Some(off_time), Some(lod), Some(glow_type), Some(obj_parent), Some(glow_points))
+                                    (Some(disp_time), Some(on_time), Some(off_time), Some(lod), Some(glow_type), Some(glow_points))
                                 } else {
-                                    (None, None, None, None, None, None, None)
+                                    (None, None, None, None, None, None)
                                 };
 
                             ui.horizontal(|ui| {
@@ -1757,11 +1752,6 @@ impl PofToolsGui {
                                 ui.label("Off Time:");
                                 UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, off_time, off_time_string);
                             });
-
-                            if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, attached_subobj_idx, bank_num, "SubObject")
-                            {
-                                *attached_subobj.unwrap() = new_subobj;
-                            }
 
                             ui.separator();
 
@@ -1866,23 +1856,41 @@ impl PofToolsGui {
                             ui.add_space(10.0);
                             let subobj_names_list = self.model.get_subobj_names();
 
-                            let (base_obj, gun_obj, norm) =
-                                if let TreeSelection::Turrets(TurretSelection::Turret(turret)) = self.ui_state.tree_view_selection {
-                                    let Turret { base_obj, gun_obj, normal, .. } = &mut self.model.turrets[turret];
-                                    (Some(base_obj), Some(gun_obj), Some(normal))
-                                } else if let TreeSelection::Turrets(TurretSelection::TurretPoint(turret, _)) = self.ui_state.tree_view_selection {
-                                    let Turret { base_obj, gun_obj, normal, .. } = &mut self.model.turrets[turret];
-                                    (Some(base_obj), Some(gun_obj), Some(normal))
-                                } else {
-                                    (None, None, None)
-                                };
-
                             if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, base_idx, turret_num, "Base object") {
-                                *base_obj.unwrap() = new_subobj;
+                                self.model.turrets[turret_num.unwrap()].base_obj = ObjectId(new_subobj as u32);
                             }
-                            if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, gun_idx, turret_num, "Gun object") {
-                                *gun_obj.unwrap() = new_subobj;
+
+                            // turret gun subobjexct combo box is a bit trickier since we only want to show valid subobjects (and the currently used one,
+                            // which may be invalid)
+
+                            let mut gun_subobj_ids_list = vec![];
+                            let mut gun_subobj_idx = 0;
+                            // assemble the list of ids, and get the index of the currently being used one
+                            if let Some(num) = turret_num {
+                                let (list, idx) = self
+                                    .model
+                                    .get_valid_gun_subobjects_for_turret(self.model.turrets[num].gun_obj, self.model.turrets[num].base_obj);
+                                gun_subobj_ids_list = list;
+                                gun_subobj_idx = idx;
                             }
+                            // assemble the string names list from the id list
+                            let gun_subobj_names_list = gun_subobj_ids_list.iter().map(|id| self.model.sub_objects[*id].name.clone()).collect();
+
+                            // then make the combo box, giving it the list of names and the index
+                            if let Some(new_idx) =
+                                UiState::subobject_combo_box(ui, &gun_subobj_names_list, &mut gun_subobj_idx, turret_num, "Gun object")
+                            {
+                                self.model.turrets[turret_num.unwrap()].gun_obj = gun_subobj_ids_list[new_idx];
+                                self.ui_state.viewport_3d_dirty = true;
+                            }
+
+                            let norm = if let TreeSelection::Turrets(TurretSelection::Turret(turret) | TurretSelection::TurretPoint(turret, _)) =
+                                self.ui_state.tree_view_selection
+                            {
+                                Some(&mut self.model.turrets[turret].normal)
+                            } else {
+                                None
+                            };
 
                             ui.label("Normal:");
                             UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
@@ -2122,7 +2130,7 @@ impl PofToolsGui {
     // None means the header/entire model's radius
     fn radius_test_failed(model: &Model, subobj_opt: Option<ObjectId>) -> bool {
         if let Some(subobj) = subobj_opt {
-            let subobj = &model.sub_objects[subobj.0 as usize];
+            let subobj = &model.sub_objects[subobj];
             let radius_with_margin = (1.0 + f32::EPSILON) * subobj.radius;
             for vert in &subobj.bsp_data.verts {
                 if vert.magnitude() > radius_with_margin {

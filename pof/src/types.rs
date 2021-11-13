@@ -1,7 +1,7 @@
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display};
 use std::io::{self, Write};
-use std::ops::{Add, AddAssign, Mul, MulAssign, Sub, SubAssign};
+use std::ops::{Add, AddAssign, Deref, DerefMut, Index, IndexMut, Mul, MulAssign, Sub, SubAssign};
 use std::str::FromStr;
 
 use byteorder::{WriteBytesExt, LE};
@@ -33,6 +33,52 @@ id_type! {VertexId, u16}
 id_type! {NormalId, u16}
 id_type! {PolygonId, u32}
 id_type! {PathId, u32}
+
+#[derive(Debug)]
+pub struct ObjVec<T>(pub Vec<T>);
+impl<T> Index<ObjectId> for ObjVec<T> {
+    type Output = T;
+
+    fn index(&self, index: ObjectId) -> &Self::Output {
+        &self.0[index.0 as usize]
+    }
+}
+impl<T> IndexMut<ObjectId> for ObjVec<T> {
+    fn index_mut(&mut self, index: ObjectId) -> &mut Self::Output {
+        &mut self.0[index.0 as usize]
+    }
+}
+impl<'a, T> IntoIterator for &'a ObjVec<T> {
+    type Item = &'a T;
+
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+impl<T> Default for ObjVec<T> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+impl<T> ObjVec<T> {
+    fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.0.iter()
+    }
+}
+impl<T> Deref for ObjVec<T> {
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl<T> DerefMut for ObjVec<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 macro_rules! mk_struct {
     ($($(#[$meta:meta])* pub struct $tyname:ident { $(pub $name:ident: $ty:ty,)* })*) => {
@@ -777,7 +823,7 @@ impl Version {
 #[derive(Debug, Default)]
 pub struct Model {
     pub header: ObjHeader,
-    pub sub_objects: Vec<SubObject>,
+    pub sub_objects: ObjVec<SubObject>,
     pub textures: Vec<String>,
     pub paths: Vec<Path>,
     pub special_points: Vec<SpecialPoint>,
@@ -797,7 +843,7 @@ impl Model {
     pub fn get_total_subobj_offset(&self, mut id: ObjectId) -> Vec3d {
         let mut out = Vec3d::ZERO;
         loop {
-            let subobj = &self.sub_objects[id.0 as usize];
+            let subobj = &self.sub_objects[id];
             out += subobj.offset;
             if let Some(parent) = subobj.parent {
                 id = parent;
@@ -813,14 +859,14 @@ impl Model {
             return true;
         }
 
-        let mut sub_obj_parent = self.sub_objects[obj_id.0 as usize].parent;
+        let mut sub_obj_parent = self.sub_objects[obj_id].parent;
         loop {
             if sub_obj_parent == Some(maybe_ancestor) {
                 return true;
             } else if sub_obj_parent.is_none() {
                 return false;
             }
-            sub_obj_parent = self.sub_objects[sub_obj_parent.unwrap().0 as usize].parent;
+            sub_obj_parent = self.sub_objects[sub_obj_parent.unwrap()].parent;
         }
     }
 
@@ -830,5 +876,41 @@ impl Model {
             ret.push(subobj.name.clone());
         }
         ret
+    }
+
+    pub fn get_obj_id_by_name(&self, name: &str) -> Option<ObjectId> {
+        for subobj in &self.sub_objects {
+            if subobj.name == name {
+                return Some(subobj.obj_id);
+            }
+        }
+        None
+    }
+
+    pub fn get_valid_gun_subobjects_for_turret(&self, existing_obj: ObjectId, turret_obj: ObjectId) -> (Vec<ObjectId>, usize) {
+        let mut out_vec = vec![];
+        let mut out_idx = 0;
+        let mut found_existing_obj = false;
+
+        if existing_obj == turret_obj {
+            out_idx = out_vec.len();
+            found_existing_obj = true;
+        }
+        out_vec.push(turret_obj);
+
+        for &child_id in &self.sub_objects[turret_obj].children {
+            if existing_obj == child_id {
+                out_idx = out_vec.len();
+                found_existing_obj = true;
+            }
+            out_vec.push(child_id);
+        }
+
+        if !found_existing_obj {
+            out_idx = out_vec.len();
+            out_vec.push(existing_obj);
+        }
+
+        (out_vec, out_idx)
     }
 }

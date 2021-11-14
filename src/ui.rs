@@ -1,9 +1,9 @@
-use egui::{CollapsingHeader, Label};
+use egui::{CollapsingHeader, Color32, Label, Visuals};
 use pof::{
     DockingPoint, EyePoint, GlowPoint, GlowPointBank, Insignia, Model, PathPoint, SpecialPoint, SubObject, SubsysMovementAxis, TextureId,
     ThrusterGlow, Turret, WeaponHardpoint,
 };
-use std::{collections::BTreeSet, str::FromStr, sync::mpsc::Receiver};
+use std::{collections::BTreeSet, default, str::FromStr, sync::mpsc::Receiver};
 
 use eframe::egui::{self, Button, TextStyle, Ui};
 use pof::ObjectId;
@@ -69,7 +69,6 @@ enum PropertiesPanel {
     },
     Turret {
         base_idx: usize,
-        gun_idx: usize,
         normal_string: String,
         position_string: String,
     },
@@ -170,7 +169,6 @@ impl PropertiesPanel {
     fn default_turret() -> Self {
         Self::Turret {
             base_idx: Default::default(),
-            gun_idx: Default::default(),
             normal_string: Default::default(),
             position_string: Default::default(),
         }
@@ -499,6 +497,11 @@ pub enum Set<T> {
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub enum Error {
+    InvalidTurretGunSubobject(usize), // turret index
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub enum Warning {
     RadiusTooSmall(Option<ObjectId>),
 }
@@ -518,6 +521,7 @@ pub(crate) struct PofToolsGui {
     pub wireframe_enabled: bool,
     pub loading_thread: Option<Receiver<Option<Box<Model>>>>,
     pub warnings: BTreeSet<Warning>,
+    pub errors: BTreeSet<Error>,
 
     pub camera_pitch: f32,
     pub camera_heading: f32,
@@ -551,6 +555,20 @@ impl PofToolsGui {
 }
 
 impl UiState {
+    fn set_widget_color(ui: &mut Ui, color: Color32) {
+        ui.visuals_mut().widgets.hovered.fg_stroke.color = color;
+        ui.visuals_mut().widgets.inactive.fg_stroke.color = color;
+        ui.visuals_mut().widgets.active.fg_stroke.color = color;
+        ui.visuals_mut().widgets.open.fg_stroke.color = color;
+    }
+
+    fn reset_widget_color(ui: &mut Ui) {
+        ui.visuals_mut().widgets.hovered.fg_stroke.color = Default::default();
+        ui.visuals_mut().widgets.inactive.fg_stroke.color = Default::default();
+        ui.visuals_mut().widgets.active.fg_stroke.color = Default::default();
+        ui.visuals_mut().widgets.open.fg_stroke.color = Default::default();
+    }
+
     fn tree_selectable_item(&mut self, model: &Model, ui: &mut Ui, name: &str, selection: TreeSelection) {
         if ui.selectable_value(&mut self.tree_view_selection, selection, name).clicked() {
             self.refresh_properties_panel(model);
@@ -677,7 +695,7 @@ impl UiState {
     // a text edit field attached to a model value that will show up red if it cannot parse
     fn parsable_text_edit<T: FromStr>(ui: &mut Ui, model_value: &mut T, parsable_string: &mut String) -> bool {
         if let Err(_) = parsable_string.parse::<T>() {
-            ui.visuals_mut().override_text_color = Some(egui::Color32::RED);
+            ui.visuals_mut().override_text_color = Some(Color32::RED);
         }
         if ui.text_edit_singleline(parsable_string).changed() {
             if let Ok(value) = parsable_string.parse() {
@@ -690,17 +708,33 @@ impl UiState {
 
     // a combo box for subobjects
     fn subobject_combo_box(
-        ui: &mut Ui, name_list: &Vec<String>, mut_selection: &mut usize, selector_value: Option<usize>, label: &str,
+        ui: &mut Ui, name_list: &Vec<String>, mut_selection: &mut usize, selector_value: Option<usize>, label: &str, active_error_idx: Option<usize>,
     ) -> Option<usize> {
         let mut ret = None;
+
         ui.add_enabled_ui(selector_value.is_some(), |ui| {
             if let Some(_) = selector_value {
-                if egui::ComboBox::from_label(label)
-                    .show_index(ui, mut_selection, name_list.len(), |i| name_list[i].to_owned())
-                    .changed()
-                {
-                    ret = Some(*mut_selection);
-                }
+                let color = if let Some(_) = active_error_idx {
+                    UiState::set_widget_color(ui, Color32::RED);
+                    Color32::RED
+                } else {
+                    ui.visuals().text_color()
+                };
+                egui::ComboBox::from_label(egui::Label::new(label).text_color(color))
+                    .selected_text(name_list[*mut_selection].clone())
+                    .show_ui(ui, |ui| {
+                        for (i, name) in name_list.iter().enumerate() {
+                            if active_error_idx == Some(i) {
+                                // change the color of this entry to red if its the error one
+                                ui.visuals_mut().override_text_color = Some(color);
+                            }
+                            ui.selectable_value(mut_selection, i, name);
+                            ui.visuals_mut().override_text_color = None;
+                        }
+                    });
+                ret = Some(*mut_selection);
+
+                UiState::reset_widget_color(ui);
             } else {
                 egui::ComboBox::from_label(label).show_index(ui, mut_selection, 1, |_| format!(""));
             }
@@ -714,9 +748,9 @@ impl UiState {
         let mut val_changed = false;
         if let Some(value) = model_value {
             if let Err(_) = parsable_string.parse::<T>() {
-                ui.visuals_mut().override_text_color = Some(egui::Color32::RED);
+                ui.visuals_mut().override_text_color = Some(Color32::RED);
             } else if active_warning {
-                ui.visuals_mut().override_text_color = Some(egui::Color32::YELLOW);
+                ui.visuals_mut().override_text_color = Some(Color32::YELLOW);
             }
             if ui.text_edit_singleline(parsable_string).changed() {
                 if let Ok(parsed_string) = parsable_string.parse() {
@@ -871,7 +905,6 @@ impl UiState {
                     self.properties_panel = PropertiesPanel::Turret {
                         normal_string: format!("{}", model.turrets[turret].normal),
                         base_idx: model.turrets[turret].base_obj.0 as usize,
-                        gun_idx: 0,
                         position_string: format!("{}", model.turrets[turret].fire_points[point]),
                     }
                 }
@@ -880,7 +913,6 @@ impl UiState {
                     self.properties_panel = PropertiesPanel::Turret {
                         normal_string: format!("{}", model.turrets[turret].normal),
                         base_idx: model.turrets[turret].base_obj.0 as usize,
-                        gun_idx: 0,
                         position_string: Default::default(),
                     }
                 }
@@ -944,7 +976,10 @@ impl PofToolsGui {
                     ui.output().cursor_icon = egui::CursorIcon::Wait;
                 }
 
-                if ui.add(Button::new("🖴").text_style(TextStyle::Heading)).clicked() {
+                if ui
+                    .add_enabled(self.errors.is_empty(), Button::new("🖴").text_style(TextStyle::Heading))
+                    .clicked()
+                {
                     PofToolsGui::save_model(&self.model);
                 }
 
@@ -964,6 +999,17 @@ impl PofToolsGui {
             .height_range(16.0..=500.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    for error in &self.errors {
+                        match *error {
+                            Error::InvalidTurretGunSubobject(turret_num) => {
+                                let str = format!(
+                                    "⊗ turret {} has an invalid gun object",
+                                    self.model.sub_objects[self.model.turrets[turret_num].base_obj].name
+                                );
+                                ui.add(Label::new(str).text_style(TextStyle::Button).text_color(Color32::RED));
+                            }
+                        }
+                    }
                     for warning in &self.warnings {
                         match warning {
                             Warning::RadiusTooSmall(id_opt) => {
@@ -971,7 +1017,7 @@ impl PofToolsGui {
                                     "⚠ {}'s radius does not encompass all of its geometry",
                                     id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
                                 );
-                                ui.add(Label::new(str).text_style(TextStyle::Button).text_color(egui::Color32::YELLOW));
+                                ui.add(Label::new(str).text_style(TextStyle::Button).text_color(Color32::YELLOW));
                             }
                         }
                     }
@@ -1708,7 +1754,8 @@ impl PofToolsGui {
 
                             let subobj_names_list = self.model.get_subobj_names();
 
-                            if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, attached_subobj_idx, bank_num, "SubObject")
+                            if let Some(new_subobj) =
+                                UiState::subobject_combo_box(ui, &subobj_names_list, attached_subobj_idx, bank_num, "SubObject", None)
                             {
                                 self.model.glow_banks[bank_num.unwrap()].obj_parent = ObjectId(new_subobj as u32);
                             }
@@ -1841,7 +1888,7 @@ impl PofToolsGui {
                                 self.ui_state.viewport_3d_dirty = true;
                             }
                         }
-                        PropertiesPanel::Turret { position_string, normal_string, base_idx, gun_idx } => {
+                        PropertiesPanel::Turret { position_string, normal_string, base_idx } => {
                             ui.heading("Turret");
                             ui.separator();
 
@@ -1856,7 +1903,8 @@ impl PofToolsGui {
                             ui.add_space(10.0);
                             let subobj_names_list = self.model.get_subobj_names();
 
-                            if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, base_idx, turret_num, "Base object") {
+                            if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, base_idx, turret_num, "Base object", None)
+                            {
                                 self.model.turrets[turret_num.unwrap()].base_obj = ObjectId(new_subobj as u32);
                             }
 
@@ -1865,6 +1913,7 @@ impl PofToolsGui {
 
                             let mut gun_subobj_ids_list = vec![];
                             let mut gun_subobj_idx = 0;
+                            let mut error_idx = None;
                             // assemble the list of ids, and get the index of the currently being used one
                             if let Some(num) = turret_num {
                                 let (list, idx) = self
@@ -1872,15 +1921,28 @@ impl PofToolsGui {
                                     .get_valid_gun_subobjects_for_turret(self.model.turrets[num].gun_obj, self.model.turrets[num].base_obj);
                                 gun_subobj_ids_list = list;
                                 gun_subobj_idx = idx;
+                                if self.errors.contains(&Error::InvalidTurretGunSubobject(num)) {
+                                    for (i, &id) in gun_subobj_ids_list.iter().enumerate() {
+                                        if id == self.model.turrets[num].gun_obj {
+                                            error_idx = Some(i);
+                                        }
+                                    }
+                                }
                             }
                             // assemble the string names list from the id list
                             let gun_subobj_names_list = gun_subobj_ids_list.iter().map(|id| self.model.sub_objects[*id].name.clone()).collect();
 
                             // then make the combo box, giving it the list of names and the index
                             if let Some(new_idx) =
-                                UiState::subobject_combo_box(ui, &gun_subobj_names_list, &mut gun_subobj_idx, turret_num, "Gun object")
+                                UiState::subobject_combo_box(ui, &gun_subobj_names_list, &mut gun_subobj_idx, turret_num, "Gun object", error_idx)
                             {
+                                // the unwraps are ok here, if it were none, the combo box would be un-interactable
                                 self.model.turrets[turret_num.unwrap()].gun_obj = gun_subobj_ids_list[new_idx];
+                                PofToolsGui::recheck_errors(
+                                    &mut self.errors,
+                                    &self.model,
+                                    One(Error::InvalidTurretGunSubobject(turret_num.unwrap())),
+                                );
                                 self.ui_state.viewport_3d_dirty = true;
                             }
 
@@ -2093,6 +2155,44 @@ impl PofToolsGui {
                     }
                 });
             });
+    }
+
+    // rechecks just one or all of the warnings on the model
+    pub fn recheck_errors(errors: &mut BTreeSet<Error>, model: &Model, error_to_check: Set<Error>) {
+        if let One(error) = error_to_check {
+            let failed_check = match error {
+                Error::InvalidTurretGunSubobject(turret) => PofToolsGui::turret_gun_subobj_not_valid(model, turret),
+            };
+
+            let existing_warning = errors.contains(&error);
+            if existing_warning && !failed_check {
+                errors.remove(&error);
+            } else if !existing_warning && failed_check {
+                errors.insert(error);
+            }
+        } else {
+            errors.clear();
+            for i in 0..model.turrets.len() {
+                if PofToolsGui::turret_gun_subobj_not_valid(model, i) {
+                    errors.insert(Error::InvalidTurretGunSubobject(i));
+                }
+            }
+        }
+    }
+
+    fn turret_gun_subobj_not_valid(model: &Model, turret_num: usize) -> bool {
+        let turret = &model.turrets[turret_num];
+        if turret.base_obj == turret.gun_obj {
+            return false;
+        }
+
+        for &child_id in &model.sub_objects[turret.base_obj].children {
+            if child_id == turret.gun_obj {
+                return false;
+            }
+        }
+
+        true
     }
 
     // rechecks just one or all of the warnings on the model

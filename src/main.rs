@@ -348,6 +348,7 @@ impl PofToolsGui {
 
         self.warnings.clear();
         PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All);
+        PofToolsGui::recheck_errors(&mut self.errors, &self.model, All);
         self.ui_state.tree_view_selection = Default::default();
         self.ui_state.refresh_properties_panel(&self.model);
         self.camera_heading = 2.7;

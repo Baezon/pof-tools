@@ -1,14 +1,37 @@
-use egui::{CollapsingHeader, Color32, Label, Visuals};
+use egui::{Align2, CollapsingHeader, Color32, Label};
+use glium::Display;
+use nalgebra_glm::TMat4;
 use pof::{
     DockingPoint, EyePoint, GlowPoint, GlowPointBank, Insignia, Model, PathPoint, SpecialPoint, SubObject, SubsysMovementAxis, TextureId,
-    ThrusterGlow, Turret, WeaponHardpoint,
+    ThrusterGlow, Vec3d, WeaponHardpoint,
 };
-use std::{collections::BTreeSet, default, str::FromStr, sync::mpsc::Receiver};
+use std::{collections::BTreeSet, str::FromStr, sync::mpsc::Receiver};
 
 use eframe::egui::{self, Button, TextStyle, Ui};
 use pof::ObjectId;
 
 use crate::{GlBufferedInsignia, GlBufferedObject, GlBufferedShield, GlLollipops};
+
+#[derive(PartialEq)]
+enum TransformType {
+    Rotate,
+    Scale,
+    Translate,
+}
+impl Default for TransformType {
+    fn default() -> Self {
+        Self::Rotate
+    }
+}
+
+#[derive(Default)]
+struct TransformWindow {
+    open: bool,
+    vector: String,
+    value: String,
+    axis_select: usize,
+    transform_type: TransformType,
+}
 
 enum PropertiesPanel {
     Header {
@@ -19,6 +42,7 @@ enum PropertiesPanel {
         moir_string: String,
         moiu_string: String,
         moif_string: String,
+        transform_window: TransformWindow,
     },
     SubObject {
         bbox_min_string: String,
@@ -29,6 +53,7 @@ enum PropertiesPanel {
         is_debris_check: bool,
         properties: String,
         rot_axis: SubsysMovementAxis,
+        transform_window: TransformWindow,
     },
     Texture {
         texture_name: String,
@@ -103,6 +128,13 @@ impl Default for PropertiesPanel {
             moir_string: Default::default(),
             moiu_string: Default::default(),
             moif_string: Default::default(),
+            transform_window: TransformWindow {
+                open: false,
+                vector: format!("1, 0, 0"),
+                value: format!("1"),
+                axis_select: 0,
+                transform_type: TransformType::Rotate,
+            },
         }
     }
 }
@@ -117,6 +149,13 @@ impl PropertiesPanel {
             is_debris_check: Default::default(),
             properties: Default::default(),
             rot_axis: SubsysMovementAxis::NONE,
+            transform_window: TransformWindow {
+                open: false,
+                vector: format!("1, 0, 0"),
+                value: format!("1"),
+                axis_select: 0,
+                transform_type: TransformType::Rotate,
+            },
         }
     }
     fn default_texture() -> Self {
@@ -766,6 +805,138 @@ impl UiState {
         val_changed
     }
 
+    fn show_transform_window(ctx: &egui::CtxRef, transform_window: &mut TransformWindow) -> Option<TMat4<f32>> {
+        let mut ret = None;
+        let window = egui::Window::new("Transform")
+            .collapsible(false)
+            .resizable(false)
+            .default_size((250.0, 200.0))
+            .open(&mut transform_window.open)
+            .anchor(Align2::RIGHT_TOP, [-100.0, 100.0]);
+
+        window.show(ctx, |ui| {
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                changed = changed
+                    || ui
+                        .selectable_value(&mut transform_window.transform_type, TransformType::Rotate, "Rotate")
+                        .clicked();
+                ui.separator();
+                changed = changed
+                    || ui
+                        .selectable_value(&mut transform_window.transform_type, TransformType::Scale, "Scale")
+                        .clicked();
+                ui.separator();
+                changed = changed
+                    || ui
+                        .selectable_value(&mut transform_window.transform_type, TransformType::Translate, "Translate")
+                        .clicked();
+            });
+            if changed {
+                transform_window.axis_select = 0;
+                transform_window.vector = format!("1, 0, 0");
+                transform_window.value = format!("1");
+            }
+            ui.separator();
+
+            let mut mat = glm::identity::<f32, 4>();
+            let mut valid_input = false;
+
+            match transform_window.transform_type {
+                TransformType::Rotate => {
+                    ui.horizontal(|ui| {
+                        if ui.button("X-axis").clicked() {
+                            transform_window.vector = format!("1, 0, 0");
+                        }
+                        ui.separator();
+                        if ui.button("Y-axis").clicked() {
+                            transform_window.vector = format!("0, 1, 0");
+                        }
+                        ui.separator();
+                        if ui.button("Z-axis").clicked() {
+                            transform_window.vector = format!("0, 0, 1");
+                        }
+                        ui.separator();
+                    });
+                    ui.separator();
+                    ui.label("Axis:");
+
+                    if let Err(_) = transform_window.vector.parse::<Vec3d>() {
+                        ui.visuals_mut().override_text_color = Some(Color32::RED);
+                    }
+                    ui.text_edit_singleline(&mut transform_window.vector);
+                    ui.visuals_mut().override_text_color = None;
+
+                    ui.label("Angle:");
+                    if let Err(_) = transform_window.value.parse::<f32>() {
+                        ui.visuals_mut().override_text_color = Some(Color32::RED);
+                    }
+                    ui.text_edit_singleline(&mut transform_window.value);
+                    ui.visuals_mut().override_text_color = None;
+
+                    if let Ok(vector) = transform_window.vector.parse::<Vec3d>() {
+                        if let Ok(angle) = transform_window.value.parse::<f32>() {
+                            mat = glm::rotation(angle, &vector.into());
+                            valid_input = true;
+                        }
+                    }
+                }
+                TransformType::Scale => {
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut transform_window.axis_select, 0, "All axes");
+                        ui.separator();
+                        ui.selectable_value(&mut transform_window.axis_select, 1, "X-axis");
+                        ui.separator();
+                        ui.selectable_value(&mut transform_window.axis_select, 2, "Y-axis");
+                        ui.separator();
+                        ui.selectable_value(&mut transform_window.axis_select, 3, "Z-axis");
+                        ui.separator();
+                    });
+                    ui.separator();
+                    ui.label("Scalar (negative values flip):");
+                    if let Err(_) = transform_window.value.parse::<f32>() {
+                        ui.visuals_mut().override_text_color = Some(Color32::RED);
+                    }
+                    ui.text_edit_singleline(&mut transform_window.value);
+                    ui.visuals_mut().override_text_color = None;
+
+                    if let Ok(scalar) = transform_window.value.parse::<f32>() {
+                        let vector = match transform_window.axis_select {
+                            0 => glm::vec3(scalar, scalar, scalar),
+                            1 => glm::vec3(scalar, 1.0, 1.0),
+                            2 => glm::vec3(1.0, scalar, 1.0),
+                            3 => glm::vec3(1.0, 1.0, scalar),
+                            _ => unreachable!(),
+                        };
+                        mat = glm::scaling(&vector);
+                        valid_input = true;
+                    }
+                }
+                TransformType::Translate => {
+                    ui.label("Translation Vector:");
+
+                    if let Err(_) = transform_window.vector.parse::<Vec3d>() {
+                        ui.visuals_mut().override_text_color = Some(Color32::RED);
+                    }
+                    ui.text_edit_singleline(&mut transform_window.vector);
+                    ui.visuals_mut().override_text_color = None;
+
+                    if let Ok(vector) = transform_window.vector.parse::<Vec3d>() {
+                        mat = glm::translation(&vector.into());
+                        valid_input = true;
+                    }
+                }
+            }
+
+            ui.separator();
+            if ui.add_enabled(valid_input, egui::Button::new("Apply")).clicked() {
+                ret = Some(mat);
+            }
+        });
+
+        ret
+    }
+
     // fills the properties panel based on the current tree selection, taking all the relevant data from the model
     pub(crate) fn refresh_properties_panel(&mut self, model: &Model) {
         match &self.tree_view_selection {
@@ -787,6 +958,7 @@ impl UiState {
                         "{:e}, {:e}, {:e}",
                         model.header.moment_of_inertia.fvec.x, model.header.moment_of_inertia.fvec.y, model.header.moment_of_inertia.fvec.z
                     ),
+                    transform_window: Default::default(),
                 }
             }
             TreeSelection::SubObjects(subobj_tree_select) => match *subobj_tree_select {
@@ -801,6 +973,7 @@ impl UiState {
                         properties: format!("{}", model.sub_objects[id].properties),
                         name: format!("{}", model.sub_objects[id].name),
                         rot_axis: model.sub_objects[id].movement_axis,
+                        transform_window: Default::default(),
                     }
                 }
             },
@@ -967,7 +1140,7 @@ impl PofToolsGui {
     // =====================================================
     // The big top-level function for drawing and interacting with all of the UI
     // ====================================================
-    pub fn show_ui(&mut self, ctx: &egui::CtxRef) {
+    pub fn show_ui(&mut self, ctx: &egui::CtxRef, display: &Display) {
         egui::TopBottomPanel::top("menu").default_height(33.0).min_height(33.0).show(ctx, |ui| {
             Ui::add_space(ui, 6.0);
             ui.horizontal(|ui| {
@@ -1380,9 +1553,32 @@ impl PofToolsGui {
                             moir_string,
                             moiu_string,
                             moif_string,
+                            transform_window,
                         } => {
                             ui.heading("Header");
                             ui.separator();
+
+                            if ui.add(egui::Button::new("Transform")).clicked() {
+                                transform_window.open = true;
+                            }
+                            if let Some(matrix) = UiState::show_transform_window(ctx, transform_window) {
+                                for i in 0..self.model.sub_objects.len() {
+                                    if self.model.sub_objects[ObjectId(i as u32)].parent == None {
+                                        self.model.apply_transform(ObjectId(i as u32), &matrix);
+                                        self.ui_state.viewport_3d_dirty = true;
+                                        self.ui_state.properties_panel_dirty = true;
+
+                                        for buf in &mut self.buffer_objects {
+                                            if buf.obj_id == ObjectId(i as u32) || self.model.is_obj_id_ancestor(buf.obj_id, ObjectId(i as u32)) {
+                                                let new_buf = GlBufferedObject::new(&display, &self.model.sub_objects[buf.obj_id], buf.tmap);
+                                                if let Some(new_buf) = new_buf {
+                                                    *buf = new_buf;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
 
                             let (bbox_min, bbox_max, radius, mass, moi_r, moi_u, moi_f) = {
                                 (
@@ -1428,6 +1624,7 @@ impl PofToolsGui {
                             is_debris_check,
                             properties,
                             rot_axis,
+                            transform_window,
                         } => {
                             ui.heading("SubObject");
                             ui.separator();
@@ -1438,6 +1635,26 @@ impl PofToolsGui {
                             } else {
                                 None
                             };
+
+                            if ui.add_enabled(matches!(selected_id, Some(_)), egui::Button::new("Transform")).clicked() {
+                                transform_window.open = true;
+                            }
+                            if let Some(matrix) = UiState::show_transform_window(ctx, transform_window) {
+                                if let Some(id) = selected_id {
+                                    self.model.apply_transform(id, &matrix);
+                                    self.ui_state.viewport_3d_dirty = true;
+                                    self.ui_state.properties_panel_dirty = true;
+
+                                    for buf in &mut self.buffer_objects {
+                                        if buf.obj_id == id || self.model.is_obj_id_ancestor(buf.obj_id, id) {
+                                            let new_buf = GlBufferedObject::new(&display, &self.model.sub_objects[buf.obj_id], buf.tmap);
+                                            if let Some(new_buf) = new_buf {
+                                                *buf = new_buf;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
 
                             ui.label("Name:");
                             if let Some(id) = selected_id {

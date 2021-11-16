@@ -47,7 +47,8 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
 
     for node in &scene.nodes {
         let transform = node.transform_as_matrix();
-        let center = transform.transform_vector(&Vec3d::ZERO.into());
+        let zero = Vec3d::ZERO.into();
+        let center = transform.transform_point(&zero) - zero;
         let local_transform = transform.append_translation(&(-center).into());
         // println!("{:#?}", center);
         // println!("{:#?}", local_transform);

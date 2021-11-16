@@ -447,7 +447,7 @@ fn main() {
 
             egui.begin_frame(&display);
 
-            pt_gui.show_ui(egui.ctx());
+            pt_gui.show_ui(egui.ctx(), &display);
 
             let (needs_repaint, shapes) = egui.end_frame(&display);
 

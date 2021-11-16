@@ -1,3 +1,4 @@
+use std::cmp;
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display};
 use std::io::{self, Write};
@@ -5,6 +6,8 @@ use std::ops::{Add, AddAssign, Deref, DerefMut, Index, IndexMut, Mul, MulAssign,
 use std::str::FromStr;
 
 use byteorder::{WriteBytesExt, LE};
+use glm::TMat4;
+use nalgebra::Point3;
 use nalgebra_glm::Mat4;
 extern crate nalgebra_glm as glm;
 
@@ -172,6 +175,10 @@ impl Vec3d {
     }
     pub fn magnitude(self) -> f32 {
         f32::sqrt(self.x * self.x + self.y * self.y + self.z * self.z)
+    }
+    pub fn normalize(mut self) {
+        let mag = self.magnitude();
+        self *= 1.0 / mag;
     }
 }
 impl Add for Vec3d {
@@ -488,25 +495,18 @@ impl Default for GlowPoint {
     }
 }
 
-mk_struct! {
-    #[derive(Debug, Default)]
-    pub struct ObjHeader {
-        pub max_radius: f32,
-        pub obj_flags: u32,
-        pub num_subobjects: u32,
-
-        pub bounding_box: BBox,
-
-        pub detail_levels: Vec<ObjectId>,
-
-        pub mass: f32,
-        pub center_of_mass: Vec3d,
-        pub moment_of_inertia: Mat3d,
-
-        pub cross_sections: Vec<(f32, f32)>, // depth, radius
-
-        pub bsp_lights: Vec<BspLight>,
-    }
+#[derive(Debug, Default)]
+pub struct ObjHeader {
+    pub max_radius: f32,
+    pub obj_flags: u32,
+    pub num_subobjects: u32,
+    pub bounding_box: BBox,
+    pub detail_levels: Vec<ObjectId>,
+    pub mass: f32,
+    pub center_of_mass: Vec3d,
+    pub moment_of_inertia: Mat3d,
+    pub cross_sections: Vec<(f32, f32)>, // depth, radius
+    pub bsp_lights: Vec<BspLight>,
 }
 
 #[derive(Debug)]
@@ -542,6 +542,66 @@ pub enum BspNode {
 impl BspNode {
     pub fn leaves(&self) -> BspNodeIter<'_> {
         BspNodeIter { stack: vec![self] }
+    }
+
+    pub fn recalculate_bboxes(&mut self, verts: &Vec<Vec3d>) {
+        match self {
+            BspNode::Split { bbox, front, back, .. } => {
+                front.recalculate_bboxes(verts);
+                back.recalculate_bboxes(verts);
+                bbox.min = {
+                    let min1 = match **front {
+                        BspNode::Split { ref bbox, .. } => &bbox.min,
+                        BspNode::Leaf { ref bbox, .. } => &bbox.min,
+                    };
+                    let min2 = match **back {
+                        BspNode::Split { ref bbox, .. } => &bbox.min,
+                        BspNode::Leaf { ref bbox, .. } => &bbox.min,
+                    };
+                    Vec3d {
+                        x: f32::min(min1.x, min2.x),
+                        y: f32::min(min1.y, min2.y),
+                        z: f32::min(min1.z, min2.z),
+                    }
+                };
+                bbox.max = {
+                    let max1 = match **front {
+                        BspNode::Split { ref bbox, .. } => &bbox.max,
+                        BspNode::Leaf { ref bbox, .. } => &bbox.max,
+                    };
+                    let max2 = match **back {
+                        BspNode::Split { ref bbox, .. } => &bbox.max,
+                        BspNode::Leaf { ref bbox, .. } => &bbox.max,
+                    };
+                    Vec3d {
+                        x: f32::max(max1.x, max2.x),
+                        y: f32::max(max1.y, max2.y),
+                        z: f32::max(max1.z, max2.z),
+                    }
+                };
+            }
+            BspNode::Leaf { bbox, poly_list } => {
+                *bbox = Default::default();
+                for poly in poly_list {
+                    for vert_id in &poly.verts {
+                        bbox.min = {
+                            Vec3d {
+                                x: f32::min(bbox.min.x, verts[vert_id.vertex_id.0 as usize].x),
+                                y: f32::min(bbox.min.y, verts[vert_id.vertex_id.0 as usize].y),
+                                z: f32::min(bbox.min.z, verts[vert_id.vertex_id.0 as usize].z),
+                            }
+                        };
+                        bbox.max = {
+                            Vec3d {
+                                x: f32::max(bbox.max.x, verts[vert_id.vertex_id.0 as usize].x),
+                                y: f32::max(bbox.max.y, verts[vert_id.vertex_id.0 as usize].y),
+                                z: f32::max(bbox.max.z, verts[vert_id.vertex_id.0 as usize].z),
+                            }
+                        };
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -912,5 +972,96 @@ impl Model {
         }
 
         (out_vec, out_idx)
+    }
+
+    pub fn apply_transform_children(&mut self, id: ObjectId, matrix: &TMat4<f32>) {
+        let subobj = &mut self.sub_objects[id];
+        subobj.radius = 0.0;
+        for vert in &mut subobj.bsp_data.verts {
+            *vert = matrix * *vert;
+            if vert.magnitude() > subobj.radius {
+                subobj.radius = vert.magnitude();
+            }
+        }
+
+        for norm in &mut subobj.bsp_data.norms {
+            *norm = matrix * *norm;
+            norm.normalize();
+        }
+
+        subobj.bsp_data.collision_tree.recalculate_bboxes(&subobj.bsp_data.verts);
+
+        subobj.bbox = {
+            match subobj.bsp_data.collision_tree {
+                BspNode::Split { bbox, .. } => bbox,
+                BspNode::Leaf { bbox, .. } => bbox,
+            }
+        };
+
+        subobj.offset = matrix * subobj.offset;
+
+        let children = subobj.children.clone();
+
+        for child_id in children {
+            self.apply_transform_children(child_id, &matrix)
+        }
+    }
+
+    pub fn apply_transform(&mut self, id: ObjectId, matrix: &TMat4<f32>) {
+        println!("{}", matrix);
+        let subobj = &mut self.sub_objects[id];
+        let zero = Vec3d::ZERO.into();
+        let translation = matrix.transform_point(&zero) - zero;
+
+        println!("{}", translation);
+
+        let matrix = matrix.append_translation(&(-translation));
+
+        println!("{}", matrix);
+
+        subobj.offset += translation.into();
+
+        subobj.radius = 0.0;
+        for vert in &mut subobj.bsp_data.verts {
+            *vert = &matrix * *vert;
+            if vert.magnitude() > subobj.radius {
+                subobj.radius = vert.magnitude();
+            }
+        }
+
+        for norm in &mut subobj.bsp_data.norms {
+            *norm = &matrix * *norm;
+            norm.normalize();
+        }
+
+        subobj.bsp_data.collision_tree.recalculate_bboxes(&subobj.bsp_data.verts);
+
+        subobj.bbox = {
+            match subobj.bsp_data.collision_tree {
+                BspNode::Split { bbox, .. } => bbox,
+                BspNode::Leaf { bbox, .. } => bbox,
+            }
+        };
+
+        let children = subobj.children.clone();
+
+        for child_id in children {
+            self.apply_transform_children(child_id, &matrix)
+        }
+    }
+
+    pub fn recalc_radius(&mut self) {
+        self.header.max_radius = 0.00001;
+        for subobj in &self.sub_objects {
+            if !self.is_obj_id_ancestor(subobj.obj_id, self.header.detail_levels[0]) {
+                continue;
+            }
+
+            for vert in &subobj.bsp_data.verts {
+                if (*vert + subobj.offset).magnitude() > self.header.max_radius {
+                    self.header.max_radius = (*vert + subobj.offset).magnitude();
+                }
+            }
+        }
     }
 }

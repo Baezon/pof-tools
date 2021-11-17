@@ -1563,6 +1563,8 @@ impl PofToolsGui {
                             }
                             if let Some(matrix) = UiState::show_transform_window(ctx, transform_window) {
                                 for i in 0..self.model.sub_objects.len() {
+                                    // only apply to top-level subobjects (no parent), apply_transform() will
+                                    // recursively apply the proper transform to its children
                                     if self.model.sub_objects[ObjectId(i as u32)].parent == None {
                                         self.model.apply_transform(ObjectId(i as u32), &matrix);
                                         self.ui_state.viewport_3d_dirty = true;
@@ -1578,38 +1580,90 @@ impl PofToolsGui {
                                         }
                                     }
                                 }
+
+                                self.model.recalc_bbox();
+                                self.model.recalc_radius();
                             }
 
-                            let (bbox_min, bbox_max, radius, mass, moi_r, moi_u, moi_f) = {
-                                (
-                                    Some(&mut self.model.header.bounding_box.min),
-                                    Some(&mut self.model.header.bounding_box.max),
-                                    Some(&mut self.model.header.max_radius),
-                                    Some(&mut self.model.header.mass),
-                                    Some(&mut self.model.header.moment_of_inertia.rvec),
-                                    Some(&mut self.model.header.moment_of_inertia.uvec),
-                                    Some(&mut self.model.header.moment_of_inertia.fvec),
-                                )
-                            };
+                            ui.horizontal(|ui| {
+                                ui.label("Bounding Box:");
+                                if ui.button("Recalculate").clicked() {
+                                    self.model.recalc_bbox();
+                                    self.ui_state.properties_panel_dirty = true;
+                                }
+                            });
 
-                            ui.label("Bounding Box Min:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, bbox_min, bbox_min_string);
-                            ui.label("Bounding Box Max:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, bbox_max, bbox_max_string);
-                            ui.label("Radius:");
-                            let radius_changed = UiState::model_value_edit(
+                            ui.horizontal(|ui| {
+                                ui.label("Min:");
+                                UiState::model_value_edit(
+                                    &mut self.ui_state.viewport_3d_dirty,
+                                    ui,
+                                    false,
+                                    Some(&mut self.model.header.bounding_box.min),
+                                    bbox_min_string,
+                                );
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("Max:");
+                                UiState::model_value_edit(
+                                    &mut self.ui_state.viewport_3d_dirty,
+                                    ui,
+                                    false,
+                                    Some(&mut self.model.header.bounding_box.max),
+                                    bbox_max_string,
+                                );
+                            });
+
+                            let mut radius_changed = false;
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Label::new("Radius:"));
+                                if ui.button("Recalculate").clicked() {
+                                    self.model.recalc_radius();
+                                    radius_changed = true;
+                                    self.ui_state.properties_panel_dirty = true;
+                                }
+                            });
+                            if UiState::model_value_edit(
                                 &mut self.ui_state.viewport_3d_dirty,
                                 ui,
                                 self.warnings.contains(&Warning::RadiusTooSmall(None)),
-                                radius,
+                                Some(&mut self.model.header.max_radius),
                                 radius_string,
-                            );
+                            ) {
+                                radius_changed = true;
+                            }
+
                             ui.label("Mass:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, mass, mass_string);
-                            ui.label("Moment of Intertia:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, moi_r, moir_string);
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, moi_u, moiu_string);
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, moi_f, moif_string);
+                            UiState::model_value_edit(
+                                &mut self.ui_state.viewport_3d_dirty,
+                                ui,
+                                false,
+                                Some(&mut self.model.header.mass),
+                                mass_string,
+                            );
+                            ui.label("Moment of Inertia:");
+                            UiState::model_value_edit(
+                                &mut self.ui_state.viewport_3d_dirty,
+                                ui,
+                                false,
+                                Some(&mut self.model.header.moment_of_inertia.rvec),
+                                moir_string,
+                            );
+                            UiState::model_value_edit(
+                                &mut self.ui_state.viewport_3d_dirty,
+                                ui,
+                                false,
+                                Some(&mut self.model.header.moment_of_inertia.uvec),
+                                moiu_string,
+                            );
+                            UiState::model_value_edit(
+                                &mut self.ui_state.viewport_3d_dirty,
+                                ui,
+                                false,
+                                Some(&mut self.model.header.moment_of_inertia.fvec),
+                                moif_string,
+                            );
 
                             if radius_changed {
                                 PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::RadiusTooSmall(None)));
@@ -1673,28 +1727,65 @@ impl PofToolsGui {
 
                             ui.add_space(5.0);
 
-                            let (bbox_min, bbox_max, offset, radius) =
-                                if let TreeSelection::SubObjects(SubObjectSelection::SubObject(id)) = self.ui_state.tree_view_selection {
-                                    let SubObject { bbox, offset, radius, .. } = &mut self.model.sub_objects[id];
-                                    (Some(&mut bbox.min), Some(&mut bbox.max), Some(offset), Some(radius))
-                                } else {
-                                    (None, None, None, None)
-                                };
+                            ui.horizontal(|ui| {
+                                ui.label("Bounding Box:");
+                                if ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate")).clicked() {
+                                    self.model.sub_objects[selected_id.unwrap()].recalc_bbox();
+                                    self.ui_state.properties_panel_dirty = true;
+                                }
+                            });
 
-                            ui.label("Bounding Box Min:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, bbox_min, bbox_min_string);
-                            ui.label("Bounding Box Max:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, bbox_max, bbox_max_string);
+                            ui.horizontal(|ui| {
+                                ui.label("Min:");
+                                UiState::model_value_edit(
+                                    &mut self.ui_state.viewport_3d_dirty,
+                                    ui,
+                                    false,
+                                    selected_id.map(|id| &mut self.model.sub_objects[id].bbox.min),
+                                    bbox_min_string,
+                                );
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("Max:");
+                                UiState::model_value_edit(
+                                    &mut self.ui_state.viewport_3d_dirty,
+                                    ui,
+                                    false,
+                                    selected_id.map(|id| &mut self.model.sub_objects[id].bbox.max),
+                                    bbox_max_string,
+                                );
+                            });
+
                             ui.label("Offset:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, offset, offset_string);
-                            ui.label("Radius:");
+                            UiState::model_value_edit(
+                                &mut self.ui_state.viewport_3d_dirty,
+                                ui,
+                                false,
+                                selected_id.map(|id| &mut self.model.sub_objects[id].offset),
+                                offset_string,
+                            );
+
+                            let mut radius_changed = false;
+                            ui.horizontal(|ui| {
+                                ui.label("Radius:");
+                                if ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate")).clicked() {
+                                    self.model.sub_objects[selected_id.unwrap()].recalc_radius();
+                                    self.ui_state.properties_panel_dirty = true;
+                                    radius_changed = true;
+                                }
+                            });
                             if UiState::model_value_edit(
                                 &mut self.ui_state.viewport_3d_dirty,
                                 ui,
                                 self.warnings.contains(&Warning::RadiusTooSmall(selected_id)),
-                                radius,
+                                selected_id.map(|id| &mut self.model.sub_objects[id].radius),
                                 radius_string,
                             ) {
+                                radius_changed = true;
+                            }
+
+                            if radius_changed {
                                 PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::RadiusTooSmall(selected_id)));
                             }
 

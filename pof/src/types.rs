@@ -762,6 +762,23 @@ impl SubObject {
     pub fn is_destroyed_model(&self) -> bool {
         self.name.to_lowercase().ends_with("-destroyed")
     }
+
+    pub fn recalc_radius(&mut self) {
+        self.radius = 0.00001;
+
+        for vert in &self.bsp_data.verts {
+            if vert.magnitude() > self.radius {
+                self.radius = vert.magnitude();
+            }
+        }
+    }
+
+    pub fn recalc_bbox(&mut self) {
+        self.bbox = match self.bsp_data.collision_tree {
+            BspNode::Split { bbox, .. } => bbox,
+            BspNode::Leaf { bbox, .. } => bbox,
+        };
+    }
 }
 impl Serialize for SubObject {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
@@ -984,8 +1001,11 @@ impl Model {
             }
         }
 
+        // this preserves rotations, but inverts scales, which is the proper transformation for normals
+        let norm_matrix = matrix.try_inverse().unwrap().transpose();
+
         for norm in &mut subobj.bsp_data.norms {
-            *norm = matrix * *norm;
+            *norm = &norm_matrix * *norm;
             norm.normalize();
         }
 
@@ -1029,8 +1049,11 @@ impl Model {
             }
         }
 
+        // this preserves rotations, but inverts scales, which is the proper transformation for normals
+        let norm_matrix = matrix.try_inverse().unwrap().transpose();
+
         for norm in &mut subobj.bsp_data.norms {
-            *norm = &matrix * *norm;
+            *norm = &norm_matrix * *norm;
             norm.normalize();
         }
 
@@ -1063,5 +1086,31 @@ impl Model {
                 }
             }
         }
+    }
+
+    pub fn recalc_bbox(&mut self) {
+        let mut new_bbox = self.header.bounding_box;
+        new_bbox.min = Vec3d { x: -0.00001, y: -0.00001, z: -0.00001 };
+        new_bbox.max = Vec3d { x: 0.00001, y: 0.00001, z: 0.00001 };
+
+        for subobj in &self.sub_objects {
+            if !self.is_obj_id_ancestor(subobj.obj_id, self.header.detail_levels[0]) {
+                continue;
+            }
+
+            new_bbox.min = Vec3d {
+                x: f32::min(new_bbox.min.x, subobj.bbox.min.x),
+                y: f32::min(new_bbox.min.y, subobj.bbox.min.y),
+                z: f32::min(new_bbox.min.z, subobj.bbox.min.z),
+            };
+
+            new_bbox.max = Vec3d {
+                x: f32::max(new_bbox.max.x, subobj.bbox.max.x),
+                y: f32::max(new_bbox.max.y, subobj.bbox.max.y),
+                z: f32::max(new_bbox.max.z, subobj.bbox.max.z),
+            };
+        }
+
+        self.header.bounding_box = new_bbox;
     }
 }

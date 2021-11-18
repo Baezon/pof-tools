@@ -36,6 +36,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
     let scene = map
         .get(&document.scene.as_ref().unwrap().instance_visual_scene.as_ref().unwrap().url)
         .unwrap();
+
     let mut materials = vec![];
     let mut material_map = HashMap::new();
     document.for_each(|material: &Material| {
@@ -63,9 +64,6 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
             // println!("{:#?}", geo);
             let mut iter = Clone::clone(verts.position_importer().unwrap());
             while let Some(position) = iter.next() {
-                // println!("{:#?}", Vec3d::from(position));
-                // println!("{:#?}", &local_transform);
-                // println!("{:#?}", &local_transform * Vec3d::from(position));
                 vertices_out.push(&local_transform * Vec3d::from(position));
             }
 
@@ -112,6 +110,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
                 }
             }
         }
+
         let obj_id = ObjectId(sub_objects.len() as _);
         let name = node.name.as_ref().unwrap();
         if name == "shield" {

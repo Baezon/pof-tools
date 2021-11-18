@@ -170,6 +170,9 @@ impl Display for Vec3d {
 }
 impl Vec3d {
     pub const ZERO: Vec3d = Vec3d { x: 0.0, y: 0.0, z: 0.0 };
+    pub fn new(x: f32, y: f32, z: f32) -> Self {
+        Vec3d { x, y, z }
+    }
     pub fn to_tuple(self) -> (f32, f32, f32) {
         (self.x, self.y, self.z)
     }
@@ -250,6 +253,20 @@ impl Debug for BBox {
         f.write_fmt(format_args!("{:?}, {:?}", &self.min, &self.max))
     }
 }
+impl BBox {
+    pub fn volume(&self) -> f32 {
+        (self.max.x - self.min.x) * (self.max.y - self.min.y) * (self.max.z - self.min.z)
+    }
+    pub fn x_width(&self) -> f32 {
+        self.max.x - self.min.x
+    }
+    pub fn y_height(&self) -> f32 {
+        self.max.y - self.min.y
+    }
+    pub fn z_length(&self) -> f32 {
+        self.max.z - self.min.z
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum BspLightKind {
@@ -281,7 +298,7 @@ impl Default for EyePoint {
         Self {
             attached_subobj: ObjectId(0),
             offset: Default::default(),
-            normal: Vec3d { x: 0.0, y: 0.0, z: 1.0 },
+            normal: Vec3d::new(0.0, 0.0, 1.0),
         }
     }
 }
@@ -882,6 +899,14 @@ impl Serialize for GlowPointBank {
         Ok(())
     }
 }
+impl GlowPointBank {
+    pub fn get_glow_texture(&self) -> &str {
+        self.properties.strip_prefix("$glow_texture=").unwrap_or("")
+    }
+    pub fn set_glow_texture(&mut self, tex: &str) {
+        self.properties = format!("$glow_texture={}", tex);
+    }
+}
 
 mk_enumeration! {
     #[derive(PartialOrd, Ord, PartialEq, Eq, Debug, Clone, Copy)]
@@ -1112,5 +1137,19 @@ impl Model {
         }
 
         self.header.bounding_box = new_bbox;
+    }
+
+    pub fn recalc_mass(&mut self) {
+        self.header.mass = 4.65 * (self.header.bounding_box.volume().powf(2.0 / 3.0));
+    }
+
+    pub fn recalc_moi(&mut self) {
+        let dx = self.header.bounding_box.x_width();
+        let dy = self.header.bounding_box.y_height();
+        let dz = self.header.bounding_box.z_length();
+        let mass = self.header.mass;
+        self.header.moment_of_inertia.rvec = Vec3d::new(1.0 / (0.08 * mass * (dy * dy + dz * dz)), 0.0, 0.0);
+        self.header.moment_of_inertia.uvec = Vec3d::new(0.0, 1.0 / (0.08 * mass * (dx * dx + dz * dz)), 0.0);
+        self.header.moment_of_inertia.fvec = Vec3d::new(0.0, 0.0, 1.0 / (0.08 * mass * (dx * dx + dy * dy)));
     }
 }

@@ -81,7 +81,7 @@ enum PropertiesPanel {
         attached_subobj_idx: usize,
         lod_string: String,
         glow_type_string: String,
-        properties_string: String,
+        glow_texture_string: String,
         position_string: String,
         normal_string: String,
         radius_string: String,
@@ -191,7 +191,7 @@ impl PropertiesPanel {
             off_time_string: Default::default(),
             attached_subobj_idx: Default::default(),
             lod_string: Default::default(),
-            properties_string: Default::default(),
+            glow_texture_string: Default::default(),
             glow_type_string: Default::default(),
             normal_string: Default::default(),
             radius_string: Default::default(),
@@ -1040,7 +1040,7 @@ impl UiState {
                         attached_subobj_idx: model.glow_banks[bank].obj_parent.0 as usize,
                         lod_string: format!("{}", model.glow_banks[bank].lod),
                         glow_type_string: format!("{}", model.glow_banks[bank].glow_type),
-                        properties_string: format!("{}", model.glow_banks[bank].properties),
+                        glow_texture_string: format!("{}", model.glow_banks[bank].get_glow_texture()),
                         position_string: format!("{}", model.glow_banks[bank].glow_points[point].position),
                         normal_string: format!("{}", model.glow_banks[bank].glow_points[point].normal),
                         radius_string: format!("{}", model.glow_banks[bank].glow_points[point].radius),
@@ -1054,7 +1054,7 @@ impl UiState {
                         attached_subobj_idx: model.glow_banks[bank].obj_parent.0 as usize,
                         lod_string: format!("{}", model.glow_banks[bank].lod),
                         glow_type_string: format!("{}", model.glow_banks[bank].glow_type),
-                        properties_string: format!("{}", model.glow_banks[bank].properties),
+                        glow_texture_string: format!("{}", model.glow_banks[bank].get_glow_texture()),
                         position_string: Default::default(),
                         normal_string: Default::default(),
                         radius_string: Default::default(),
@@ -1144,13 +1144,15 @@ impl PofToolsGui {
         egui::TopBottomPanel::top("menu").default_height(33.0).min_height(33.0).show(ctx, |ui| {
             Ui::add_space(ui, 6.0);
             ui.horizontal(|ui| {
-                if ui.add(Button::new("🗁").text_style(TextStyle::Heading)).clicked() {
+                if ui.add(Button::new("🗁").text_style(TextStyle::Heading)).on_hover_text("Open").clicked() {
                     self.start_loading_model();
                     ui.output().cursor_icon = egui::CursorIcon::Wait;
                 }
 
                 if ui
                     .add_enabled(self.errors.is_empty(), Button::new("🖴").text_style(TextStyle::Heading))
+                    .on_hover_text("Save")
+                    .on_disabled_hover_text("All errors must be corrected before saving.")
                     .clicked()
                 {
                     PofToolsGui::save_model(&self.model);
@@ -1634,7 +1636,13 @@ impl PofToolsGui {
                                 radius_changed = true;
                             }
 
-                            ui.label("Mass:");
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Label::new("Mass:"));
+                                if ui.button("Recalculate").clicked() {
+                                    self.model.recalc_mass();
+                                    self.ui_state.properties_panel_dirty = true;
+                                }
+                            });
                             UiState::model_value_edit(
                                 &mut self.ui_state.viewport_3d_dirty,
                                 ui,
@@ -1642,7 +1650,14 @@ impl PofToolsGui {
                                 Some(&mut self.model.header.mass),
                                 mass_string,
                             );
-                            ui.label("Moment of Inertia:");
+
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Label::new("Moment of Inertia:"));
+                                if ui.button("Recalculate").clicked() {
+                                    self.model.recalc_moi();
+                                    self.ui_state.properties_panel_dirty = true;
+                                }
+                            });
                             UiState::model_value_edit(
                                 &mut self.ui_state.viewport_3d_dirty,
                                 ui,
@@ -2034,7 +2049,7 @@ impl PofToolsGui {
                             off_time_string,
                             lod_string,
                             glow_type_string,
-                            properties_string,
+                            glow_texture_string,
                             attached_subobj_idx,
                             position_string,
                             normal_string,
@@ -2053,11 +2068,13 @@ impl PofToolsGui {
 
                             ui.add_space(10.0);
 
-                            ui.label("Properties:");
+                            ui.label("Glow Texture:");
                             if let Some(bank) = bank_num {
-                                ui.add(egui::TextEdit::multiline(&mut self.model.glow_banks[bank].properties).desired_rows(1));
+                                if ui.add(egui::TextEdit::multiline(glow_texture_string).desired_rows(1)).changed() {
+                                    self.model.glow_banks[bank].set_glow_texture(&glow_texture_string);
+                                }
                             } else {
-                                ui.add_enabled(false, egui::TextEdit::multiline(properties_string).desired_rows(1));
+                                ui.add_enabled(false, egui::TextEdit::multiline(glow_texture_string).desired_rows(1));
                             }
 
                             let subobj_names_list = self.model.get_subobj_names();

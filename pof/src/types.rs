@@ -2,7 +2,7 @@ use std::cmp;
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display};
 use std::io::{self, Write};
-use std::ops::{Add, AddAssign, Deref, DerefMut, Index, IndexMut, Mul, MulAssign, Sub, SubAssign};
+use std::ops::{Add, AddAssign, Deref, DerefMut, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign};
 use std::str::FromStr;
 
 use byteorder::{WriteBytesExt, LE};
@@ -119,6 +119,11 @@ impl From<[f32; 3]> for Vec3d {
         Vec3d { x, y, z }
     }
 }
+impl From<Vec3d> for [f32; 3] {
+    fn from(Vec3d { x, y, z }: Vec3d) -> Self {
+        [x, y, z]
+    }
+}
 impl From<(f32, f32, f32)> for Vec3d {
     fn from((x, y, z): (f32, f32, f32)) -> Self {
         Vec3d { x, y, z }
@@ -231,6 +236,13 @@ impl Mul<Vec3d> for &Mat4 {
 
     fn mul(self, rhs: Vec3d) -> Self::Output {
         self.transform_point(&rhs.into()).into()
+    }
+}
+impl Neg for Vec3d {
+    type Output = Vec3d;
+
+    fn neg(self) -> Self::Output {
+        Vec3d { x: -self.x, y: -self.y, z: -self.z }
     }
 }
 

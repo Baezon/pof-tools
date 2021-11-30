@@ -172,7 +172,7 @@ impl GlBufferedInsignia {
 
 struct GlBufferedObject {
     obj_id: ObjectId,
-    tmap: TextureId,
+    tmap: Option<TextureId>,
     vertices: VertexBuffer<Vertex>,
     normals: VertexBuffer<Normal>,
     indices: IndexBuffer<u32>,
@@ -180,7 +180,7 @@ struct GlBufferedObject {
 }
 impl GlBufferedObject {
     // TODO DONT TRINAGULATE FOR WIREFRAMES
-    fn new(display: &Display, object: &SubObject, tmap: TextureId) -> Option<GlBufferedObject> {
+    fn new(display: &Display, object: &SubObject, tmap: Option<TextureId>) -> Option<GlBufferedObject> {
         let mut vertices = vec![];
         let mut normals = vec![];
         let mut indices = vec![];
@@ -191,10 +191,10 @@ impl GlBufferedObject {
 
         for (_, poly_list) in bsp_data.collision_tree.leaves() {
             for poly in poly_list {
-                if let Texturing::Texture(tex) = poly.texture {
-                    if tex != tmap {
-                        continue;
-                    }
+                match (tmap, poly.texture) {
+                    (Some(tmap), Texturing::Texture(tex)) if tmap == tex => {}
+                    (None, Texturing::Flat(_)) => {}
+                    _ => continue,
                 }
 
                 // need to triangulate possibly
@@ -329,10 +329,17 @@ impl PofToolsGui {
 
         for subobject in &self.model.sub_objects {
             for i in 0..self.model.textures.len() {
-                let buf = GlBufferedObject::new(&display, &subobject, TextureId(i as u32));
+                let buf = GlBufferedObject::new(&display, &subobject, Some(TextureId(i as u32)));
                 if let Some(buf) = buf {
                     self.buffer_objects.push(buf);
                 }
+            }
+
+            println!("{}", subobject.bsp_data.verts.len());
+
+            let buf = GlBufferedObject::new(&display, &subobject, None);
+            if let Some(buf) = buf {
+                self.buffer_objects.push(buf);
             }
         }
 
@@ -860,7 +867,7 @@ impl PofToolsGui {
             }
             TreeSelection::Textures(TextureSelection::Texture(tex)) => {
                 for buffer in &mut self.buffer_objects {
-                    if buffer.tmap == *tex {
+                    if buffer.tmap == Some(*tex) {
                         buffer.tint_val = 0.3;
                     }
                 }

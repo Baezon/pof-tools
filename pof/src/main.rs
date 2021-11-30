@@ -9,7 +9,7 @@ pub use parse::Parser;
 pub use types::*;
 
 use std::fs::File;
-use std::io;
+use std::io::{self, Write};
 
 use walkdir::WalkDir;
 
@@ -62,9 +62,9 @@ fn main() -> io::Result<()> {
     // write!(File::create("output.log").unwrap(), "{:#?}", model).unwrap();
     // let buf1 = std::fs::read("output.pof").unwrap();
 
-    // let file = File::open("output.pof").unwrap();
-    // let mut parser = Parser::new(file)?;
-    // let model = parser.parse()?;
+    let file = File::open("cube.pof").unwrap();
+    let mut parser = Parser::new(file)?;
+    let model = parser.parse()?;
     // write!(File::create("output2.log").unwrap(), "{:#?}", model).unwrap();
 
     // let mut file = File::create("output2.pof").unwrap();
@@ -73,7 +73,9 @@ fn main() -> io::Result<()> {
 
     // assert!(buf1 == buf2);
 
-    parse::parse_dae("TEST.dae");
+    // let model = parse::parse_dae("capital01.");
+    write!(File::create("output2.log").unwrap(), "{:#?}", model).unwrap();
+    model.write_dae(&mut File::create("TEST2.dae").unwrap()).unwrap();
 
     Ok(())
 }

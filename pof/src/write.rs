@@ -1,8 +1,9 @@
 use std::io::{self, Write};
 
 use byteorder::{WriteBytesExt, LE};
+use dae_parser::{Document, Library, LibraryElement};
 
-use crate::{BspData, BspNode, Model, ShieldNode, Texturing, Vec3d, Version};
+use crate::{BspData, BspNode, Model, ObjVec, ShieldNode, SubObject, Texturing, Vec3d, Version};
 
 pub(crate) trait Serialize {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()>;
@@ -352,5 +353,161 @@ impl Model {
         }
 
         Ok(())
+    }
+}
+use dae_parser::*;
+fn make_subobj_node(subobjs: &ObjVec<SubObject>, subobj: &SubObject, geometries: &mut Vec<Geometry>, materials: &[String]) -> Node {
+    let geo_id = format!("{}-geometry", subobj.name);
+    let pos_id = format!("{}-geometry-position", subobj.name);
+    let vert_id = format!("{}-geometry-vertex", subobj.name);
+    let pos_array_id = format!("{}-array", pos_id);
+    let norm_id = format!("{}-geometry-normal", subobj.name);
+    let norm_array_id = format!("{}-array", norm_id);
+    let uv_id = format!("{}-geometry-uv", subobj.name);
+    let uv_array_id = format!("{}-array", uv_id);
+
+    let mut positions = vec![];
+    for vert in &subobj.bsp_data.verts {
+        positions.push(vert.x);
+        positions.push(vert.z);
+        positions.push(vert.y);
+    }
+
+    let mut normals = vec![];
+    for norm in &subobj.bsp_data.norms {
+        normals.push(norm.x);
+        normals.push(norm.z);
+        normals.push(norm.y);
+    }
+
+    let mut uv_coords = vec![];
+    let mut uv_len = 0;
+    let mut prim_elems = vec![(vec![], vec![]); materials.len() + 1];
+
+    for (_, polylist) in subobj.bsp_data.collision_tree.leaves() {
+        for poly in polylist {
+            let (vert_count, indices) = &mut prim_elems[match poly.texture {
+                Texturing::Flat(_) => 0,
+                Texturing::Texture(idx) => idx.0 as usize + 1,
+            }];
+            vert_count.push(poly.verts.len() as u32);
+            for vert in poly.verts.iter().rev() {
+                indices.push(vert.vertex_id.0 as _);
+                indices.push(vert.normal_id.0 as _);
+                indices.push(uv_len);
+                uv_len += 1;
+                uv_coords.push(vert.uv.0);
+                uv_coords.push(vert.uv.1);
+            }
+        }
+    }
+
+    let mut instance = Instance::<Geometry>::new(Url::Fragment(geo_id.clone()));
+    let bind_materials = prim_elems[1..]
+        .iter()
+        .zip(materials)
+        .filter(|((vcount, _), _)| !vcount.is_empty())
+        .map(|(_, mat)| {
+            InstanceMaterial::new(
+                mat.to_string(),
+                Url::Fragment(format!("{}-material", mat)),
+                vec![BindVertexInput::new("UVMap", "TEXCOORD", Some(0))],
+            )
+        })
+        .collect::<Vec<_>>();
+    if !bind_materials.is_empty() {
+        instance.data.bind_material = Some(BindMaterial::new(bind_materials));
+    }
+
+    geometries.push(Geometry::new_mesh(
+        geo_id.clone(),
+        vec![
+            Source::new_local(
+                pos_id.clone(),
+                Param::new_xyz(),
+                ArrayElement::Float(FloatArray { id: Some(pos_array_id.clone()), val: positions.into() }), // TODO make a new func
+            ),
+            Source::new_local(
+                norm_id.clone(),
+                Param::new_xyz(),
+                ArrayElement::Float(FloatArray { id: Some(norm_array_id.clone()), val: normals.into() }),
+            ),
+            Source::new_local(
+                uv_id.clone(),
+                Param::new_st(),
+                ArrayElement::Float(FloatArray { id: Some(uv_array_id.clone()), val: uv_coords.into() }),
+            ),
+        ],
+        Vertices::new(vert_id.clone(), vec![Input::new(Semantic::Position, Url::Fragment(pos_id.clone()))]),
+        prim_elems
+            .into_iter()
+            .zip([None].into_iter().chain(materials.iter().map(Some)))
+            .filter(|((vcount, _), _)| !vcount.is_empty())
+            .map(|((vcount, indices), material)| {
+                // TODO
+                Primitive::PolyList(PolyList::new(
+                    material.cloned(),
+                    vec![
+                        InputS::new(Semantic::Vertex, Url::Fragment(vert_id.clone()), 0, None),
+                        InputS::new(Semantic::Normal, Url::Fragment(norm_id.clone()), 1, None),
+                        InputS::new(Semantic::TexCoord, Url::Fragment(uv_id.clone()), 2, None),
+                    ],
+                    vcount.into_boxed_slice(),
+                    indices.into_boxed_slice(),
+                ))
+            })
+            .collect(),
+    ));
+
+    let mut node = Node::new(subobj.name.clone(), Some(subobj.name.clone()));
+    node.push_transform(Translate::new([subobj.offset.x, subobj.offset.z, subobj.offset.y]));
+
+    node.instance_geometry.push(instance);
+    node.children = subobj
+        .children
+        .iter()
+        .map(|&id| make_subobj_node(subobjs, &subobjs[id], geometries, materials))
+        .collect();
+
+    node
+}
+impl Model {
+    pub fn write_dae(&self, w: &mut impl Write) -> Result<(), dae_parser::Error> {
+        let mut geometries = vec![];
+
+        let mut nodes = vec![];
+
+        for subobj in &self.sub_objects {
+            if subobj.parent.is_none() {
+                nodes.push(make_subobj_node(&self.sub_objects, subobj, &mut geometries, &self.textures));
+            }
+        }
+
+        let mut doc = Document::create_now();
+        doc.push_library(
+            self.textures
+                .iter()
+                .map(|tex| Effect::shader(format!("{}-effect", tex), Lambert::default()))
+                .collect(),
+        );
+
+        doc.push_library(
+            self.textures
+                .iter()
+                .map(|tex| Material::new(format!("{}-material", tex), tex.clone(), Url::Fragment(format!("{}-effect", tex))))
+                .collect(),
+        );
+
+        doc.push_library(geometries);
+
+        let mut scene = VisualScene::new("Scene", None);
+        scene.nodes = nodes;
+        doc.push_library(vec![scene]);
+
+        doc.scene = Some(Scene::new(Instance::new(Url::Fragment("Scene".to_string()))));
+
+        doc.asset.up_axis = UpAxis::ZUp;
+
+        doc.write_to(w)
     }
 }

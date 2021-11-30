@@ -46,6 +46,10 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
     let mut details = vec![];
     let mut shield_data = None;
 
+    fn flip_y_z(vec: Vec3d) -> Vec3d {
+        Vec3d { x: vec.x, y: vec.z, z: vec.y }
+    }
+
     for node in &scene.nodes {
         let transform = node.transform_as_matrix();
         let zero = Vec3d::ZERO.into();
@@ -57,14 +61,14 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
         let mut normals_out: Vec<Vec3d> = vec![];
         let mut offsets = (vertices_out.len() as u16, normals_out.len() as u16);
         let mut polygons_out = vec![];
+
         for geo in &node.instance_geometry {
             let geo = map[&geo.url].element.as_mesh().unwrap();
             let verts = geo.vertices.as_ref().unwrap().importer(&map).unwrap();
             offsets.0 = vertices_out.len() as u16;
-            // println!("{:#?}", geo);
             let mut iter = Clone::clone(verts.position_importer().unwrap());
             while let Some(position) = iter.next() {
-                vertices_out.push(&local_transform * Vec3d::from(position));
+                vertices_out.push(flip_y_z(&local_transform * Vec3d::from(position)));
             }
 
             for prim_elem in &geo.elements {
@@ -79,7 +83,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
 
                         offsets.1 = normals_out.len() as u16;
                         for normal in Clone::clone(importer.normal_importer().unwrap()) {
-                            normals_out.push(&local_transform * Vec3d::from(normal));
+                            normals_out.push(flip_y_z(&local_transform * Vec3d::from(normal)));
                         }
 
                         let mut iter = importer.read::<_, PolyVertex>(&offsets, &polies.data.prim);
@@ -98,7 +102,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
 
                         offsets.1 = normals_out.len() as u16;
                         for normal in Clone::clone(importer.normal_importer().expect("normals missing in DAE")) {
-                            normals_out.push(&local_transform * Vec3d::from(normal));
+                            normals_out.push(flip_y_z(&local_transform * Vec3d::from(normal)));
                         }
 
                         let mut iter = importer.read::<_, PolyVertex>(&offsets, tris.data.prim.as_ref().unwrap());
@@ -109,6 +113,10 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
                     _ => {}
                 }
             }
+        }
+
+        for poly in &mut polygons_out {
+            poly.1.reverse();
         }
 
         let obj_id = ObjectId(sub_objects.len() as _);
@@ -139,7 +147,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
                 obj_id,
                 radius: Default::default(),
                 parent: Default::default(),
-                offset: center.into(),
+                offset: flip_y_z(center.into()),
                 geo_center: Default::default(),
                 bbox: Default::default(),
                 name: name.clone(),
@@ -179,7 +187,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
             ..Default::default()
         },
         sub_objects: ObjVec(sub_objects),
-        textures: Default::default(),
+        textures: materials,
         paths: Default::default(),
         special_points: Default::default(),
         eye_points: Default::default(),

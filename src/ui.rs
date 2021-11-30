@@ -588,6 +588,10 @@ impl PofToolsGui {
         matches!(self.warnings.range(Warning::RadiusTooSmall(Some(ObjectId(0)))..).next(), Some(Warning::RadiusTooSmall(Some(_))))
     }
 
+    fn errors_contains_any_turret_invalid_gun(&self) -> bool {
+        matches!(self.errors.range(Error::InvalidTurretGunSubobject(0)..).next(), Some(Error::InvalidTurretGunSubobject(_)))
+    }
+
     fn tree_selectable_item(&mut self, ui: &mut Ui, name: &str, selection: TreeSelection) {
         self.ui_state.tree_selectable_item(&self.model, ui, name, selection);
     }
@@ -1082,7 +1086,6 @@ impl UiState {
                     }
                 }
                 TurretSelection::Turret(turret) => {
-                    println!("{:#?}", model.turrets[turret]);
                     self.properties_panel = PropertiesPanel::Turret {
                         normal_string: format!("{}", model.turrets[turret].normal),
                         base_idx: model.turrets[turret].base_obj.0 as usize,
@@ -1177,9 +1180,18 @@ impl PofToolsGui {
                     for error in &self.errors {
                         match *error {
                             Error::InvalidTurretGunSubobject(turret_num) => {
+                                let turret_name = if self.model.sub_objects[self.model.turrets[turret_num].base_obj]
+                                    .name
+                                    .to_lowercase()
+                                    .starts_with("turret")
+                                {
+                                    ""
+                                } else {
+                                    "turret "
+                                };
                                 let str = format!(
-                                    "⊗ turret {} has an invalid gun object",
-                                    self.model.sub_objects[self.model.turrets[turret_num].base_obj].name
+                                    "⊗ {}{} has an invalid gun object",
+                                    turret_name, self.model.sub_objects[self.model.turrets[turret_num].base_obj].name
                                 );
                                 ui.add(Label::new(str).text_style(TextStyle::Button).text_color(Color32::RED));
                             }

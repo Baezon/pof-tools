@@ -1,4 +1,3 @@
-use std::cmp;
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display};
 use std::io::{self, Write};
@@ -7,7 +6,6 @@ use std::str::FromStr;
 
 use byteorder::{WriteBytesExt, LE};
 use glm::TMat4;
-use nalgebra::Point3;
 use nalgebra_glm::Mat4;
 extern crate nalgebra_glm as glm;
 
@@ -102,11 +100,25 @@ macro_rules! mk_struct {
 }
 
 mk_struct! {
-    #[derive(Clone, Copy, Default, PartialEq)]
+    #[derive(Clone, Copy, Default)]
     pub struct Vec3d {
         pub x: f32,
         pub y: f32,
         pub z: f32,
+    }
+}
+impl Eq for Vec3d {}
+impl PartialEq for Vec3d {
+    // NaN == NaN, fuck you
+    fn eq(&self, other: &Self) -> bool {
+        self.x.to_bits() == other.x.to_bits() && self.y.to_bits() == other.y.to_bits() && self.z.to_bits() == other.z.to_bits()
+    }
+}
+impl std::hash::Hash for Vec3d {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.x.to_bits().hash(state);
+        self.y.to_bits().hash(state);
+        self.z.to_bits().hash(state);
     }
 }
 impl Debug for Vec3d {
@@ -770,6 +782,8 @@ impl Default for SubsysMovementAxis {
     }
 }
 
+pub const MAX_DEBRIS_OBJECTS: u32 = 32;
+
 #[derive(Debug)]
 pub struct SubObject {
     pub obj_id: ObjectId,
@@ -803,10 +817,33 @@ impl SubObject {
     }
 
     pub fn recalc_bbox(&mut self) {
-        self.bbox = match self.bsp_data.collision_tree {
-            BspNode::Split { bbox, .. } => bbox,
-            BspNode::Leaf { bbox, .. } => bbox,
-        };
+        self.bbox.min = self.bsp_data.verts[0];
+        self.bbox.max = self.bsp_data.verts[0];
+
+        for vert in &self.bsp_data.verts {
+            if vert.x < self.bbox.min.x {
+                self.bbox.min.x = vert.x
+            }
+            if vert.y < self.bbox.min.y {
+                self.bbox.min.y = vert.y
+            }
+            if vert.z < self.bbox.min.z {
+                self.bbox.min.z = vert.z
+            }
+            if vert.x > self.bbox.max.x {
+                self.bbox.max.x = vert.x
+            }
+            if vert.y > self.bbox.max.y {
+                self.bbox.max.y = vert.y
+            }
+            if vert.z > self.bbox.max.z {
+                self.bbox.max.z = vert.z
+            }
+        }
+        // self.bbox = match self.bsp_data.collision_tree {
+        //     BspNode::Split { bbox, .. } => bbox,
+        //     BspNode::Leaf { bbox, .. } => bbox,
+        // };
     }
 }
 impl Serialize for SubObject {
@@ -1006,12 +1043,14 @@ impl Model {
         let mut out_idx = 0;
         let mut found_existing_obj = false;
 
+        // check the turret base object itself first
         if existing_obj == turret_obj {
             out_idx = out_vec.len();
             found_existing_obj = true;
         }
         out_vec.push(turret_obj);
 
+        // then iterate through immediate base object children, which are also valid
         for &child_id in &self.sub_objects[turret_obj].children {
             if existing_obj == child_id {
                 out_idx = out_vec.len();
@@ -1020,6 +1059,8 @@ impl Model {
             out_vec.push(child_id);
         }
 
+        // if none of the above are the current selection, that means its invalid!
+        // invalidity is handled separately, but we have to add this invalid object either way, so append it at the end
         if !found_existing_obj {
             out_idx = out_vec.len();
             out_vec.push(existing_obj);
@@ -1028,7 +1069,21 @@ impl Model {
         (out_vec, out_idx)
     }
 
-    pub fn apply_transform_children(&mut self, id: ObjectId, matrix: &TMat4<f32>) {
+    pub fn num_debris_objects(&self) -> u32 {
+        let mut num_debris = 0;
+        for sobj in &self.sub_objects {
+            if sobj.is_debris_model {
+                num_debris += 1;
+            }
+        }
+        num_debris
+    }
+
+    pub fn apply_transform(&mut self, id: ObjectId, matrix: &TMat4<f32>, transform_offset: bool) {
+        let zero = Vec3d::ZERO.into();
+        let translation = matrix.transform_point(&zero) - zero;
+        let matrix = &matrix.append_translation(&(-translation));
+
         let subobj = &mut self.sub_objects[id];
         subobj.radius = 0.0;
         for vert in &mut subobj.bsp_data.verts {
@@ -1055,58 +1110,14 @@ impl Model {
             }
         };
 
-        subobj.offset = matrix * subobj.offset;
+        if transform_offset {
+            subobj.offset = matrix * subobj.offset;
+        }
 
         let children = subobj.children.clone();
 
         for child_id in children {
-            self.apply_transform_children(child_id, &matrix)
-        }
-    }
-
-    pub fn apply_transform(&mut self, id: ObjectId, matrix: &TMat4<f32>) {
-        println!("{}", matrix);
-        let subobj = &mut self.sub_objects[id];
-        let zero = Vec3d::ZERO.into();
-        let translation = matrix.transform_point(&zero) - zero;
-
-        println!("{}", translation);
-
-        let matrix = matrix.append_translation(&(-translation));
-
-        println!("{}", matrix);
-
-        subobj.offset += translation.into();
-
-        subobj.radius = 0.0;
-        for vert in &mut subobj.bsp_data.verts {
-            *vert = &matrix * *vert;
-            if vert.magnitude() > subobj.radius {
-                subobj.radius = vert.magnitude();
-            }
-        }
-
-        // this preserves rotations, but inverts scales, which is the proper transformation for normals
-        let norm_matrix = matrix.try_inverse().unwrap().transpose();
-
-        for norm in &mut subobj.bsp_data.norms {
-            *norm = &norm_matrix * *norm;
-            norm.normalize();
-        }
-
-        subobj.bsp_data.collision_tree.recalculate_bboxes(&subobj.bsp_data.verts);
-
-        subobj.bbox = {
-            match subobj.bsp_data.collision_tree {
-                BspNode::Split { bbox, .. } => bbox,
-                BspNode::Leaf { bbox, .. } => bbox,
-            }
-        };
-
-        let children = subobj.children.clone();
-
-        for child_id in children {
-            self.apply_transform_children(child_id, &matrix)
+            self.apply_transform(child_id, &matrix, true)
         }
     }
 

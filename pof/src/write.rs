@@ -1,9 +1,16 @@
-use std::io::{self, Write};
+use std::{
+    f32::consts::PI,
+    io::{self, Write},
+};
 
 use byteorder::{WriteBytesExt, LE};
 use dae_parser::{Document, Library, LibraryElement};
+use nalgebra_glm::pi;
+extern crate nalgebra_glm as glm;
 
-use crate::{BspData, BspNode, Model, ObjVec, ShieldNode, SubObject, Texturing, Vec3d, Version};
+use crate::{
+    BspData, BspNode, Dock, Model, ObjVec, Path, ShieldData, ShieldNode, SubObject, Texturing, ThrusterBank, Vec3d, Version, WeaponHardpoint,
+};
 
 pub(crate) trait Serialize {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()>;
@@ -355,7 +362,224 @@ impl Model {
         Ok(())
     }
 }
+
+// ==============================================================================
+// DAE Writing
+// ==============================================================================
+
 use dae_parser::*;
+
+// turns a direction vector into a dae Rotate struct
+// mostly for the purposes of storing a normal into a node's transform
+fn vec_to_rotation(vec: &Vec3d) -> Rotate {
+    let v1 = glm::Vec3::from(*vec).normalize();
+    let v2 = glm::Vec3::z_axis();
+    let mut cross = v1.cross(&v2);
+    if cross.magnitude() < 0.001 {
+        cross = *glm::Vec3::y_axis() // forward for DAE
+    }
+    let [x, y, z]: [f32; 3] = cross.normalize().into();
+    Rotate::new([x, z, y], v1.dot(&v2).acos() * (180.0 / PI)) // intentional swizzle
+}
+
+// turns properties into a series of dae nodes
+fn make_properties_node(properties: &String, id: String) -> Node {
+    let mut node = Node::new(format!("#{}properties", id), Some(format!("#{}properties", id)));
+
+    for substr in properties.split("\n") {
+        node.children
+            .push(Node::new(format!("#{}:{}", id, substr), Some(format!("{}:{}", id, substr))));
+    }
+
+    node
+}
+
+fn make_thrusters_node(thruster_banks: &Vec<ThrusterBank>) -> Node {
+    let mut node = Node::new("#thrusters", Some(format!("#thrusters")));
+
+    for (i, bank) in thruster_banks.iter().enumerate() {
+        let mut bank_node = Node::new(format!("#t-bank{}", i), Some(format!("#t-bank{}", i)));
+
+        for (j, point) in bank.glows.iter().enumerate() {
+            let mut point_node = Node::new(format!("#tb{}-point{}", i, j), Some(format!("#tb{}-point{}", i, j)));
+            let radius = point.radius;
+            let pos = point.position;
+            point_node.push_transform(Translate::new([pos.x, pos.z, pos.y]));
+            point_node.push_transform(vec_to_rotation(&point.normal));
+            point_node.push_transform(Scale::new([radius, radius, radius]));
+
+            bank_node.children.push(point_node);
+        }
+
+        if !bank.properties.is_empty() {
+            bank_node.children.push(make_properties_node(&bank.properties, format!("tb{}-", i)));
+        }
+
+        node.children.push(bank_node);
+    }
+
+    node
+}
+
+fn make_paths_node(paths: &Vec<Path>) -> Node {
+    let mut node = Node::new("#paths", Some(format!("#paths")));
+
+    for (i, path) in paths.iter().enumerate() {
+        let mut path_node = Node::new(format!("#p{}", i), Some(format!("#path{}", i)));
+
+        for (j, point) in path.points.iter().enumerate() {
+            let mut point_node = Node::new(format!("#path{}-{}", i, j), Some(format!("#p{}-point{}", i, j)));
+            let radius = point.radius;
+            let pos = point.position;
+            point_node.push_transform(Translate::new([pos.x, pos.z, pos.y]));
+            point_node.push_transform(Scale::new([radius, radius, radius]));
+
+            path_node.children.push(point_node);
+        }
+
+        path_node
+            .children
+            .push(Node::new(format!("#p{}-name", i), Some(format!("#p{}-name:{}", i, path.name))));
+
+        path_node
+            .children
+            .push(Node::new(format!("#p{}-parent", i), Some(format!("#p{}-parent:{}", i, path.parent))));
+
+        node.children.push(path_node);
+    }
+
+    node
+}
+
+fn make_weapons_node(weapons: &Vec<Vec<WeaponHardpoint>>, kind: &str) -> Node {
+    let mut node = Node::new(format!("#{} weapons", kind), Some(format!("#{} weapons", kind)));
+
+    for (i, bank) in weapons.iter().enumerate() {
+        let mut bank_node = Node::new(format!("#w{}-bank{}", &kind[0..1], i), Some(format!("#w{}-bank{}", &kind[0..1], i)));
+
+        for (j, point) in bank.iter().enumerate() {
+            let mut point_node = Node::new(format!("#w{}b{}-point{}", &kind[0..1], i, j), Some(format!("#w{}b{}-point{}", &kind[0..1], i, j)));
+            let pos = point.position;
+            point_node.push_transform(Translate::new([pos.x, pos.z, pos.y]));
+            point_node.push_transform(vec_to_rotation(&point.normal));
+
+            if point.offset != 0.0 {
+                point_node.children.push(Node::new(
+                    format!("#w{}b{}-point{}-offset", &kind[0..1], i, j),
+                    Some(format!("#w{}b{}-point{}-offset:{}", &kind[0..1], i, j, point.offset)),
+                ));
+            }
+
+            bank_node.children.push(point_node);
+        }
+
+        node.children.push(bank_node);
+    }
+
+    node
+}
+
+fn make_docking_bays_node(docks: Vec<Dock>) -> Node {
+    let mut node = Node::new(format!("#docking bays"), Some(format!("#docking bays")));
+
+    for (i, dock) in docks.iter().enumerate() {
+        let mut bank_node = Node::new(format!("#d-bay{}", i), Some(format!("#d-bay{}", i)));
+
+        for (j, point) in dock.points.iter().enumerate() {
+            let mut point_node = Node::new(format!("#d-bay{}-point{}", i, j), Some(format!("#d-bay{}-point{}", i, j)));
+            let pos = point.position;
+            point_node.push_transform(Translate::new([pos.x, pos.z, pos.y]));
+            point_node.push_transform(vec_to_rotation(&point.normal));
+
+            bank_node.children.push(point_node);
+        }
+
+        if point.offset != 0.0 {
+            point_node.children.push(Node::new(
+                format!("#w{}b{}-point{}-offset", &kind[0..1], i, j),
+                Some(format!("#w{}b{}-point{}-offset:{}", &kind[0..1], i, j, point.offset)),
+            ));
+        }
+
+        node.children.push(bank_node);
+    }
+
+    node
+}
+
+fn make_shield_node(shield: &ShieldData, geometries: &mut Vec<Geometry>) -> Node {
+    let geo_id = format!("shield-geometry");
+    let pos_id = format!("shield-geometry-position");
+    let vert_id = format!("shield-geometry-vertex");
+    let pos_array_id = format!("{}-array", pos_id);
+    let norm_id = format!("shield-geometry-normal");
+    let norm_array_id = format!("{}-array", norm_id);
+
+    let mut positions = vec![];
+    for vert in &shield.verts {
+        // intentional swizzle
+        positions.push(vert.x);
+        positions.push(vert.z);
+        positions.push(vert.y);
+    }
+
+    let mut normals = vec![];
+    let mut tricount = 0;
+    let mut indices = vec![];
+
+    for poly in &shield.polygons {
+        normals.push(poly.normal.x);
+        normals.push(poly.normal.z);
+        normals.push(poly.normal.y);
+
+        indices.push(poly.verts.0 .0 as _);
+        indices.push(tricount as _);
+
+        // intentional swizzle
+        indices.push(poly.verts.2 .0 as _);
+        indices.push(tricount as _);
+
+        indices.push(poly.verts.1 .0 as _);
+        indices.push(tricount as _);
+
+        tricount += 1;
+    }
+
+    let instance = Instance::<Geometry>::new(Url::Fragment(geo_id.clone()));
+
+    geometries.push(Geometry::new_mesh(
+        geo_id.clone(),
+        vec![
+            Source::new_local(
+                pos_id.clone(),
+                Param::new_xyz(),
+                ArrayElement::Float(FloatArray { id: Some(pos_array_id.clone()), val: positions.into() }), // TODO make a new func
+            ),
+            Source::new_local(
+                norm_id.clone(),
+                Param::new_xyz(),
+                ArrayElement::Float(FloatArray { id: Some(norm_array_id.clone()), val: normals.into() }),
+            ),
+        ],
+        Vertices::new(vert_id.clone(), vec![Input::new(Semantic::Position, Url::Fragment(pos_id.clone()))]),
+        vec![Primitive::Triangles(Triangles::new(
+            None,
+            vec![
+                InputS::new(Semantic::Vertex, Url::Fragment(vert_id.clone()), 0, None),
+                InputS::new(Semantic::Normal, Url::Fragment(norm_id.clone()), 1, None),
+            ],
+            tricount,
+            indices.into_boxed_slice(),
+        ))],
+    ));
+
+    let mut node = Node::new("shield", Some(String::from("shield")));
+
+    node.instance_geometry.push(instance);
+
+    node
+}
+
 fn make_subobj_node(subobjs: &ObjVec<SubObject>, subobj: &SubObject, geometries: &mut Vec<Geometry>, materials: &[String]) -> Node {
     let geo_id = format!("{}-geometry", subobj.name);
     let pos_id = format!("{}-geometry-position", subobj.name);
@@ -368,6 +592,7 @@ fn make_subobj_node(subobjs: &ObjVec<SubObject>, subobj: &SubObject, geometries:
 
     let mut positions = vec![];
     for vert in &subobj.bsp_data.verts {
+        // intentional swizzle
         positions.push(vert.x);
         positions.push(vert.z);
         positions.push(vert.y);
@@ -375,6 +600,7 @@ fn make_subobj_node(subobjs: &ObjVec<SubObject>, subobj: &SubObject, geometries:
 
     let mut normals = vec![];
     for norm in &subobj.bsp_data.norms {
+        // intentional swizzle
         normals.push(norm.x);
         normals.push(norm.z);
         normals.push(norm.y);
@@ -444,7 +670,7 @@ fn make_subobj_node(subobjs: &ObjVec<SubObject>, subobj: &SubObject, geometries:
             .zip([None].into_iter().chain(materials.iter().map(Some)))
             .filter(|((vcount, _), _)| !vcount.is_empty())
             .map(|((vcount, indices), material)| {
-                // TODO
+                // TODO maybe triangles sometimes?
                 Primitive::PolyList(PolyList::new(
                     material.cloned(),
                     vec![
@@ -471,6 +697,7 @@ fn make_subobj_node(subobjs: &ObjVec<SubObject>, subobj: &SubObject, geometries:
 
     node
 }
+
 impl Model {
     pub fn write_dae(&self, w: &mut impl Write) -> Result<(), dae_parser::Error> {
         let mut geometries = vec![];
@@ -481,6 +708,26 @@ impl Model {
             if subobj.parent.is_none() {
                 nodes.push(make_subobj_node(&self.sub_objects, subobj, &mut geometries, &self.textures));
             }
+        }
+
+        if self.shield_data.is_some() {
+            nodes.push(make_shield_node(&(self.shield_data.as_ref()).unwrap(), &mut geometries));
+        }
+
+        if !self.thruster_banks.is_empty() {
+            nodes.push(make_thrusters_node(&self.thruster_banks));
+        }
+
+        if !self.paths.is_empty() {
+            nodes.push(make_paths_node(&self.paths));
+        }
+
+        if !self.primary_weps.is_empty() {
+            nodes.push(make_weapons_node(&self.primary_weps, "primary"));
+        }
+
+        if !self.secondary_weps.is_empty() {
+            nodes.push(make_weapons_node(&self.secondary_weps, "secondary"));
         }
 
         let mut doc = Document::create_now();

@@ -274,14 +274,18 @@ impl PofToolsGui {
         // use a scoped thread here, its ok to block the main window for now i guess
         crossbeam::thread::scope(|s| {
             s.spawn(|_| {
-                let path = FileDialog::new().add_filter("Parallax Object File", &["pof"]).show_save_single_file();
-                println!("{:#?}", path);
+                let path = FileDialog::new()
+                    .add_filter("Parallax Object File", &["pof"])
+                    .add_filter("Digital Asset Exchange file", &["dae"])
+                    .show_save_single_file();
                 if let Ok(path) = path {
                     if let Some(path) = path {
-                        let mut file = File::create(path).unwrap();
-                        println!("{:#?}", file);
-
-                        model.write(&mut file).unwrap();
+                        let mut file = File::create(path.clone()).unwrap();
+                        if path.extension().map_or(false, |s| s == "dae") {
+                            model.write_dae(&mut file).unwrap();
+                        } else {
+                            model.write(&mut file).unwrap();
+                        }
                     }
                 }
             });
@@ -335,7 +339,7 @@ impl PofToolsGui {
                 }
             }
 
-            println!("{}", subobject.bsp_data.verts.len());
+            //println!("{}", subobject.bsp_data.verts.len());
 
             let buf = GlBufferedObject::new(&display, &subobject, None);
             if let Some(buf) = buf {
@@ -372,7 +376,7 @@ fn main() {
     let mut egui = egui_glium::EguiGlium::new(&display);
 
     pt_gui.start_loading_model();
-    egui.ctx().output().cursor_icon = egui::CursorIcon::Wait;
+    egui.egui_ctx.output().cursor_icon = egui::CursorIcon::Wait;
 
     let model = &pt_gui.model;
 
@@ -437,7 +441,7 @@ fn main() {
 
                         pt_gui.loading_thread = None;
 
-                        egui.ctx().output().cursor_icon = egui::CursorIcon::Default;
+                        egui.egui_ctx.output().cursor_icon = egui::CursorIcon::Default;
                     }
 
                     Err(TryRecvError::Disconnected) => {
@@ -452,11 +456,7 @@ fn main() {
                 }
             }
 
-            egui.begin_frame(&display);
-
-            pt_gui.show_ui(egui.ctx(), &display);
-
-            let (needs_repaint, shapes) = egui.end_frame(&display);
+            let (needs_repaint, shapes) = egui.run(&display, |ctx| pt_gui.show_ui(ctx, &display));
 
             *control_flow = if needs_repaint {
                 display.gl_window().window().request_redraw();
@@ -478,8 +478,8 @@ fn main() {
                 let model = &pt_gui.model;
 
                 // handle user interactions like rotating the camera
-                let rect = egui.ctx().available_rect();
-                let input = egui.ctx().input();
+                let rect = egui.egui_ctx.available_rect();
+                let input = egui.egui_ctx.input();
                 if rect.is_positive() {
                     let mouse_pos = input.pointer.hover_pos();
                     let last_click_pos = input.pointer.press_origin();
@@ -768,9 +768,9 @@ fn main() {
             }
 
             glutin::event::Event::WindowEvent { event, .. } => {
-                if egui.is_quit_event(&event) {
-                    *control_flow = glium::glutin::event_loop::ControlFlow::Exit;
-                }
+                //if egui.egui_winit.is_quit_event(&event) {
+                //    *control_flow = glium::glutin::event_loop::ControlFlow::Exit;
+                //}
 
                 egui.on_event(&event);
 

@@ -1,207 +1,461 @@
 use core::panic;
 use std::collections::HashMap;
 use std::convert::TryInto;
+use std::f32::consts::PI;
 use std::io::{self};
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
 
 use crate::*;
 use byteorder::{ReadBytesExt, LE};
 use dae_parser::source::{SourceReader, ST, XYZ};
-use dae_parser::{Document, Material};
+use dae_parser::{Document, LocalMaps, Material, Node};
+extern crate nalgebra_glm as glm;
 
-impl<'a> dae_parser::geom::VertexLoad<'a, (u16, u16)> for PolyVertex {
-    fn position(ctx: &(u16, u16), _: &SourceReader<'a, XYZ>, index: u32) -> Self {
+struct VertexContext {
+    vertex_offset: u16,
+    normal_ids: Vec<NormalId>,
+}
+
+impl<'a> dae_parser::geom::VertexLoad<'a, VertexContext> for PolyVertex {
+    fn position(ctx: &VertexContext, _: &SourceReader<'a, XYZ>, index: u32) -> Self {
         PolyVertex {
-            vertex_id: VertexId(u16::try_from(index).unwrap() + ctx.0),
+            vertex_id: VertexId(u16::try_from(index).unwrap() + ctx.vertex_offset),
             normal_id: NormalId(0),
             uv: (0.0, 0.0),
         }
     }
-    fn add_normal(&mut self, ctx: &(u16, u16), _: &SourceReader<'a, XYZ>, index: u32) {
-        self.normal_id = NormalId(u16::try_from(index).unwrap() + ctx.1);
+    fn add_normal(&mut self, ctx: &VertexContext, _: &SourceReader<'a, XYZ>, index: u32) {
+        self.normal_id = ctx.normal_ids[index as usize];
     }
-    fn add_texcoord(&mut self, _: &(u16, u16), reader: &SourceReader<'a, ST>, index: u32, set: Option<u32>) {
+    fn add_texcoord(&mut self, _: &VertexContext, reader: &SourceReader<'a, ST>, index: u32, set: Option<u32>) {
         assert!(set.map_or(true, |set| set == 0));
         let [u, v] = reader.get(index as usize);
         self.uv = (u, v);
     }
 }
 
+// intentional swizzle
+fn flip_y_z(vec: Vec3d) -> Vec3d {
+    Vec3d { x: vec.x, y: vec.z, z: vec.y }
+}
+
+// given a node, using its transforms return a position, normal and radius
+// things commonly needed by various pof points
+fn dae_parse_point(node: &Node) -> (Vec3d, Vec3d, f32) {
+    let mut pos = Vec3d::ZERO;
+    let mut norm = Vec3d::ZERO;
+    let mut radius = 0.0;
+    for transform in &node.transforms {
+        match transform {
+            dae_parser::Transform::Translate(vec) => pos = flip_y_z(Vec3d::from(*vec.0)),
+            dae_parser::Transform::Rotate(rot) => {
+                norm = {
+                    let vec = glm::Vec3::from([0.0, 1.0, 0.0]); // intentional swizzle
+                    if rot.angle() == 180.0 {
+                        Vec3d::new(0.0, 0.0, -1.0)
+                    } else {
+                        flip_y_z(glm::rotate_vec3(&vec, rot.angle() / (180.0 / PI), &glm::Vec3::from(*rot.axis())).into())
+                    }
+                }
+            }
+            dae_parser::Transform::Scale(scale) => radius = scale.0[0],
+            _ => (),
+        }
+    }
+    (pos, norm, radius)
+}
+
+fn dae_parse_properties(node: &Node, properties: &mut String) {
+    for node in &node.children {
+        if let Some(name) = &node.name {
+            if let Some(idx) = name.find(":") {
+                if properties.is_empty() {
+                    *properties = format!("{}", &name[(idx + 1)..]);
+                } else {
+                    *properties = format!("{}\n{}", properties, &name[(idx + 1)..]);
+                }
+            }
+        }
+    }
+}
+
+fn dae_parse_geometry(
+    node: &Node, local_maps: &LocalMaps, material_map: &HashMap<&String, TextureId>,
+) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(Texturing, Vec<PolyVertex>)>) {
+    let transform = node.transform_as_matrix();
+    let zero = Vec3d::ZERO.into();
+    let center = transform.transform_point(&zero) - zero;
+    let local_transform = transform.append_translation(&(-center).into());
+
+    let mut vertices_out: Vec<Vec3d> = vec![];
+    let mut normals_out: Vec<Vec3d> = vec![];
+    let mut normals_map: HashMap<Vec3d, NormalId> = HashMap::new();
+    let mut polygons_out = vec![];
+
+    for geo in &node.instance_geometry {
+        let geo = local_maps[&geo.url].element.as_mesh().unwrap();
+        let verts = geo.vertices.as_ref().unwrap().importer(local_maps).unwrap();
+        let mut vert_ctx = VertexContext { vertex_offset: vertices_out.len() as u16, normal_ids: vec![] };
+        let mut iter = Clone::clone(verts.position_importer().unwrap());
+
+        while let Some(position) = iter.next() {
+            vertices_out.push(flip_y_z(&local_transform * Vec3d::from(position)));
+        }
+
+        for prim_elem in &geo.elements {
+            match prim_elem {
+                dae_parser::Primitive::PolyList(polies) => {
+                    let texture = match &polies.material {
+                        Some(mat) => Texturing::Texture(material_map[mat]),
+                        None => Texturing::Flat(Color::default()),
+                    };
+
+                    let importer = polies.importer(local_maps, verts.clone()).unwrap();
+
+                    vert_ctx.normal_ids = vec![];
+                    for normal in Clone::clone(importer.normal_importer().expect("normals missing in DAE")) {
+                        vert_ctx.normal_ids.push(*normals_map.entry(normal.into()).or_insert_with(|| {
+                            let id = NormalId(normals_out.len().try_into().unwrap());
+                            normals_out.push(flip_y_z(&local_transform * Vec3d::from(normal)));
+                            id
+                        }));
+                    }
+
+                    let mut iter = importer.read::<_, PolyVertex>(&vert_ctx, &polies.data.prim);
+                    //println!("add {} normals, normal offset {:#?}", iter.len(), vert_ctx.normal_ids);
+
+                    for &n in &*polies.data.vcount {
+                        let verts = (0..n).map(|_| iter.next().unwrap()).collect();
+                        polygons_out.push((texture, verts));
+                    }
+                }
+                dae_parser::Primitive::Triangles(tris) => {
+                    let texture = match &tris.material {
+                        Some(mat) => Texturing::Texture(material_map[mat]),
+                        None => Texturing::Flat(Color::default()),
+                    };
+                    let importer = tris.importer(local_maps, verts.clone()).unwrap();
+
+                    vert_ctx.normal_ids = vec![];
+                    for normal in Clone::clone(importer.normal_importer().expect("normals missing in DAE")) {
+                        vert_ctx.normal_ids.push(*normals_map.entry(normal.into()).or_insert_with(|| {
+                            let id = NormalId(normals_out.len().try_into().unwrap());
+                            normals_out.push(flip_y_z(&local_transform * Vec3d::from(normal)));
+                            id
+                        }));
+                    }
+
+                    let mut iter = importer.read::<_, PolyVertex>(&vert_ctx, tris.data.prim.as_ref().unwrap());
+                    while let Some(vert1) = iter.next() {
+                        polygons_out.push((texture, vec![vert1, iter.next().unwrap(), iter.next().unwrap()]));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    for poly in &mut polygons_out {
+        poly.1.reverse(); // normal facing (which is determined by winding order) is inverted for FSO
+    }
+
+    (vertices_out, normals_out, polygons_out)
+}
+
+fn dae_parse_subobject_recursive(
+    node: &Node, sub_objects: &mut Vec<SubObject>, parent: ObjectId, local_maps: &LocalMaps, material_map: &HashMap<&String, TextureId>,
+) {
+    let name = node.name.as_ref();
+    if name.is_none() {
+        // subobjects must have names!
+        return;
+    }
+    let name = name.unwrap();
+
+    let (vertices_out, normals_out, polygons_out) = dae_parse_geometry(node, &local_maps, &material_map);
+
+    let transform = node.transform_as_matrix();
+    let zero = Vec3d::ZERO.into();
+    let center = transform.transform_point(&zero) - zero;
+
+    let obj_id = ObjectId(sub_objects.len() as _);
+
+    let mut new_subobj = SubObject {
+        obj_id,
+        radius: Default::default(),
+        parent: Some(parent),
+        offset: flip_y_z(center.into()),
+        geo_center: flip_y_z(center.into()),
+        bbox: Default::default(),
+        name: name.clone(),
+        properties: Default::default(),
+        movement_type: Default::default(),
+        movement_axis: Default::default(),
+        bsp_data: BspData {
+            verts: vertices_out,
+            norms: normals_out,
+            collision_tree: BspNode::Leaf {
+                bbox: Default::default(),
+                poly_list: polygons_out
+                    .into_iter()
+                    .map(|(texture, verts)| Polygon {
+                        //TODO MAKE A PROPER COLLISION TREE
+                        normal: Default::default(),
+                        center: Default::default(),
+                        radius: Default::default(),
+                        texture,
+                        verts,
+                    })
+                    .collect(),
+            },
+        },
+        children: Default::default(),
+        is_debris_model: false,
+    };
+
+    new_subobj.recalc_bbox();
+    new_subobj.recalc_radius();
+
+    sub_objects.push(new_subobj);
+
+    for node in &node.children {
+        dae_parse_subobject_recursive(&node, sub_objects, obj_id, local_maps, material_map);
+    }
+}
+
+fn node_children_with_keyword<'a>(node_list: &'a [Node], keyword: &'a str) -> impl Iterator<Item = (&'a Node, &'a String)> {
+    node_list.iter().filter_map(move |node| {
+        let name = node.name.as_ref()?;
+        if name.starts_with("#") && name.contains(keyword) {
+            Some((node, name))
+        } else {
+            None
+        }
+    })
+}
+
 pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
     let document = Document::from_file(path).unwrap();
     // use std::io::Write;
     // write!(std::fs::File::create("output.log").unwrap(), "{:#?}", document).unwrap();
-    let mut sub_objects = vec![];
-    let map = document.local_maps();
-    let scene = map
+    let mut sub_objects = ObjVec(vec![]);
+    let local_maps = document.local_maps();
+    let scene = local_maps
         .get(&document.scene.as_ref().unwrap().instance_visual_scene.as_ref().unwrap().url)
         .unwrap();
 
-    let mut materials = vec![];
     let mut material_map = HashMap::new();
     document.for_each(|material: &Material| {
-        material_map.insert(material.id.as_ref().unwrap(), TextureId(materials.len() as u32));
-        materials.push(material.name.as_ref().unwrap().clone());
+        material_map.insert(material.name.as_ref().unwrap(), TextureId(material_map.len() as u32));
     });
     let mut details = vec![];
     let mut shield_data = None;
-
-    fn flip_y_z(vec: Vec3d) -> Vec3d {
-        Vec3d { x: vec.x, y: vec.z, z: vec.y }
-    }
+    let mut thruster_banks = vec![];
+    let mut paths = vec![];
+    let mut primary_weps = vec![];
+    let mut secondary_weps = vec![];
 
     for node in &scene.nodes {
         let transform = node.transform_as_matrix();
         let zero = Vec3d::ZERO.into();
         let center = transform.transform_point(&zero) - zero;
         let local_transform = transform.append_translation(&(-center).into());
-        // println!("{:#?}", center);
-        // println!("{:#?}", local_transform);
-        let mut vertices_out: Vec<Vec3d> = vec![];
-        let mut normals_out: Vec<Vec3d> = vec![];
-        let mut offsets = (vertices_out.len() as u16, normals_out.len() as u16);
-        let mut polygons_out = vec![];
 
-        for geo in &node.instance_geometry {
-            let geo = map[&geo.url].element.as_mesh().unwrap();
-            let verts = geo.vertices.as_ref().unwrap().importer(&map).unwrap();
-            offsets.0 = vertices_out.len() as u16;
-            let mut iter = Clone::clone(verts.position_importer().unwrap());
-            while let Some(position) = iter.next() {
-                vertices_out.push(flip_y_z(&local_transform * Vec3d::from(position)));
-            }
-
-            for prim_elem in &geo.elements {
-                match prim_elem {
-                    dae_parser::Primitive::PolyList(polies) => {
-                        let texture = match &polies.material {
-                            Some(mat) => Texturing::Texture(material_map[mat]),
-                            None => Texturing::Flat(Color::default()),
-                        };
-
-                        let importer = polies.importer(&map, verts.clone()).unwrap();
-
-                        offsets.1 = normals_out.len() as u16;
-                        for normal in Clone::clone(importer.normal_importer().unwrap()) {
-                            normals_out.push(flip_y_z(&local_transform * Vec3d::from(normal)));
-                        }
-
-                        let mut iter = importer.read::<_, PolyVertex>(&offsets, &polies.data.prim);
-
-                        for &n in &*polies.data.vcount {
-                            let verts = (0..n).map(|_| iter.next().unwrap()).collect();
-                            polygons_out.push((texture, verts));
-                        }
-                    }
-                    dae_parser::Primitive::Triangles(tris) => {
-                        let texture = match &tris.material {
-                            Some(mat) => Texturing::Texture(material_map[mat]),
-                            None => Texturing::Flat(Color::default()),
-                        };
-                        let importer = tris.importer(&map, verts.clone()).unwrap();
-
-                        offsets.1 = normals_out.len() as u16;
-                        for normal in Clone::clone(importer.normal_importer().expect("normals missing in DAE")) {
-                            normals_out.push(flip_y_z(&local_transform * Vec3d::from(normal)));
-                        }
-
-                        let mut iter = importer.read::<_, PolyVertex>(&offsets, tris.data.prim.as_ref().unwrap());
-                        while let Some(vert1) = iter.next() {
-                            polygons_out.push((texture, vec![vert1, iter.next().unwrap(), iter.next().unwrap()]));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        for poly in &mut polygons_out {
-            poly.1.reverse();
-        }
-
-        let obj_id = ObjectId(sub_objects.len() as _);
         let name = node.name.as_ref().unwrap();
-        if name == "shield" {
-            let mut polygons = vec![];
-            for (_, verts) in polygons_out {
-                let verts = verts.into_iter().map(|poly| poly.vertex_id).collect::<Vec<_>>();
-                if let [vert1, ref rest @ ..] = *verts {
-                    for slice in rest.windows(2) {
-                        if let [vert2, vert3] = *slice {
-                            let [v1, v2, v3] = [vert1, vert2, vert3].map(|i| nalgebra_glm::Vec3::from(vertices_out[i.0 as usize]));
-                            polygons.push(ShieldPolygon {
-                                normal: (v2 - v1).cross(&(v3 - v1)).normalize().into(),
-                                verts: (vert1, vert2, vert3),
-                                neighbors: Default::default(),
-                            })
+
+        if !node.instance_geometry.is_empty() {
+            let (vertices_out, normals_out, polygons_out) = dae_parse_geometry(node, &local_maps, &material_map);
+
+            if name != "shield" {
+                // must be a subobject
+                let obj_id = ObjectId(sub_objects.len() as _);
+                if name.to_lowercase().starts_with("detail") {
+                    details.push((&**name, obj_id));
+                }
+
+                let mut new_subobj = SubObject {
+                    obj_id,
+                    radius: Default::default(),
+                    parent: None,
+                    offset: flip_y_z(center.into()),
+                    geo_center: Default::default(),
+                    bbox: Default::default(),
+                    name: name.clone(),
+                    properties: Default::default(),
+                    movement_type: Default::default(),
+                    movement_axis: Default::default(),
+                    bsp_data: BspData {
+                        verts: vertices_out,
+                        norms: normals_out,
+                        collision_tree: BspNode::Leaf {
+                            //TODO MAKE A PROPER COLLISION TREE
+                            bbox: Default::default(),
+                            poly_list: polygons_out
+                                .into_iter()
+                                .map(|(texture, verts)| Polygon {
+                                    normal: Default::default(),
+                                    center: Default::default(),
+                                    radius: Default::default(),
+                                    texture,
+                                    verts,
+                                })
+                                .collect(),
+                        },
+                    },
+                    children: Default::default(),
+                    is_debris_model: name.starts_with("debris"),
+                };
+
+                new_subobj.recalc_bbox();
+                new_subobj.recalc_radius();
+
+                sub_objects.push(new_subobj);
+
+                for node in &node.children {
+                    dae_parse_subobject_recursive(&node, &mut sub_objects, obj_id, &local_maps, &material_map);
+                }
+            } else {
+                // shield
+                let mut polygons = vec![];
+                for (_, verts) in polygons_out {
+                    let verts = verts.into_iter().map(|poly| poly.vertex_id).collect::<Vec<_>>();
+                    // triangulate, just to be sure
+                    if let [vert1, ref rest @ ..] = *verts {
+                        for slice in rest.windows(2) {
+                            if let [vert2, vert3] = *slice {
+                                let [v1, v2, v3] = [vert1, vert2, vert3].map(|i| nalgebra_glm::Vec3::from(vertices_out[i.0 as usize]));
+                                polygons.push(ShieldPolygon {
+                                    normal: (v2 - v1).cross(&(v3 - v1)).normalize().into(),
+                                    verts: (vert1, vert2, vert3),
+                                    neighbors: Default::default(),
+                                })
+                            }
                         }
                     }
                 }
+                shield_data = Some(ShieldData { verts: vertices_out, polygons, collision_tree: None });
             }
-            shield_data = dbg!(Some(ShieldData { verts: vertices_out, polygons, collision_tree: None }));
         } else {
-            if name.starts_with("detail") {
-                details.push((&**name, obj_id));
+            if name == "#thrusters" {
+                for (node, _) in node_children_with_keyword(&node.children, "bank") {
+                    let mut new_bank = ThrusterBank::default();
+
+                    for (node, name) in node_children_with_keyword(&node.children, "") {
+                        if name.contains("properties") {
+                            dae_parse_properties(node, &mut new_bank.properties);
+                        } else if name.contains("point") {
+                            let mut new_point = ThrusterGlow::default();
+
+                            let (pos, norm, rad) = dae_parse_point(node);
+                            new_point.position = pos;
+                            new_point.normal = norm;
+                            new_point.radius = rad;
+
+                            new_bank.glows.push(new_point);
+                        }
+                    }
+
+                    thruster_banks.push(new_bank);
+                }
+            } else if name == "#paths" {
+                for (node, _) in node_children_with_keyword(&node.children, "path") {
+                    let mut new_path = Path::default();
+
+                    for (node, name) in node_children_with_keyword(&node.children, "") {
+                        if name.contains("parent") {
+                            if let Some(idx) = name.find(":") {
+                                new_path.parent = format!("{}", &name[(idx + 1)..]);
+                            }
+                        } else if name.contains("name") {
+                            if let Some(idx) = name.find(":") {
+                                new_path.name = format!("{}", &name[(idx + 1)..]);
+                            }
+                        } else if name.contains("point") {
+                            let mut new_point = PathPoint::default();
+
+                            let (pos, _, rad) = dae_parse_point(node);
+                            new_point.position = pos;
+                            new_point.radius = rad;
+
+                            new_path.points.push(new_point);
+                        }
+                    }
+
+                    paths.push(new_path);
+                }
+            } else if name.starts_with("#") && name.contains("weapons") {
+                for (node, _) in node_children_with_keyword(&node.children, "bank") {
+                    let mut new_bank = vec![];
+
+                    for (node, _) in node_children_with_keyword(&node.children, "point") {
+                        let mut new_point = WeaponHardpoint::default();
+
+                        let (pos, norm, _) = dae_parse_point(node);
+                        new_point.position = pos;
+                        new_point.normal = norm;
+
+                        for (node, name) in node_children_with_keyword(&node.children, "offset") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_point.offset = *val;
+                                }
+                            }
+                        }
+
+                        new_bank.push(new_point);
+                    }
+
+                    if name.contains("secondary") {
+                        secondary_weps.push(new_bank);
+                    } else {
+                        primary_weps.push(new_bank);
+                    }
+                }
             }
-            sub_objects.push(SubObject {
-                obj_id,
-                radius: Default::default(),
-                parent: Default::default(),
-                offset: flip_y_z(center.into()),
-                geo_center: Default::default(),
-                bbox: Default::default(),
-                name: name.clone(),
-                properties: Default::default(),
-                movement_type: Default::default(),
-                movement_axis: Default::default(),
-                bsp_data: BspData {
-                    verts: vertices_out,
-                    norms: normals_out,
-                    collision_tree: BspNode::Leaf {
-                        bbox: Default::default(),
-                        poly_list: polygons_out
-                            .into_iter()
-                            .map(|(texture, verts)| Polygon {
-                                normal: Default::default(),
-                                center: Default::default(),
-                                radius: Default::default(),
-                                texture,
-                                verts,
-                            })
-                            .collect(),
-                    },
-                },
-                children: Default::default(),
-                is_debris_model: name.starts_with("debris"),
-            })
         }
     }
 
+    for i in 0..sub_objects.len() {
+        if let Some(parent) = sub_objects[ObjectId(i as u32)].parent {
+            let id = sub_objects[ObjectId(i as u32)].obj_id;
+            sub_objects[parent].children.push(id);
+        }
+    }
+
+    println!("{:#?}", primary_weps);
+
     details.sort_by_key(|pair| pair.0);
 
-    Box::new(Model {
+    let mut model = Model {
         header: ObjHeader {
             max_radius: 1.0,
             num_subobjects: sub_objects.len() as _,
             detail_levels: details.into_iter().map(|pair| pair.1).collect(),
             ..Default::default()
         },
-        sub_objects: ObjVec(sub_objects),
-        textures: materials,
-        paths: Default::default(),
+        sub_objects,
+        textures: material_map.into_iter().map(|(tex, _)| tex.to_string()).collect(),
+        paths,
         special_points: Default::default(),
         eye_points: Default::default(),
-        primary_weps: Default::default(),
-        secondary_weps: Default::default(),
+        primary_weps,
+        secondary_weps,
         turrets: Default::default(),
-        thruster_banks: Default::default(),
+        thruster_banks,
         glow_banks: Default::default(),
         auto_center: Default::default(),
         comments: Default::default(),
         docking_bays: Default::default(),
         insignias: Default::default(),
         shield_data,
-    })
+    };
+
+    model.recalc_radius();
+    model.recalc_bbox();
+    model.recalc_mass();
+    model.recalc_moi();
+
+    Box::new(model)
 }
 
 pub struct Parser<R> {
@@ -491,11 +745,12 @@ impl<R: Read + Seek> Parser<R> {
                     dock_points = Some(self.read_list(|this| {
                         Ok(Dock {
                             properties: this.read_string()?,
-                            path: {
+                            path_num: {
                                 // spec allows for a list of paths but only the first will be used so dont bother
                                 let paths = this.read_list(|this| Ok(this.read_u32()?))?;
                                 paths.first().map(|&x| PathId(x))
                             },
+                            path: String::new(),
                             points: {
                                 // same thing here, only first 2 are used
                                 let dockpoints =
@@ -591,7 +846,6 @@ impl<R: Read + Seek> Parser<R> {
             (None, Some(_)) => unreachable!(),
             _ => None,
         };
-        //println!("{:#?}", shield_data);
 
         for i in 0..sub_objects.len() {
             if let Some(parent) = sub_objects.0[i].parent {
@@ -602,6 +856,13 @@ impl<R: Read + Seek> Parser<R> {
 
         for id in debris_objs {
             sub_objects[id].is_debris_model = true;
+        }
+
+        // turn path ids into more useful path strings in docking bays
+        if let Some(dock_points) = dock_points {
+            for dock in dock_points {
+                if let Some(num) = dock.path_num {}
+            }
         }
 
         Ok(Model {

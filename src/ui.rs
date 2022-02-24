@@ -1,4 +1,4 @@
-use egui::{Align2, CollapsingHeader, Color32, Label};
+use egui::{Align2, CollapsingHeader, Color32, Label, RichText};
 use glium::Display;
 use nalgebra_glm::TMat4;
 use pof::{
@@ -538,6 +538,7 @@ pub enum Set<T> {
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub enum Error {
     InvalidTurretGunSubobject(usize), // turret index
+    TooManyDebrisObjects,
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -763,7 +764,7 @@ impl UiState {
                 } else {
                     ui.visuals().text_color()
                 };
-                egui::ComboBox::from_label(egui::Label::new(label).text_color(color))
+                egui::ComboBox::from_label(RichText::new(label).color(color))
                     .selected_text(name_list[*mut_selection].clone())
                     .show_ui(ui, |ui| {
                         for (i, name) in name_list.iter().enumerate() {
@@ -1147,13 +1148,17 @@ impl PofToolsGui {
         egui::TopBottomPanel::top("menu").default_height(33.0).min_height(33.0).show(ctx, |ui| {
             Ui::add_space(ui, 6.0);
             ui.horizontal(|ui| {
-                if ui.add(Button::new("🗁").text_style(TextStyle::Heading)).on_hover_text("Open").clicked() {
+                if ui
+                    .add(Button::new(RichText::new("🗁").text_style(TextStyle::Heading)))
+                    .on_hover_text("Open")
+                    .clicked()
+                {
                     self.start_loading_model();
                     ui.output().cursor_icon = egui::CursorIcon::Wait;
                 }
 
                 if ui
-                    .add_enabled(self.errors.is_empty(), Button::new("🖴").text_style(TextStyle::Heading))
+                    .add_enabled(self.errors.is_empty(), Button::new(RichText::new("🖴").text_style(TextStyle::Heading)))
                     .on_hover_text("Save")
                     .on_disabled_hover_text("All errors must be corrected before saving.")
                     .clicked()
@@ -1164,7 +1169,7 @@ impl PofToolsGui {
                 ui.separator();
 
                 if ui
-                    .add(Button::new(if self.wireframe_enabled { "⏹" } else { "⛶" }).text_style(TextStyle::Heading))
+                    .add(Button::new(RichText::new(if self.wireframe_enabled { "⏹" } else { "⛶" }).text_style(TextStyle::Heading)))
                     .clicked()
                 {
                     self.wireframe_enabled = !self.wireframe_enabled;
@@ -1193,7 +1198,20 @@ impl PofToolsGui {
                                     "⊗ {}{} has an invalid gun object",
                                     turret_name, self.model.sub_objects[self.model.turrets[turret_num].base_obj].name
                                 );
-                                ui.add(Label::new(str).text_style(TextStyle::Button).text_color(Color32::RED));
+                                ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::RED)));
+                            }
+                            Error::TooManyDebrisObjects => {
+                                let mut num_debris = 0;
+                                for sobj in &self.model.sub_objects {
+                                    if sobj.is_debris_model {
+                                        num_debris += 1;
+                                    }
+                                }
+                                ui.add(Label::new(
+                                    RichText::new(format!("⊗ This model has too many debris objects ({}/{})", num_debris, pof::MAX_DEBRIS_OBJECTS))
+                                        .text_style(TextStyle::Button)
+                                        .color(Color32::RED),
+                                ));
                             }
                         }
                     }
@@ -1204,7 +1222,7 @@ impl PofToolsGui {
                                     "⚠ {}'s radius does not encompass all of its geometry",
                                     id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
                                 );
-                                ui.add(Label::new(str).text_style(TextStyle::Button).text_color(Color32::YELLOW));
+                                ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
                             }
                         }
                     }
@@ -1256,14 +1274,6 @@ impl PofToolsGui {
                         },
                     );
 
-                    // self.ui_state.tree_item(&self.model, ui,
-                    //     "Textures", TreeSelection::Textures(TextureTreeSelection::Header),
-                    //     self.model.textures.iter().enumerate(),
-                    //     |ui_state, ui, (i, tex)| {
-                    //         ui_state.tree_selectable_item(
-                    //             &self.model, ui, tex,
-                    //             TreeSelection::Textures(TextureTreeSelection::Texture(TextureId(i as u32))));
-                    //     });
                     self.ui_state.tree_collapsing_item(
                         &self.model,
                         ui,
@@ -1280,20 +1290,6 @@ impl PofToolsGui {
                             }
                         },
                     );
-
-                    // self.ui_state.tree_item(&self.model, ui, "Thrusters",
-                    //     TreeSelection::Thrusters(ThrusterTreeSelection::Header),
-                    //     self.model.thruster_banks.iter().enumerate(),
-                    //     |ui_state, ui, (i, thruster_bank)| {
-                    //         ui_state.tree_item(&self.model, ui, &format!("Bank {}", i + 1),
-                    //             TreeSelection::Thrusters(ThrusterTreeSelection::ThrusterBank(i)),
-                    //             thruster_bank.glows.iter().enumerate(),
-                    //             |ui_state, ui, (j, _)| {
-                    //                 ui_state.tree_selectable_item(
-                    //                     &self.model, ui, &format!("Point {}", j + 1),
-                    //                     TreeSelection::Thrusters(ThrusterTreeSelection::ThrusterPoint(i, j)));
-                    //             });
-                    //     });
 
                     self.ui_state.tree_collapsing_item(
                         &self.model,
@@ -1580,7 +1576,8 @@ impl PofToolsGui {
                                     // only apply to top-level subobjects (no parent), apply_transform() will
                                     // recursively apply the proper transform to its children
                                     if self.model.sub_objects[ObjectId(i as u32)].parent == None {
-                                        self.model.apply_transform(ObjectId(i as u32), &matrix);
+                                        println!("{}", self.model.sub_objects[ObjectId(i as u32)].name);
+                                        self.model.apply_transform(ObjectId(i as u32), &matrix, true);
                                         self.ui_state.viewport_3d_dirty = true;
                                         self.ui_state.properties_panel_dirty = true;
 
@@ -1722,7 +1719,7 @@ impl PofToolsGui {
                             }
                             if let Some(matrix) = UiState::show_transform_window(ctx, transform_window) {
                                 if let Some(id) = selected_id {
-                                    self.model.apply_transform(id, &matrix);
+                                    self.model.apply_transform(id, &matrix, false);
                                     self.ui_state.viewport_3d_dirty = true;
                                     self.ui_state.properties_panel_dirty = true;
 
@@ -1746,11 +1743,28 @@ impl PofToolsGui {
 
                             ui.add_space(5.0);
 
-                            ui.add_enabled_ui(selected_id.is_some(), |ui| {
-                                if ui.checkbox(is_debris_check, "Debris Subobject").changed() {
-                                    self.model.sub_objects[selected_id.unwrap()].is_debris_model = *is_debris_check;
-                                }
-                            });
+                            let num_debris = self.model.num_debris_objects();
+                            ui.add_enabled_ui(
+                                selected_id.is_some()
+                                    && (num_debris < pof::MAX_DEBRIS_OBJECTS || self.model.sub_objects[selected_id.unwrap()].is_debris_model),
+                                |ui| {
+                                    if selected_id.map_or(false, |id| !self.model.sub_objects[id].is_debris_model)
+                                        && num_debris >= pof::MAX_DEBRIS_OBJECTS
+                                    {
+                                        UiState::set_widget_color(ui, Color32::RED);
+                                    }
+                                    if ui
+                                        .checkbox(is_debris_check, "Debris Subobject")
+                                        .on_disabled_hover_text(format!("The Maximum number of Debris is {}", pof::MAX_DEBRIS_OBJECTS))
+                                        .changed()
+                                    {
+                                        self.model.sub_objects[selected_id.unwrap()].is_debris_model = *is_debris_check;
+                                        PofToolsGui::recheck_errors(&mut self.errors, &self.model, One(Error::TooManyDebrisObjects));
+                                    }
+
+                                    UiState::reset_widget_color(ui);
+                                },
+                            );
 
                             ui.add_space(5.0);
 
@@ -2295,7 +2309,7 @@ impl PofToolsGui {
                             UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
 
                             ui.separator();
-                            ui.add(Label::new("Turret Fire Points").text_style(TextStyle::Button));
+                            ui.add(Label::new(RichText::new("Turret Fire Points").text_style(TextStyle::Button)));
                             ui.separator();
 
                             let point_idx_response = UiState::list_manipulator_widget(
@@ -2499,6 +2513,7 @@ impl PofToolsGui {
         if let One(error) = error_to_check {
             let failed_check = match error {
                 Error::InvalidTurretGunSubobject(turret) => PofToolsGui::turret_gun_subobj_not_valid(model, turret),
+                Error::TooManyDebrisObjects => model.num_debris_objects() > pof::MAX_DEBRIS_OBJECTS,
             };
 
             let existing_warning = errors.contains(&error);
@@ -2509,10 +2524,15 @@ impl PofToolsGui {
             }
         } else {
             errors.clear();
+
             for i in 0..model.turrets.len() {
                 if PofToolsGui::turret_gun_subobj_not_valid(model, i) {
                     errors.insert(Error::InvalidTurretGunSubobject(i));
                 }
+            }
+
+            if model.num_debris_objects() > pof::MAX_DEBRIS_OBJECTS {
+                errors.insert(Error::TooManyDebrisObjects);
             }
         }
     }
@@ -2578,7 +2598,7 @@ impl PofToolsGui {
             let radius_with_margin = (1.0 + f32::EPSILON) * model.header.max_radius;
             for subobj in &model.sub_objects {
                 // we dont care about subobjects which aren't part of the detail0 hierarchy
-                if !model.is_obj_id_ancestor(subobj.obj_id, model.header.detail_levels[0]) {
+                if !model.header.detail_levels.is_empty() && !model.is_obj_id_ancestor(subobj.obj_id, model.header.detail_levels[0]) {
                     continue;
                 }
 

@@ -200,6 +200,9 @@ impl Vec3d {
         let mag = self.magnitude();
         self *= 1.0 / mag;
     }
+    pub fn is_null(self) -> bool {
+        self.x.abs() <= 0.000001 && self.y.abs() <= 0.000001 && self.z.abs() <= 0.000001
+    }
 }
 impl Add for Vec3d {
     type Output = Vec3d;
@@ -878,6 +881,12 @@ impl Serialize for Dock {
         self.points.write_to(w)
     }
 }
+impl Dock {
+    // TODO fix this
+    pub fn get_name(&self) -> Option<&str> {
+        self.properties.strip_prefix("$name=")
+    }
+}
 
 mk_struct! {
     #[derive(Clone, Default)]
@@ -949,8 +958,8 @@ impl Serialize for GlowPointBank {
     }
 }
 impl GlowPointBank {
-    pub fn get_glow_texture(&self) -> &str {
-        self.properties.strip_prefix("$glow_texture=").unwrap_or("")
+    pub fn get_glow_texture(&self) -> Option<&str> {
+        self.properties.strip_prefix("$glow_texture=")
     }
     pub fn set_glow_texture(&mut self, tex: &str) {
         self.properties = format!("$glow_texture={}", tex);
@@ -1036,6 +1045,18 @@ impl Model {
             }
         }
         None
+    }
+
+    pub fn path_removal_fixup(&mut self, removed_idx: PathId) {
+        for bay in &mut self.docking_bays {
+            if Some(removed_idx) == bay.path {
+                bay.path = None;
+            } else if let Some(path_num) = bay.path {
+                if path_num > removed_idx {
+                    bay.path = Some(PathId(path_num.0 - 1));
+                }
+            }
+        }
     }
 
     pub fn get_valid_gun_subobjects_for_turret(&self, existing_obj: ObjectId, turret_obj: ObjectId) -> (Vec<ObjectId>, usize) {

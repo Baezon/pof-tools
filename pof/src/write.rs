@@ -9,7 +9,8 @@ use nalgebra_glm::pi;
 extern crate nalgebra_glm as glm;
 
 use crate::{
-    BspData, BspNode, Dock, Model, ObjVec, Path, ShieldData, ShieldNode, SubObject, Texturing, ThrusterBank, Vec3d, Version, WeaponHardpoint,
+    BspData, BspNode, Dock, EyePoint, GlowPointBank, Model, ObjVec, Path, ShieldData, ShieldNode, SpecialPoint, SubObject, Texturing, ThrusterBank,
+    Vec3d, Version, WeaponHardpoint,
 };
 
 pub(crate) trait Serialize {
@@ -479,29 +480,128 @@ fn make_weapons_node(weapons: &Vec<Vec<WeaponHardpoint>>, kind: &str) -> Node {
     node
 }
 
-fn make_docking_bays_node(docks: Vec<Dock>) -> Node {
+fn make_docking_bays_node(docks: &Vec<Dock>) -> Node {
     let mut node = Node::new(format!("#docking bays"), Some(format!("#docking bays")));
 
     for (i, dock) in docks.iter().enumerate() {
-        let mut bank_node = Node::new(format!("#d-bay{}", i), Some(format!("#d-bay{}", i)));
+        let mut bay_node = Node::new(format!("#d{}", i), Some(format!("#d{}", i)));
 
         for (j, point) in dock.points.iter().enumerate() {
-            let mut point_node = Node::new(format!("#d-bay{}-point{}", i, j), Some(format!("#d-bay{}-point{}", i, j)));
+            let mut point_node = Node::new(format!("#d{}-point{}", i, j), Some(format!("#d{}-point{}", i, j)));
             let pos = point.position;
             point_node.push_transform(Translate::new([pos.x, pos.z, pos.y]));
             point_node.push_transform(vec_to_rotation(&point.normal));
 
+            bay_node.children.push(point_node);
+        }
+
+        if dock.path.is_some() {
+            bay_node
+                .children
+                .push(Node::new(format!("#d{}-path", i), Some(format!("#d{}-path:{}", i, dock.path.unwrap().0 as u32))));
+        }
+
+        if !dock.properties.is_empty() {
+            bay_node.children.push(make_properties_node(&dock.properties, format!("d{}-", i)));
+        }
+
+        node.children.push(bay_node);
+    }
+
+    node
+}
+
+fn make_glows_node(glows: &Vec<GlowPointBank>) -> Node {
+    let mut node = Node::new("#glows", Some(format!("#glows")));
+
+    for (i, glow_bank) in glows.iter().enumerate() {
+        let mut bank_node = Node::new(format!("#g{}", i), Some(format!("#glowbank{}", i)));
+
+        for (j, point) in glow_bank.glow_points.iter().enumerate() {
+            let mut point_node = Node::new(format!("#g{}-{}", i, j), Some(format!("#g{}-point{}", i, j)));
+            let radius = point.radius;
+            let pos = point.position;
+            point_node.push_transform(Translate::new([pos.x, pos.z, pos.y]));
+            if point.normal.is_null() {
+                point_node.name = Some(format!("#g{}-omnipoint{}", i, j));
+            } else {
+                point_node.push_transform(vec_to_rotation(&point.normal));
+            }
+            point_node.push_transform(Scale::new([radius, radius, radius]));
+
             bank_node.children.push(point_node);
         }
 
-        if point.offset != 0.0 {
-            point_node.children.push(Node::new(
-                format!("#w{}b{}-point{}-offset", &kind[0..1], i, j),
-                Some(format!("#w{}b{}-point{}-offset:{}", &kind[0..1], i, j, point.offset)),
-            ));
+        bank_node
+            .children
+            .push(Node::new(format!("#g{}-type", i), Some(format!("#g{}-type:{}", i, glow_bank.glow_type))));
+
+        bank_node
+            .children
+            .push(Node::new(format!("#g{}-lod", i), Some(format!("#g{}-lod:{}", i, glow_bank.lod))));
+
+        bank_node
+            .children
+            .push(Node::new(format!("#g{}-parent", i), Some(format!("#g{}-parent:{}", i, glow_bank.obj_parent.0))));
+
+        bank_node
+            .children
+            .push(Node::new(format!("#g{}-ontime", i), Some(format!("#g{}-ontime:{}", i, glow_bank.on_time))));
+
+        bank_node
+            .children
+            .push(Node::new(format!("#g{}-offtime", i), Some(format!("#g{}-offtime:{}", i, glow_bank.off_time))));
+
+        bank_node
+            .children
+            .push(Node::new(format!("#g{}-disptime", i), Some(format!("#g{}-disptime:{}", i, glow_bank.disp_time))));
+
+        if !glow_bank.properties.is_empty() {
+            bank_node.children.push(make_properties_node(&glow_bank.properties, format!("g{}-", i)));
         }
 
         node.children.push(bank_node);
+    }
+
+    node
+}
+
+fn make_specials_node(special_points: &Vec<SpecialPoint>) -> Node {
+    let mut node = Node::new(format!("#special points"), Some(format!("#special points")));
+
+    for (i, point) in special_points.iter().enumerate() {
+        let mut point_node = Node::new(format!("#s{}", i), Some(format!("#s{}:{}", i, point.name)));
+
+        let radius = point.radius;
+        let pos = point.position;
+        point_node.push_transform(Translate::new([pos.x, pos.z, pos.y]));
+        point_node.push_transform(Scale::new([radius, radius, radius]));
+
+        if !point.properties.is_empty() {
+            point_node.children.push(make_properties_node(&point.properties, format!("s{}-", i)));
+        }
+
+        node.children.push(point_node);
+    }
+
+    node
+}
+
+fn make_eyes_node(eye_points: &Vec<EyePoint>) -> Node {
+    let mut node = Node::new(format!("#eye points"), Some(format!("#eye points")));
+
+    for (i, point) in eye_points.iter().enumerate() {
+        let mut point_node = Node::new(format!("#e{}", i), Some(format!("#e-point{}", i)));
+
+        let pos = point.offset;
+        point_node.push_transform(Translate::new([pos.x, pos.z, pos.y]));
+        point_node.push_transform(vec_to_rotation(&point.normal));
+
+        point_node
+            .children
+            .push(Node::new(format!("#e{}-parent", i), Some(format!("#e{}-parent:{}", i, point.attached_subobj.0))));
+
+        node.children.push(point_node);
     }
 
     node
@@ -728,6 +828,22 @@ impl Model {
 
         if !self.secondary_weps.is_empty() {
             nodes.push(make_weapons_node(&self.secondary_weps, "secondary"));
+        }
+
+        if !self.docking_bays.is_empty() {
+            nodes.push(make_docking_bays_node(&self.docking_bays));
+        }
+
+        if !self.glow_banks.is_empty() {
+            nodes.push(make_glows_node(&self.glow_banks));
+        }
+
+        if !self.special_points.is_empty() {
+            nodes.push(make_specials_node(&self.special_points));
+        }
+
+        if !self.eye_points.is_empty() {
+            nodes.push(make_eyes_node(&self.eye_points));
         }
 
         let mut doc = Document::create_now();

@@ -1,9 +1,12 @@
 //! Example how to use [epi::NativeTexture] with glium.
 use native_dialog::FileDialog;
-use std::{collections::HashMap, fs::File, sync::mpsc::TryRecvError};
+use std::{collections::HashMap, fs::File, path::PathBuf, sync::mpsc::TryRecvError};
 
 //use egui::{FontFamily, TextStyle};
-use glium::{glutin, BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer};
+use glium::{
+    glutin::{self, event::WindowEvent},
+    BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer,
+};
 use pof::{Insignia, Model, ObjVec, ObjectId, Parser, ShieldData, SubObject, TextureId, Texturing, Vec3d};
 extern crate nalgebra_glm as glm;
 
@@ -294,30 +297,32 @@ impl PofToolsGui {
     }
 
     // opens a thread which opens the dialog and starts parsing a model
-    fn start_loading_model(&mut self) {
+    fn start_loading_model(&mut self, filepath: Option<PathBuf>) {
         let (sender, receiver) = std::sync::mpsc::channel();
         self.loading_thread = Some(receiver);
 
         std::thread::spawn(move || {
-            let path = FileDialog::new()
-                .add_filter("All supported files", &["pof", "dae"])
-                .add_filter("COLLADA", &["dae"])
-                .add_filter("Parallax Object File", &["pof"])
-                .show_open_single_file()
-                .unwrap();
+            let path = filepath.or_else(|| {
+                FileDialog::new()
+                    .add_filter("All supported files", &["pof", "dae"])
+                    .add_filter("COLLADA", &["dae"])
+                    .add_filter("Parallax Object File", &["pof"])
+                    .show_open_single_file()
+                    .unwrap()
+            });
 
             if let Some(path) = path {
                 let ext = path.extension().map(|ext| ext.to_ascii_lowercase());
                 let model = match ext.as_ref().and_then(|ext| ext.to_str()) {
                     Some("dae") => pof::parse_dae(path),
                     Some("pof") => {
-                        let file = File::open(path).unwrap();
-                        let mut parser = Parser::new(file).unwrap();
-                        Box::new(parser.parse().unwrap())
+                        let file = File::open(path).expect("TODO invalid file or smth i dunno");
+                        let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
+                        Box::new(parser.parse().expect("TODO invalid pof file or smth i dunno"))
                     }
                     _ => todo!(),
                 };
-                // println!("{:#?}", model);
+
                 let _ = sender.send(Some(model));
             } else {
                 let _ = sender.send(None);
@@ -373,9 +378,13 @@ fn main() {
     let mut pt_gui = PofToolsGui::default();
     let display = create_display(&event_loop);
 
+    // for arg in std::env::args() {
+    //     arg.as_str()
+    // }
+
     let mut egui = egui_glium::EguiGlium::new(&display);
 
-    pt_gui.start_loading_model();
+    pt_gui.start_loading_model(None);
     egui.egui_ctx.output().cursor_icon = egui::CursorIcon::Wait;
 
     let model = &pt_gui.model;
@@ -526,7 +535,7 @@ fn main() {
                 let displayed_subobjects = get_list_of_display_subobjects(model, &pt_gui.ui_state.tree_view_selection);
 
                 // brighten up the dark bits so wireframe is easier to see
-                let dark_color;
+                let mut dark_color;
                 if pt_gui.wireframe_enabled {
                     default_material_draw_params.polygon_mode = glium::draw_parameters::PolygonMode::Line;
                     default_material_draw_params.backface_culling = glium::draw_parameters::BackfaceCullingMode::CullingDisabled;
@@ -548,17 +557,22 @@ fn main() {
                     | TreeSelection::Turrets(_)
                     | TreeSelection::Paths(_)
                     | TreeSelection::EyePoints(_)
-                    | TreeSelection::AutoCenter => light_color = [0.3, 0.3, 0.3f32],
+                    | TreeSelection::AutoCenter => {
+                        light_color = [0.3, 0.3, 0.3f32];
+                        if pt_gui.wireframe_enabled {
+                            dark_color = [0.05, 0.05, 0.05f32];
+                        }
+                    }
                     _ => light_color = [0.9, 0.9, 0.9f32],
                 }
 
                 // draw the actual subobjects of the model
                 for buffer_obj in &pt_gui.buffer_objects {
+                    // only render if its currently being displayed
                     if displayed_subobjects[buffer_obj.obj_id] {
                         let mut mat = glm::identity::<f32, 4>();
                         mat.append_translation_mut(&pt_gui.model.get_total_subobj_offset(buffer_obj.obj_id).into());
 
-                        // only render if its currently being displayed
                         let uniforms = glium::uniform! {
                             model: <[[f32; 4]; 4]>::from(mat),
                             view: view_mat,
@@ -768,9 +782,9 @@ fn main() {
             }
 
             glutin::event::Event::WindowEvent { event, .. } => {
-                //if egui.egui_winit.is_quit_event(&event) {
-                //    *control_flow = glium::glutin::event_loop::ControlFlow::Exit;
-                //}
+                if let WindowEvent::CloseRequested = event {
+                    *control_flow = glium::glutin::event_loop::ControlFlow::Exit;
+                }
 
                 egui.on_event(&event);
 

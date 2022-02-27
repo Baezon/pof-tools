@@ -2,7 +2,7 @@ use egui::{Align2, CollapsingHeader, Color32, Label, RichText};
 use glium::Display;
 use nalgebra_glm::TMat4;
 use pof::{
-    DockingPoint, EyePoint, GlowPoint, GlowPointBank, Insignia, Model, PathPoint, SpecialPoint, SubObject, SubsysMovementAxis, TextureId,
+    DockingPoint, EyePoint, GlowPoint, GlowPointBank, Insignia, Model, PathId, PathPoint, SpecialPoint, SubObject, SubsysMovementAxis, TextureId,
     ThrusterGlow, Vec3d, WeaponHardpoint,
 };
 use std::{collections::BTreeSet, str::FromStr, sync::mpsc::Receiver};
@@ -73,6 +73,7 @@ enum PropertiesPanel {
         position_string: String,
         normal_string: String,
         properties: String,
+        path_num: usize,
     },
     GlowBank {
         disp_time_string: String,
@@ -181,6 +182,7 @@ impl PropertiesPanel {
             position_string: Default::default(),
             normal_string: Default::default(),
             properties: Default::default(),
+            path_num: Default::default(),
         }
     }
     fn default_glow() -> Self {
@@ -544,6 +546,13 @@ pub enum Error {
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub enum Warning {
     RadiusTooSmall(Option<ObjectId>),
+    DockingBayWithoutPath(usize),
+    // path with no parent
+    // thruster with no engine subsys
+    // turret uvec != turret normal
+    // subobject vert/norm overbudget
+    // turret subobject properties not set up for a turret
+    // untextured polygons
 }
 
 #[derive(Default)]
@@ -585,13 +594,13 @@ impl std::ops::DerefMut for PofToolsGui {
     }
 }
 impl PofToolsGui {
-    fn warnings_contains_any_subobj_radius_too_small(&self) -> bool {
-        matches!(self.warnings.range(Warning::RadiusTooSmall(Some(ObjectId(0)))..).next(), Some(Warning::RadiusTooSmall(Some(_))))
-    }
+    // fn warnings_contains_any_subobj_radius_too_small(&self) -> bool {
+    //     matches!(self.warnings.range(Warning::RadiusTooSmall(Some(ObjectId(0)))..).next(), Some(Warning::RadiusTooSmall(Some(_))))
+    // }
 
-    fn errors_contains_any_turret_invalid_gun(&self) -> bool {
-        matches!(self.errors.range(Error::InvalidTurretGunSubobject(0)..).next(), Some(Error::InvalidTurretGunSubobject(_)))
-    }
+    // fn errors_contains_any_turret_invalid_gun(&self) -> bool {
+    //     matches!(self.errors.range(Error::InvalidTurretGunSubobject(0)..).next(), Some(Error::InvalidTurretGunSubobject(_)))
+    // }
 
     fn tree_selectable_item(&mut self, ui: &mut Ui, name: &str, selection: TreeSelection) {
         self.ui_state.tree_selectable_item(&self.model, ui, name, selection);
@@ -1027,11 +1036,20 @@ impl UiState {
                 _ => self.properties_panel = PropertiesPanel::default_weapon(),
             },
             TreeSelection::DockingBays(docking_select) => match *docking_select {
+                DockingSelection::Bay(bay) => {
+                    self.properties_panel = PropertiesPanel::DockingBay {
+                        position_string: Default::default(),
+                        normal_string: Default::default(),
+                        properties: format!("{}", model.docking_bays[bay].properties),
+                        path_num: model.docking_bays[bay].path.unwrap_or(PathId(model.paths.len() as u32)).0 as usize,
+                    }
+                }
                 DockingSelection::BayPoint(bay, point) => {
                     self.properties_panel = PropertiesPanel::DockingBay {
                         position_string: format!("{}", model.docking_bays[bay].points[point].position),
                         normal_string: format!("{}", model.docking_bays[bay].points[point].normal),
                         properties: format!("{}", model.docking_bays[bay].properties),
+                        path_num: model.docking_bays[bay].path.unwrap_or_default().0 as usize,
                     }
                 }
                 _ => self.properties_panel = PropertiesPanel::default_docking_bay(),
@@ -1045,7 +1063,7 @@ impl UiState {
                         attached_subobj_idx: model.glow_banks[bank].obj_parent.0 as usize,
                         lod_string: format!("{}", model.glow_banks[bank].lod),
                         glow_type_string: format!("{}", model.glow_banks[bank].glow_type),
-                        glow_texture_string: format!("{}", model.glow_banks[bank].get_glow_texture()),
+                        glow_texture_string: format!("{}", model.glow_banks[bank].get_glow_texture().unwrap_or_default()),
                         position_string: format!("{}", model.glow_banks[bank].glow_points[point].position),
                         normal_string: format!("{}", model.glow_banks[bank].glow_points[point].normal),
                         radius_string: format!("{}", model.glow_banks[bank].glow_points[point].radius),
@@ -1059,7 +1077,7 @@ impl UiState {
                         attached_subobj_idx: model.glow_banks[bank].obj_parent.0 as usize,
                         lod_string: format!("{}", model.glow_banks[bank].lod),
                         glow_type_string: format!("{}", model.glow_banks[bank].glow_type),
-                        glow_texture_string: format!("{}", model.glow_banks[bank].get_glow_texture()),
+                        glow_texture_string: format!("{}", model.glow_banks[bank].get_glow_texture().unwrap_or_default()),
                         position_string: Default::default(),
                         normal_string: Default::default(),
                         radius_string: Default::default(),
@@ -1153,7 +1171,7 @@ impl PofToolsGui {
                     .on_hover_text("Open")
                     .clicked()
                 {
-                    self.start_loading_model();
+                    self.start_loading_model(None);
                     ui.output().cursor_icon = egui::CursorIcon::Wait;
                 }
 
@@ -1224,6 +1242,14 @@ impl PofToolsGui {
                                 );
                                 ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
                             }
+                            Warning::DockingBayWithoutPath(bay_num) => {
+                                let str = format!(
+                                    "⚠ Docking bay {} cannot be used by ships without a path",
+                                    self.model.docking_bays[*bay_num].get_name().unwrap_or(&(bay_num + 1).to_string())
+                                );
+                                ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                            }
+                            _ => (),
                         }
                     }
                 });
@@ -1390,7 +1416,7 @@ impl PofToolsGui {
                                 ui_state.tree_collapsing_item(
                                     &self.model,
                                     ui,
-                                    &format!("Bay {}", i + 1),
+                                    docking_bay.get_name().unwrap_or(&format!("Bay {}", i + 1)),
                                     TreeSelection::DockingBays(DockingSelection::Bay(i)),
                                     |ui_state, ui| {
                                         for j in 0..docking_bay.points.len() {
@@ -1417,7 +1443,13 @@ impl PofToolsGui {
                                 ui_state.tree_collapsing_item(
                                     &self.model,
                                     ui,
-                                    &format!("Bank {}", i + 1),
+                                    &format!(
+                                        "Bank {}{}",
+                                        i + 1,
+                                        self.model.glow_banks[i]
+                                            .get_glow_texture()
+                                            .map_or(String::new(), |tex| format!(" ({})", tex))
+                                    ),
                                     TreeSelection::Glows(GlowSelection::Bank(i)),
                                     |ui_state, ui| {
                                         for j in 0..glow_bank.glow_points.len() {
@@ -1576,7 +1608,6 @@ impl PofToolsGui {
                                     // only apply to top-level subobjects (no parent), apply_transform() will
                                     // recursively apply the proper transform to its children
                                     if self.model.sub_objects[ObjectId(i as u32)].parent == None {
-                                        println!("{}", self.model.sub_objects[ObjectId(i as u32)].name);
                                         self.model.apply_transform(ObjectId(i as u32), &matrix, true);
                                         self.ui_state.viewport_3d_dirty = true;
                                         self.ui_state.properties_panel_dirty = true;
@@ -2010,7 +2041,7 @@ impl PofToolsGui {
                                 self.ui_state.viewport_3d_dirty = true;
                             }
                         }
-                        PropertiesPanel::DockingBay { position_string, normal_string, properties } => {
+                        PropertiesPanel::DockingBay { position_string, normal_string, properties, path_num } => {
                             ui.heading("Docking Bay");
                             ui.separator();
 
@@ -2030,6 +2061,35 @@ impl PofToolsGui {
                             } else {
                                 ui.add_enabled(false, egui::TextEdit::multiline(properties).desired_rows(1));
                             }
+
+                            // combo box list of path names
+                            //  no valid bay selected -> a single empty string
+                            //  valid bay, without a path -> list of paths, followed by a single empty string
+                            //  valid bay, with a path -> list of paths
+                            let paths = if let Some(bay) = bay_num {
+                                let mut out: Vec<String> = self.model.paths.iter().map(|path| path.name.clone()).collect();
+                                if self.model.docking_bays[bay].path.is_none() {
+                                    out.push(String::new());
+                                }
+                                out
+                            } else {
+                                vec![String::new()]
+                            };
+                            // make da combo box
+                            ui.add_enabled_ui(matches!(bay_num, Some(_)), |ui| {
+                                if egui::ComboBox::from_label("Path")
+                                    .show_index(ui, path_num, paths.len(), |i| paths[i].to_owned())
+                                    .changed()
+                                {
+                                    // assign any changes
+                                    if *path_num == self.model.paths.len() {
+                                        self.model.docking_bays[bay_num.unwrap()].path = None
+                                    } else {
+                                        self.model.docking_bays[bay_num.unwrap()].path = Some(PathId(*path_num as u32))
+                                    }
+                                    PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All);
+                                }
+                            });
 
                             ui.separator();
 
@@ -2394,6 +2454,10 @@ impl PofToolsGui {
                             UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
 
                             if let Some(response) = path_idx_response {
+                                if let IndexingButtonsResponse::Delete(idx) = response {
+                                    self.model.path_removal_fixup(PathId(idx as u32));
+                                    PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All);
+                                }
                                 let new_idx = response.apply(&mut self.model.paths);
 
                                 self.ui_state.tree_view_selection = TreeSelection::Paths(PathSelection::path(new_idx));
@@ -2555,12 +2619,10 @@ impl PofToolsGui {
     // rechecks just one or all of the warnings on the model
     pub fn recheck_warnings(warnings: &mut BTreeSet<Warning>, model: &Model, warning_to_check: Set<Warning>) {
         if let One(warning) = warning_to_check {
-            let failed_check;
-            match warning {
-                Warning::RadiusTooSmall(subobj_opt) => {
-                    failed_check = PofToolsGui::radius_test_failed(model, subobj_opt);
-                }
-            }
+            let failed_check = match warning {
+                Warning::RadiusTooSmall(subobj_opt) => PofToolsGui::radius_test_failed(model, subobj_opt),
+                Warning::DockingBayWithoutPath(bay_num) => model.docking_bays[bay_num].path.is_none(),
+            };
 
             let existing_warning = warnings.contains(&warning);
             if existing_warning && !failed_check {
@@ -2578,6 +2640,12 @@ impl PofToolsGui {
             for subobj in &model.sub_objects {
                 if PofToolsGui::radius_test_failed(model, Some(subobj.obj_id)) {
                     warnings.insert(Warning::RadiusTooSmall(Some(subobj.obj_id)));
+                }
+            }
+
+            for (i, dock) in model.docking_bays.iter().enumerate() {
+                if dock.path.is_none() {
+                    warnings.insert(Warning::DockingBayWithoutPath(i));
                 }
             }
         }

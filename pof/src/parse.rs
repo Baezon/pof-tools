@@ -254,12 +254,15 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
     let mut paths = vec![];
     let mut primary_weps = vec![];
     let mut secondary_weps = vec![];
+    let mut docking_bays = vec![];
+    let mut glow_banks = vec![];
+    let mut special_points = vec![];
+    let mut eye_points = vec![];
 
     for node in &scene.nodes {
         let transform = node.transform_as_matrix();
         let zero = Vec3d::ZERO.into();
         let center = transform.transform_point(&zero) - zero;
-        let local_transform = transform.append_translation(&(-center).into());
 
         let name = node.name.as_ref().unwrap();
 
@@ -394,10 +397,11 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
                         new_point.position = pos;
                         new_point.normal = norm;
 
-                        for (node, name) in node_children_with_keyword(&node.children, "offset") {
+                        for (_, name) in node_children_with_keyword(&node.children, "offset") {
                             if let Some(idx) = name.find(":") {
                                 if let Ok(val) = &name[(idx + 1)..].parse() {
                                     new_point.offset = *val;
+                                    break;
                                 }
                             }
                         }
@@ -411,6 +415,126 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
                         primary_weps.push(new_bank);
                     }
                 }
+            } else if name == "#docking bays" {
+                for (node, _) in node_children_with_keyword(&node.children, "bay") {
+                    let mut new_bay = Dock::default();
+
+                    for (node, name) in node_children_with_keyword(&node.children, "") {
+                        if name.contains("properties") {
+                            dae_parse_properties(node, &mut new_bay.properties);
+                        } else if name.contains("point") {
+                            let mut new_point = DockingPoint::default();
+
+                            let (pos, norm, _) = dae_parse_point(node);
+                            new_point.position = pos;
+                            new_point.normal = norm;
+
+                            new_bay.points.push(new_point);
+                        } else if name.contains("path") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bay.path = Some(PathId(*val));
+                                }
+                            }
+                        }
+                    }
+
+                    docking_bays.push(new_bay);
+                }
+            } else if name == "#glows" {
+                for (node, _) in node_children_with_keyword(&node.children, "glowbank") {
+                    let mut new_bank = GlowPointBank::default();
+
+                    for (node, name) in node_children_with_keyword(&node.children, "") {
+                        if name.contains("type") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bank.glow_type = *val;
+                                }
+                            }
+                        } else if name.contains("lod") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bank.lod = *val;
+                                }
+                            }
+                        } else if name.contains("parent") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bank.obj_parent = ObjectId(*val);
+                                }
+                            }
+                        } else if name.contains("ontime") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bank.on_time = *val;
+                                }
+                            }
+                        } else if name.contains("offtime") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bank.off_time = *val;
+                                }
+                            }
+                        } else if name.contains("disptime") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bank.disp_time = *val;
+                                }
+                            }
+                        } else if name.contains("properties") {
+                            dae_parse_properties(node, &mut new_bank.properties);
+                        } else if name.contains("point") {
+                            let mut new_point = GlowPoint::default();
+
+                            let (pos, norm, rad) = dae_parse_point(node);
+                            new_point.position = pos;
+                            new_point.normal = if name.contains("omni") { Vec3d::ZERO } else { norm };
+                            new_point.radius = rad;
+
+                            new_bank.glow_points.push(new_point);
+                        }
+                    }
+
+                    glow_banks.push(new_bank);
+                }
+            } else if name == "#special points" {
+                for (node, name) in node_children_with_keyword(&node.children, "") {
+                    let mut new_point = SpecialPoint::default();
+
+                    if let Some(idx) = name.find(":") {
+                        new_point.name = format!("{}", &name[(idx + 1)..]);
+                    }
+
+                    let (pos, _, rad) = dae_parse_point(node);
+                    new_point.position = pos;
+                    new_point.radius = rad;
+
+                    for (node, _) in node_children_with_keyword(&node.children, "properties") {
+                        dae_parse_properties(node, &mut new_point.properties);
+                    }
+
+                    special_points.push(new_point);
+                }
+            } else if name == "#eye points" {
+                for (node, _) in node_children_with_keyword(&node.children, "point") {
+                    let mut new_point = EyePoint::default();
+
+                    let (pos, norm, _) = dae_parse_point(node);
+                    new_point.offset = pos;
+                    new_point.normal = norm;
+
+                    for (_, name) in node_children_with_keyword(&node.children, "parent") {
+                        if let Some(idx) = name.find(":") {
+                            if let Ok(val) = &name[(idx + 1)..].parse() {
+                                new_point.attached_subobj = ObjectId(*val);
+                                break;
+                            }
+                        }
+                    }
+
+                    eye_points.push(new_point);
+                }
             }
         }
     }
@@ -421,8 +545,6 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
             sub_objects[parent].children.push(id);
         }
     }
-
-    println!("{:#?}", primary_weps);
 
     details.sort_by_key(|pair| pair.0);
 
@@ -436,16 +558,16 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
         sub_objects,
         textures: material_map.into_iter().map(|(tex, _)| tex.to_string()).collect(),
         paths,
-        special_points: Default::default(),
-        eye_points: Default::default(),
+        special_points,
+        eye_points,
         primary_weps,
         secondary_weps,
         turrets: Default::default(),
         thruster_banks,
-        glow_banks: Default::default(),
+        glow_banks,
         auto_center: Default::default(),
         comments: Default::default(),
-        docking_bays: Default::default(),
+        docking_bays,
         insignias: Default::default(),
         shield_data,
     };
@@ -745,12 +867,11 @@ impl<R: Read + Seek> Parser<R> {
                     dock_points = Some(self.read_list(|this| {
                         Ok(Dock {
                             properties: this.read_string()?,
-                            path_num: {
+                            path: {
                                 // spec allows for a list of paths but only the first will be used so dont bother
                                 let paths = this.read_list(|this| Ok(this.read_u32()?))?;
                                 paths.first().map(|&x| PathId(x))
                             },
-                            path: String::new(),
                             points: {
                                 // same thing here, only first 2 are used
                                 let dockpoints =
@@ -859,11 +980,15 @@ impl<R: Read + Seek> Parser<R> {
         }
 
         // turn path ids into more useful path strings in docking bays
-        if let Some(dock_points) = dock_points {
-            for dock in dock_points {
-                if let Some(num) = dock.path_num {}
-            }
-        }
+        // if let Some(dock_points) = dock_points {
+        //     for dock in dock_points {
+        //         if let Some(num) = dock.path_num {
+        //             if let Some(paths) = paths {
+        //                 if num < paths.len() {}
+        //             }
+        //         }
+        //     }
+        // }
 
         Ok(Model {
             header: header.expect("No header chunk found???"),

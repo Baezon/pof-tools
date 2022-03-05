@@ -882,9 +882,13 @@ impl Serialize for Dock {
     }
 }
 impl Dock {
-    // TODO fix this
     pub fn get_name(&self) -> Option<&str> {
-        self.properties.strip_prefix("$name=")
+        for str in self.properties.split("\n") {
+            if let Some(name) = str.strip_prefix("$name=") {
+                return Some(name);
+            }
+        }
+        None
     }
 }
 
@@ -1028,6 +1032,15 @@ impl Model {
             }
             sub_obj_parent = self.sub_objects[sub_obj_parent.unwrap()].parent;
         }
+    }
+
+    pub fn get_detail_level(&self, obj_id: ObjectId) -> Option<u32> {
+        for (i, id) in self.header.detail_levels.iter().enumerate() {
+            if self.is_obj_id_ancestor(obj_id, *id) {
+                return Some(i as u32);
+            }
+        }
+        None
     }
 
     pub fn get_subobj_names(&self) -> Vec<String> {

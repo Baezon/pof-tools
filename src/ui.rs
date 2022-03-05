@@ -541,6 +541,8 @@ pub enum Set<T> {
 pub enum Error {
     InvalidTurretGunSubobject(usize), // turret index
     TooManyDebrisObjects,
+    // detail# not at top of hierarchy
+    // all turret base/gun objects must be disjoint!
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]

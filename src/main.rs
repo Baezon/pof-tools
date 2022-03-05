@@ -373,6 +373,8 @@ impl PofToolsGui {
     }
 }
 
+const POF_TOOLS_VERISON: f32 = 0.9;
+
 fn main() {
     let event_loop = glutin::event_loop::EventLoop::with_user_event();
     let mut pt_gui = PofToolsGui::default();

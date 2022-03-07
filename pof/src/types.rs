@@ -1,7 +1,7 @@
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display};
 use std::io::{self, Write};
-use std::ops::{Add, AddAssign, Deref, DerefMut, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign};
+use std::ops::{Add, AddAssign, Deref, DerefMut, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign};
 use std::str::FromStr;
 
 use byteorder::{WriteBytesExt, LE};
@@ -97,6 +97,13 @@ macro_rules! mk_struct {
             }
         )*
     };
+}
+
+#[derive(Clone, Copy)]
+pub enum Axis {
+    X,
+    Y,
+    Z,
 }
 
 mk_struct! {
@@ -203,6 +210,18 @@ impl Vec3d {
     pub fn is_null(self) -> bool {
         self.x.abs() <= 0.000001 && self.y.abs() <= 0.000001 && self.z.abs() <= 0.000001
     }
+    pub fn average(iter: impl Iterator<Item = Self>) -> Vec3d {
+        let mut out = Vec3d::ZERO;
+        let mut n = 0;
+
+        for vec in iter {
+            out += vec;
+            n += 1;
+        }
+
+        out /= n as f32;
+        out
+    }
 }
 impl Add for Vec3d {
     type Output = Vec3d;
@@ -253,11 +272,45 @@ impl Mul<Vec3d> for &Mat4 {
         self.transform_point(&rhs.into()).into()
     }
 }
+impl DivAssign<f32> for Vec3d {
+    fn div_assign(&mut self, rhs: f32) {
+        self.x /= rhs;
+        self.y /= rhs;
+        self.z /= rhs;
+    }
+}
+impl Div<f32> for Vec3d {
+    type Output = Vec3d;
+
+    fn div(self, rhs: f32) -> Vec3d {
+        Vec3d { x: self.x / rhs, y: self.y / rhs, z: self.z / rhs }
+    }
+}
 impl Neg for Vec3d {
     type Output = Vec3d;
 
     fn neg(self) -> Self::Output {
         Vec3d { x: -self.x, y: -self.y, z: -self.z }
+    }
+}
+impl Index<Axis> for Vec3d {
+    type Output = f32;
+
+    fn index(&self, index: Axis) -> &Self::Output {
+        match index {
+            Axis::X => &self.x,
+            Axis::Y => &self.y,
+            Axis::Z => &self.z,
+        }
+    }
+}
+impl IndexMut<Axis> for Vec3d {
+    fn index_mut(&mut self, index: Axis) -> &mut Self::Output {
+        match index {
+            Axis::X => &mut self.x,
+            Axis::Y => &mut self.y,
+            Axis::Z => &mut self.z,
+        }
     }
 }
 
@@ -292,6 +345,61 @@ impl BBox {
     }
     pub fn z_length(&self) -> f32 {
         self.max.z - self.min.z
+    }
+    pub fn axis_size(&self, axis: Axis) -> f32 {
+        self.max[axis] - self.min[axis]
+    }
+    pub fn greatest_dimension(&self) -> Axis {
+        [Axis::X, Axis::Y, Axis::Z]
+            .into_iter()
+            .max_by(|&axis1, &axis2| self.axis_size(axis1).partial_cmp(&self.axis_size(axis2)).unwrap())
+            .unwrap()
+    }
+    pub fn expand_vec(&mut self, vec: Vec3d) {
+        self.min.x = self.min.x.min(vec.x);
+        self.min.y = self.min.y.min(vec.y);
+        self.min.z = self.min.z.min(vec.z);
+        self.max.x = self.max.x.max(vec.x);
+        self.max.y = self.max.y.max(vec.y);
+        self.max.z = self.max.z.max(vec.z);
+    }
+    pub fn expand_bbox(&mut self, bbox: &BBox) {
+        self.min.x = self.min.x.min(bbox.min.x);
+        self.min.y = self.min.y.min(bbox.min.y);
+        self.min.z = self.min.z.min(bbox.min.z);
+        self.max.x = self.max.x.max(bbox.max.x);
+        self.max.y = self.max.y.max(bbox.max.y);
+        self.max.z = self.max.z.max(bbox.max.z);
+    }
+    pub fn from_vectors(mut iter: impl Iterator<Item = Vec3d>) -> BBox {
+        if let Some(vec) = iter.next() {
+            iter.fold(BBox { min: vec, max: vec }, |mut bbox, vec| {
+                bbox.expand_vec(vec);
+                bbox
+            })
+        } else {
+            BBox::default()
+        }
+    }
+    pub fn from_bboxes<'a>(mut iter: impl Iterator<Item = &'a Self>) -> BBox {
+        if let Some(bbox) = iter.next() {
+            iter.fold(*bbox, |mut acc_bbox, bbox| {
+                acc_bbox.expand_bbox(bbox);
+                acc_bbox
+            })
+        } else {
+            BBox::default()
+        }
+    }
+
+    pub fn pad(mut self, pad: f32) -> BBox {
+        self.min.x -= pad;
+        self.min.y -= pad;
+        self.min.z -= pad;
+        self.max.x += pad;
+        self.max.y += pad;
+        self.max.z += pad;
+        self
     }
 }
 
@@ -560,7 +668,7 @@ pub struct ShieldData {
     pub collision_tree: Option<ShieldNode>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Polygon {
     pub normal: Vec3d,
     pub center: Vec3d,
@@ -586,6 +694,24 @@ pub enum BspNode {
 impl BspNode {
     pub fn leaves(&self) -> BspNodeIter<'_> {
         BspNodeIter { stack: vec![self] }
+    }
+
+    pub fn sum_of_bboxes(&self) -> f32 {
+        match self {
+            BspNode::Split { bbox, front, back, .. } => bbox.volume() + front.sum_of_bboxes() + back.sum_of_bboxes(),
+            BspNode::Leaf { bbox, poly_list } => bbox.volume() * poly_list.len() as f32,
+        }
+    }
+
+    pub fn sum_depth_and_size(&self) -> (u32, u32) {
+        match self {
+            BspNode::Split { front, back, .. } => {
+                let (depth1, sz1) = front.sum_depth_and_size();
+                let (depth2, sz2) = back.sum_depth_and_size();
+                (depth1 + depth2 + sz1 + sz2, sz1 + sz2)
+            }
+            BspNode::Leaf { poly_list, .. } => (0, poly_list.len() as u32),
+        }
     }
 
     pub fn recalculate_bboxes(&mut self, verts: &Vec<Vec3d>) {
@@ -685,6 +811,43 @@ impl BspData {
     pub(crate) const SORTNORM: u32 = 4;
     pub(crate) const BOUNDBOX: u32 = 5;
 }
+impl BspData {
+    pub fn recalculate(verts: &Vec<Vec3d>, polygons: impl Iterator<Item = Polygon>) -> BspNode {
+        let polygons = polygons
+            .map(|mut poly| {
+                let vert_iter = poly.verts.iter().map(|polyvert| verts[polyvert.vertex_id.0 as usize]);
+                poly.center = Vec3d::average(vert_iter.clone());
+                (BBox::from_vectors(vert_iter).pad(0.01), poly)
+            })
+            .collect::<Vec<_>>();
+
+        fn recalc_recurse(polygons: &mut [&(BBox, Polygon)]) -> BspNode {
+            if let [&(bbox, ref polygon)] = *polygons {
+                BspNode::Leaf { bbox, poly_list: vec![polygon.clone()] }
+            } else {
+                let bbox = BBox::from_bboxes(polygons.iter().map(|(bbox, _)| bbox)).pad(0.01);
+                let axis = bbox.greatest_dimension();
+                polygons.sort_by(|a, b| a.1.center[axis].partial_cmp(&b.1.center[axis]).unwrap());
+
+                let halfpoint = polygons.len() / 2;
+
+                BspNode::Split {
+                    front: Box::new(recalc_recurse(&mut polygons[..halfpoint])),
+                    back: Box::new(recalc_recurse(&mut polygons[halfpoint..])),
+                    bbox,
+                    normal: Vec3d::ZERO, // pretty sure these arent used...
+                    point: Vec3d::ZERO,
+                }
+            }
+        }
+
+        if polygons.is_empty() {
+            BspNode::Leaf { bbox: BBox::default(), poly_list: vec![] }
+        } else {
+            recalc_recurse(&mut polygons.iter().collect::<Vec<_>>())
+        }
+    }
+}
 impl Serialize for BspData {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         w.write_u32::<LE>(0)?;
@@ -752,7 +915,7 @@ macro_rules! mk_enumeration {
 }
 
 mk_enumeration! {
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum SubsysMovementType(i32) {
         // no idea what any of these are, just copied from the source
         NONE = -1,
@@ -1002,6 +1165,8 @@ pub struct Model {
     pub docking_bays: Vec<Dock>,
     pub insignias: Vec<Insignia>,
     pub shield_data: Option<ShieldData>,
+
+    pub filename: String,
 }
 impl Model {
     pub fn get_total_subobj_offset(&self, mut id: ObjectId) -> Vec3d {

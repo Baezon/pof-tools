@@ -4,8 +4,7 @@ use std::{
 };
 
 use byteorder::{WriteBytesExt, LE};
-use dae_parser::{Document, Library, LibraryElement};
-use nalgebra_glm::pi;
+use dae_parser::Document;
 extern crate nalgebra_glm as glm;
 
 use crate::{
@@ -862,6 +861,20 @@ fn make_subobj_node(
                 node.children.push(gunpoint_node);
             }
         }
+    }
+
+    if !subobj.properties.is_empty() {
+        node.children.push(make_properties_node(&subobj.properties, format!("{}-", subobj.name)));
+    }
+
+    if subobj.movement_type != Default::default() {
+        node.children
+            .push(Node::new(format!("{}-mov-type", subobj.name), Some(format!("#{}-mov-type:{}", subobj.name, subobj.movement_type as i32))));
+    }
+
+    if subobj.movement_axis != Default::default() {
+        node.children
+            .push(Node::new(format!("{}-mov-axis", subobj.name), Some(format!("#{}-mov-axis:{}", subobj.name, subobj.movement_axis as i32))));
     }
 
     node.instance_geometry.push(instance);

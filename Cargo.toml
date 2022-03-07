@@ -15,3 +15,4 @@ pof = { path = "pof" }
 nalgebra-glm = "0.15"
 native-dialog = "0.6.3"
 crossbeam = "0.8.1"
+image = "0.24.1"

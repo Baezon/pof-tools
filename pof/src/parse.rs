@@ -5,6 +5,29 @@ use std::f32::consts::PI;
 use std::io::{self};
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
 
+fn parse_subsys_mov_type(val: i32) -> SubsysMovementType {
+    match val {
+        -1 => SubsysMovementType::NONE,
+        0 => SubsysMovementType::POS,
+        1 => SubsysMovementType::ROT,
+        2 => SubsysMovementType::ROTSPECIAL,
+        3 => SubsysMovementType::TRIGGERED,
+        4 => SubsysMovementType::INTRINSICROTATE,
+        _ => unreachable!(),
+    }
+}
+
+fn parse_subsys_mov_axis(val: i32) -> SubsysMovementAxis {
+    match val {
+        -1 => SubsysMovementAxis::NONE,
+        0 => SubsysMovementAxis::XAXIS,
+        1 => SubsysMovementAxis::ZAXIS,
+        2 => SubsysMovementAxis::YAXIS,
+        3 => SubsysMovementAxis::OTHER,
+        _ => unreachable!(),
+    }
+}
+
 pub struct Parser<R> {
     file: R,
     version: Version,
@@ -20,7 +43,7 @@ impl<R: Read + Seek> Parser<R> {
         Ok(Parser { file, version })
     }
 
-    pub fn parse(&mut self) -> io::Result<Model> {
+    pub fn parse(&mut self, filename: String) -> io::Result<Model> {
         // println!("parsing new model!");
         let mut header = None;
         let mut sub_objects = ObjVec::default();
@@ -117,23 +140,8 @@ impl<R: Read + Seek> Parser<R> {
                     let bbox = self.read_bbox().unwrap();
                     let name = self.read_string().unwrap();
                     let properties = self.read_string().unwrap();
-                    let movement_type = match self.read_i32().unwrap() {
-                        -1 => SubsysMovementType::NONE,
-                        0 => SubsysMovementType::POS,
-                        1 => SubsysMovementType::ROT,
-                        2 => SubsysMovementType::ROTSPECIAL,
-                        3 => SubsysMovementType::TRIGGERED,
-                        4 => SubsysMovementType::INTRINSICROTATE,
-                        _ => unreachable!(),
-                    };
-                    let movement_axis = match self.read_i32().unwrap() {
-                        -1 => SubsysMovementAxis::NONE,
-                        0 => SubsysMovementAxis::XAXIS,
-                        1 => SubsysMovementAxis::ZAXIS,
-                        2 => SubsysMovementAxis::YAXIS,
-                        3 => SubsysMovementAxis::OTHER,
-                        _ => unreachable!(),
-                    };
+                    let movement_type = parse_subsys_mov_type(self.read_i32().unwrap());
+                    let movement_axis = parse_subsys_mov_axis(self.read_i32().unwrap());
 
                     let _ = self.read_i32().unwrap();
                     let bsp_data_buffer = self.read_byte_buffer().unwrap();
@@ -432,6 +440,7 @@ impl<R: Read + Seek> Parser<R> {
             glow_banks: glow_banks.unwrap_or_default(),
             auto_center: auto_center.unwrap_or_default(),
             shield_data,
+            filename,
         })
     }
 
@@ -701,8 +710,7 @@ fn parse_shield_node(buf: &[u8], version: Version) -> ShieldNode {
 use crate::*;
 use byteorder::{ReadBytesExt, LE};
 use dae_parser::source::{SourceReader, ST, XYZ};
-use dae_parser::{Document, LocalMaps, Material, Node, Translate};
-use nalgebra::{Matrix4, Vector3};
+use dae_parser::{Document, LocalMaps, Material, Node};
 extern crate nalgebra_glm as glm;
 
 struct VertexContext {
@@ -865,6 +873,13 @@ fn dae_parse_subobject_recursive(
     node: &Node, sub_objects: &mut Vec<SubObject>, parent: ObjectId, insignias: &mut Vec<Insignia>, detail_level: Option<u32>,
     turrets: &mut Vec<Turret>, local_maps: &LocalMaps, material_map: &HashMap<&String, TextureId>,
 ) {
+    if node.instance_geometry.is_empty() {
+        // ignore subobjects with no geo
+        // metadata (empties with names like #properties) are handled below directly
+        // this function must *start* with a proper subobject
+        return;
+    }
+
     let name = node.name.as_ref();
     if name.is_none() {
         // subobjects must have names!
@@ -874,15 +889,9 @@ fn dae_parse_subobject_recursive(
 
     let (vertices_out, normals_out, polygons_out) = dae_parse_geometry(node, &local_maps, &material_map);
 
-    println!("name: {}, verts: {:#?}", name, vertices_out);
-
     let transform = node.transform_as_matrix();
     let zero = Vec3d::ZERO.into();
     let center = transform.transform_point(&zero) - zero;
-
-    println!("name: {}, offset: {:#?}", name, node.transforms);
-    println!("transform: {:#?}", transform);
-    println!("center: {}", center);
 
     if name.to_lowercase().contains("insignia") {
         let mut faces = vec![];
@@ -920,22 +929,18 @@ fn dae_parse_subobject_recursive(
             movement_type: Default::default(),
             movement_axis: Default::default(),
             bsp_data: BspData {
-                verts: vertices_out,
                 norms: normals_out,
-                collision_tree: BspNode::Leaf {
-                    bbox: Default::default(),
-                    poly_list: polygons_out
-                        .into_iter()
-                        .map(|(texture, verts)| Polygon {
-                            //TODO MAKE A PROPER COLLISION TREE
-                            normal: Default::default(),
-                            center: Default::default(),
-                            radius: Default::default(),
-                            texture,
-                            verts,
-                        })
-                        .collect(),
-                },
+                collision_tree: BspData::recalculate(
+                    &vertices_out,
+                    polygons_out.into_iter().map(|(texture, verts)| Polygon {
+                        normal: Default::default(),
+                        center: Default::default(),
+                        radius: Default::default(),
+                        texture,
+                        verts,
+                    }),
+                ),
+                verts: vertices_out,
             },
             children: Default::default(),
             is_debris_model: false,
@@ -947,7 +952,12 @@ fn dae_parse_subobject_recursive(
         sub_objects.push(new_subobj);
 
         for node in &node.children {
-            // maybe parse turret
+            // make a pointer to the subobj we just pushed
+            // annoying, but the node children could be properties that modify it, or proper subobject children
+            // which will require that this subobject be already pushed into the list
+            let len = sub_objects.len() - 1;
+            let subobj = &mut sub_objects[len];
+
             if let Some(name) = node.name.as_ref() {
                 if name.starts_with("#") && name.contains("point") {
                     let turret = {
@@ -968,6 +978,23 @@ fn dae_parse_subobject_recursive(
                     turret.fire_points.push(pos);
                     turret.normal = norm;
                     continue;
+                } else if name.starts_with("#") && name.contains("properties") {
+                    dae_parse_properties(node, &mut subobj.properties);
+                    continue;
+                } else if name.starts_with("#") && name.contains("mov-type") {
+                    if let Some(idx) = name.find(":") {
+                        if let Ok(val) = &name[(idx + 1)..].parse::<i32>() {
+                            subobj.movement_type = parse_subsys_mov_type(*val);
+                        }
+                    }
+                    continue;
+                } else if name.starts_with("#") && name.contains("mov-axis") {
+                    if let Some(idx) = name.find(":") {
+                        if let Ok(val) = &name[(idx + 1)..].parse::<i32>() {
+                            subobj.movement_axis = parse_subsys_mov_axis(*val);
+                        }
+                    }
+                    continue;
                 }
             }
 
@@ -987,7 +1014,7 @@ fn node_children_with_keyword<'a>(node_list: &'a [Node], keyword: &'a str) -> im
     })
 }
 
-pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
+pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Model> {
     let document = Document::from_file(path).unwrap();
     // use std::io::Write;
     // write!(std::fs::File::create("output.log").unwrap(), "{:#?}", document).unwrap();
@@ -1023,7 +1050,6 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
         let name = node.name.as_ref().unwrap();
 
         if !node.instance_geometry.is_empty() {
-            println!("{}", name);
             let (vertices_out, normals_out, polygons_out) = dae_parse_geometry(node, &local_maps, &material_map);
 
             if name.to_lowercase() == "shield" {
@@ -1091,22 +1117,18 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
                     movement_type: Default::default(),
                     movement_axis: Default::default(),
                     bsp_data: BspData {
-                        verts: vertices_out,
                         norms: normals_out,
-                        collision_tree: BspNode::Leaf {
-                            //TODO MAKE A PROPER COLLISION TREE
-                            bbox: Default::default(),
-                            poly_list: polygons_out
-                                .into_iter()
-                                .map(|(texture, verts)| Polygon {
-                                    normal: Default::default(),
-                                    center: Default::default(),
-                                    radius: Default::default(),
-                                    texture,
-                                    verts,
-                                })
-                                .collect(),
-                        },
+                        collision_tree: BspData::recalculate(
+                            &vertices_out,
+                            polygons_out.into_iter().map(|(texture, verts)| Polygon {
+                                normal: Default::default(),
+                                center: Default::default(),
+                                radius: Default::default(),
+                                texture,
+                                verts,
+                            }),
+                        ),
+                        verts: vertices_out,
                     },
                     children: Default::default(),
                     is_debris_model: name.starts_with("debris"),
@@ -1341,6 +1363,11 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
         }
     }
 
+    if details.is_empty() {
+        details.push(ObjectId(0));
+        // this is pretty bad, but not having any detail levels is worse
+    }
+
     let mut model = Model {
         header: ObjHeader {
             num_subobjects: sub_objects.len() as _,
@@ -1362,9 +1389,8 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>) -> Box<Model> {
         docking_bays,
         insignias,
         shield_data,
+        filename,
     };
-
-    println!("details: {:#?}", model.header.detail_levels);
 
     model.recalc_radius();
     model.recalc_bbox();

@@ -1251,7 +1251,6 @@ impl PofToolsGui {
                                 );
                                 ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
                             }
-                            _ => (),
                         }
                     }
                 });
@@ -1882,6 +1881,23 @@ impl PofToolsGui {
                             if old_val != *rot_axis {
                                 self.model.sub_objects[selected_id.unwrap()].movement_axis = *rot_axis;
                             }
+
+                            // DEBUG - prints total bsp node bbox volume at all depths (divided by actual top-levle bbox volume so literla size doesn't matter)
+                            // Theoretically should be a decent metric for BSP tree efficiency; lower = better
+                            //
+                            // if ui.button("avg depth").clicked() {
+                            //     let node = &self.model.sub_objects[selected_id.unwrap()].bsp_data.collision_tree;
+                            //     let bbox_vol = match node {
+                            //         pof::BspNode::Split { bbox, .. } | pof::BspNode::Leaf { bbox, .. } => bbox.volume(),
+                            //     };
+                            //     let (sum_depth, size) = node.sum_depth_and_size();
+                            //     println!(
+                            //         "avg bbox depth = {}, size = {}, avg tree depth = {}",
+                            //         node.sum_of_bboxes() / bbox_vol,
+                            //         size,
+                            //         sum_depth as f32 / size as f32,
+                            //     );
+                            // }
                         }
                         PropertiesPanel::Texture { texture_name } => {
                             ui.heading("Textures");

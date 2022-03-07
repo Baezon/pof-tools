@@ -1,13 +1,13 @@
 //! Example how to use [epi::NativeTexture] with glium.
 use native_dialog::FileDialog;
-use std::{collections::HashMap, fs::File, path::PathBuf, sync::mpsc::TryRecvError};
+use std::{collections::HashMap, ffi::OsStr, fs::File, io::Write, path::PathBuf, sync::mpsc::TryRecvError};
 
 //use egui::{FontFamily, TextStyle};
 use glium::{
-    glutin::{self, event::WindowEvent},
+    glutin::{self, event::WindowEvent, platform::windows::WindowBuilderExtWindows, window::Icon},
     BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer,
 };
-use pof::{Insignia, Model, ObjVec, ObjectId, Parser, ShieldData, SubObject, TextureId, Texturing, Vec3d};
+use pof::{BspNode, Insignia, Model, ObjVec, ObjectId, Parser, ShieldData, SubObject, TextureId, Texturing, Vec3d};
 extern crate nalgebra_glm as glm;
 
 mod sphere;
@@ -25,7 +25,8 @@ fn create_display(event_loop: &glutin::event_loop::EventLoop<()>) -> glium::Disp
     let window_builder = glutin::window::WindowBuilder::new()
         .with_resizable(true)
         .with_inner_size(glutin::dpi::LogicalSize { width: 800.0, height: 600.0 })
-        .with_title("Pof Tools");
+        .with_title(format!("Pof Tools v{}", POF_TOOLS_VERISON))
+        .with_taskbar_icon(Some(Icon::from_rgba(include_bytes!("icon.raw").to_vec(), 32, 32).unwrap()));
 
     let context_builder = glutin::ContextBuilder::new()
         .with_depth_buffer(0)
@@ -313,12 +314,13 @@ impl PofToolsGui {
 
             if let Some(path) = path {
                 let ext = path.extension().map(|ext| ext.to_ascii_lowercase());
+                let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
                 let model = match ext.as_ref().and_then(|ext| ext.to_str()) {
-                    Some("dae") => pof::parse_dae(path),
+                    Some("dae") => pof::parse_dae(path, filename),
                     Some("pof") => {
                         let file = File::open(path).expect("TODO invalid file or smth i dunno");
                         let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
-                        Box::new(parser.parse().expect("TODO invalid pof file or smth i dunno"))
+                        Box::new(parser.parse(filename).expect("TODO invalid pof file or smth i dunno"))
                     }
                     _ => todo!(),
                 };
@@ -370,6 +372,10 @@ impl PofToolsGui {
         self.camera_heading = 2.7;
         self.camera_pitch = -0.4;
         self.camera_scale = self.model.header.max_radius * 2.0;
+        display
+            .gl_window()
+            .window()
+            .set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERISON, &self.model.filename));
     }
 }
 
@@ -380,13 +386,18 @@ fn main() {
     let mut pt_gui = PofToolsGui::default();
     let display = create_display(&event_loop);
 
-    // for arg in std::env::args() {
-    //     arg.as_str()
-    // }
+    // this creates the raw bytes from png, how i make the icon
+    // File::create("icon.raw")
+    //     .unwrap()
+    //     .write_all(&image::open("icon.png").unwrap().into_rgba8().to_vec());
+
+    let mut args = std::env::args().into_iter();
+    args.next();
+    let path = args.next().map(|arg| PathBuf::from(arg.as_str()));
 
     let mut egui = egui_glium::EguiGlium::new(&display);
 
-    pt_gui.start_loading_model(None);
+    pt_gui.start_loading_model(path);
     egui.egui_ctx.output().cursor_icon = egui::CursorIcon::Wait;
 
     let model = &pt_gui.model;
@@ -685,6 +696,41 @@ fn main() {
                                     .unwrap();
                             }
                         }
+
+                        //      DEBUG - Draw BSP node bounding boxes
+                        //      This is quite useful but incredibly ineffcient
+                        //      TODO make this more efficient
+                        //
+                        // let mut node_stack = vec![(&pt_gui.model.sub_objects[obj_id].bsp_data.collision_tree, 0u32)];
+                        // loop {
+                        //     if let Some((node, depth)) = node_stack.pop() {
+                        //         let bbox = match node {
+                        //             BspNode::Split { bbox, front, back, .. } => {
+                        //                 node_stack.push((front, depth + 1));
+                        //                 node_stack.push((back, depth + 1));
+                        //                 bbox
+                        //             }
+                        //             BspNode::Leaf { bbox, .. } => bbox,
+                        //         };
+
+                        //         let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
+                        //         mat.append_translation_mut(&(bbox.min + pt_gui.model.get_total_subobj_offset(obj_id)).into());
+                        //         let color = 2.0 / (1.5f32.powf(depth as f32));
+
+                        //         let uniforms = glium::uniform! {
+                        //             model: <[[f32; 4]; 4]>::from(mat),
+                        //             view: view_mat,
+                        //             perspective: perspective_matrix,
+                        //             lollipop_color: [color, color, color, 1.0f32],
+                        //         };
+
+                        //         target
+                        //             .draw(&box_verts, &box_indices, &lollipop_stick_shader, &uniforms, &lollipop_stick_params)
+                        //             .unwrap();
+                        //     } else {
+                        //         break;
+                        //     }
+                        // }
                     }
                     TreeSelection::Thrusters(_)
                     | TreeSelection::Weapons(_)

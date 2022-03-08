@@ -306,7 +306,7 @@ impl Model {
             self.header.max_radius.write_to(w)?;
             self.header.obj_flags.write_to(w)?;
             self.header.num_subobjects.write_to(w)?;
-            self.header.bounding_box.write_to(w)?;
+            self.header.bbox.write_to(w)?;
             self.header.detail_levels.write_to(w)?;
             self.sub_objects
                 .iter()

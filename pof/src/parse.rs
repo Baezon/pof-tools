@@ -116,7 +116,7 @@ impl<R: Read + Seek> Parser<R> {
                         num_subobjects,
                         max_radius,
                         obj_flags,
-                        bounding_box,
+                        bbox: bounding_box,
                         detail_levels,
                         mass,
                         center_of_mass,
@@ -483,8 +483,8 @@ impl<R: Read + Seek> Parser<R> {
         read_bytes(&mut self.file)
     }
 
-    fn read_bbox(&mut self) -> io::Result<BBox> {
-        Ok(BBox { min: self.read_vec3d()?, max: self.read_vec3d()? })
+    fn read_bbox(&mut self) -> io::Result<BoundingBox> {
+        Ok(BoundingBox { min: self.read_vec3d()?, max: self.read_vec3d()? })
     }
 
     fn read_vec3d(&mut self) -> io::Result<Vec3d> {
@@ -554,7 +554,7 @@ fn parse_chunk_header(buf: &[u8], chunk_type_is_u8: bool) -> (u32, &[u8], &[u8])
 
 fn parse_bsp_data(mut buf: &[u8]) -> BspData {
     fn parse_bsp_node(mut buf: &[u8]) -> BspNode {
-        let read_bbox = |chunk: &mut &[u8]| BBox { min: read_vec3d(chunk), max: read_vec3d(chunk) };
+        let read_bbox = |chunk: &mut &[u8]| BoundingBox { min: read_vec3d(chunk), max: read_vec3d(chunk) };
 
         // parse the first header
         let (chunk_type, mut chunk, next_chunk) = parse_chunk_header(buf, false);
@@ -678,7 +678,7 @@ fn parse_bsp_data(mut buf: &[u8]) -> BspData {
 }
 
 fn parse_shield_node(buf: &[u8], version: Version) -> ShieldNode {
-    let read_bbox = |chunk: &mut &[u8]| BBox { min: read_vec3d(chunk), max: read_vec3d(chunk) };
+    let read_bbox = |chunk: &mut &[u8]| BoundingBox { min: read_vec3d(chunk), max: read_vec3d(chunk) };
 
     let (chunk_type, mut chunk, _) = parse_chunk_header(buf, version <= Version::V21_17);
     match chunk_type {

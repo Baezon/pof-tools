@@ -7,11 +7,11 @@ edition = "2021"
 
 [dependencies]
 byteorder = "1.2"
-#dae-parser = {path = "dae-parser-0.8.2", features = ["nalgebra"]}
-dae-parser = {version = "0.8.3", features = ["nalgebra"]}
+#dae-parser = {path = "dae-parser-0.8.3", features = ["nalgebra"]}
+dae-parser = {version = "0.8.4", features = ["nalgebra"]}
 walkdir = "2"
-nalgebra = "0.29"
-nalgebra-glm = "0.15"
+nalgebra = "0.30.1"
+nalgebra-glm = "0.16"
 
 [[bin]]
 name = "pof"

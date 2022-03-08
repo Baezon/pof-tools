@@ -12,7 +12,7 @@ epi = "0.16"
 glium = "0.31"
 egui_glium = "0.16"
 pof = { path = "pof" }
-nalgebra-glm = "0.15"
+nalgebra-glm = "0.16.0"
 native-dialog = "0.6.3"
 crossbeam = "0.8.1"
 image = "0.24.1"

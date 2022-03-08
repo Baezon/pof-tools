@@ -106,6 +106,8 @@ pub enum Axis {
     Z,
 }
 
+const ALL_AXES: [Axis; 3] = [Axis::X, Axis::Y, Axis::Z];
+
 mk_struct! {
     #[derive(Clone, Copy, Default)]
     pub struct Vec3d {
@@ -323,17 +325,17 @@ mk_struct! {
     }
 
     #[derive(Default, Clone, Copy)]
-    pub struct BBox {
+    pub struct BoundingBox {
         pub min: Vec3d,
         pub max: Vec3d,
     }
 }
-impl Debug for BBox {
+impl Debug for BoundingBox {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("{:?}, {:?}", &self.min, &self.max))
     }
 }
-impl BBox {
+impl BoundingBox {
     pub fn volume(&self) -> f32 {
         (self.max.x - self.min.x) * (self.max.y - self.min.y) * (self.max.z - self.min.z)
     }
@@ -346,13 +348,13 @@ impl BBox {
     pub fn z_length(&self) -> f32 {
         self.max.z - self.min.z
     }
-    pub fn axis_size(&self, axis: Axis) -> f32 {
+    pub fn size_on_axis(&self, axis: Axis) -> f32 {
         self.max[axis] - self.min[axis]
     }
     pub fn greatest_dimension(&self) -> Axis {
-        [Axis::X, Axis::Y, Axis::Z]
+        ALL_AXES
             .into_iter()
-            .max_by(|&axis1, &axis2| self.axis_size(axis1).partial_cmp(&self.axis_size(axis2)).unwrap())
+            .max_by(|&axis1, &axis2| self.size_on_axis(axis1).partial_cmp(&self.size_on_axis(axis2)).unwrap())
             .unwrap()
     }
     pub fn expand_vec(&mut self, vec: Vec3d) {
@@ -363,7 +365,7 @@ impl BBox {
         self.max.y = self.max.y.max(vec.y);
         self.max.z = self.max.z.max(vec.z);
     }
-    pub fn expand_bbox(&mut self, bbox: &BBox) {
+    pub fn expand_bbox(&mut self, bbox: &BoundingBox) {
         self.min.x = self.min.x.min(bbox.min.x);
         self.min.y = self.min.y.min(bbox.min.y);
         self.min.z = self.min.z.min(bbox.min.z);
@@ -371,28 +373,28 @@ impl BBox {
         self.max.y = self.max.y.max(bbox.max.y);
         self.max.z = self.max.z.max(bbox.max.z);
     }
-    pub fn from_vectors(mut iter: impl Iterator<Item = Vec3d>) -> BBox {
+    pub fn from_vectors(mut iter: impl Iterator<Item = Vec3d>) -> BoundingBox {
         if let Some(vec) = iter.next() {
-            iter.fold(BBox { min: vec, max: vec }, |mut bbox, vec| {
+            iter.fold(BoundingBox { min: vec, max: vec }, |mut bbox, vec| {
                 bbox.expand_vec(vec);
                 bbox
             })
         } else {
-            BBox::default()
+            BoundingBox::default()
         }
     }
-    pub fn from_bboxes<'a>(mut iter: impl Iterator<Item = &'a Self>) -> BBox {
+    pub fn from_bboxes<'a>(mut iter: impl Iterator<Item = &'a Self>) -> BoundingBox {
         if let Some(bbox) = iter.next() {
             iter.fold(*bbox, |mut acc_bbox, bbox| {
                 acc_bbox.expand_bbox(bbox);
                 acc_bbox
             })
         } else {
-            BBox::default()
+            BoundingBox::default()
         }
     }
 
-    pub fn pad(mut self, pad: f32) -> BBox {
+    pub fn pad(mut self, pad: f32) -> BoundingBox {
         self.min.x -= pad;
         self.min.y -= pad;
         self.min.z -= pad;
@@ -400,6 +402,15 @@ impl BBox {
         self.max.y += pad;
         self.max.z += pad;
         self
+    }
+
+    pub fn contains(self, vec: Vec3d) -> bool {
+        for axis in ALL_AXES {
+            if vec[axis] < self.min[axis] || vec[axis] > self.max[axis] {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -533,12 +544,12 @@ impl Serialize for ShieldPolygon {
 #[derive(Debug)]
 pub enum ShieldNode {
     Split {
-        bbox: BBox,
+        bbox: BoundingBox,
         front: Box<ShieldNode>,
         back: Box<ShieldNode>,
     },
     Leaf {
-        bbox: Option<BBox>,
+        bbox: Option<BoundingBox>,
         poly_list: Vec<PolygonId>,
     },
 }
@@ -652,7 +663,7 @@ pub struct ObjHeader {
     pub max_radius: f32,
     pub obj_flags: u32,
     pub num_subobjects: u32,
-    pub bounding_box: BBox,
+    pub bbox: BoundingBox,
     pub detail_levels: Vec<ObjectId>,
     pub mass: f32,
     pub center_of_mass: Vec3d,
@@ -682,12 +693,12 @@ pub enum BspNode {
     Split {
         normal: Vec3d,
         point: Vec3d,
-        bbox: BBox,
+        bbox: BoundingBox,
         front: Box<BspNode>,
         back: Box<BspNode>,
     },
     Leaf {
-        bbox: BBox,
+        bbox: BoundingBox,
         poly_list: Vec<Polygon>,
     },
 }
@@ -780,7 +791,7 @@ pub struct BspNodeIter<'a> {
 }
 
 impl<'a> Iterator for BspNodeIter<'a> {
-    type Item = (&'a BBox, &'a Vec<Polygon>);
+    type Item = (&'a BoundingBox, &'a Vec<Polygon>);
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -817,15 +828,15 @@ impl BspData {
             .map(|mut poly| {
                 let vert_iter = poly.verts.iter().map(|polyvert| verts[polyvert.vertex_id.0 as usize]);
                 poly.center = Vec3d::average(vert_iter.clone());
-                (BBox::from_vectors(vert_iter).pad(0.01), poly)
+                (BoundingBox::from_vectors(vert_iter).pad(0.01), poly)
             })
             .collect::<Vec<_>>();
 
-        fn recalc_recurse(polygons: &mut [&(BBox, Polygon)]) -> BspNode {
+        fn recalc_recurse(polygons: &mut [&(BoundingBox, Polygon)]) -> BspNode {
             if let [&(bbox, ref polygon)] = *polygons {
                 BspNode::Leaf { bbox, poly_list: vec![polygon.clone()] }
             } else {
-                let bbox = BBox::from_bboxes(polygons.iter().map(|(bbox, _)| bbox)).pad(0.01);
+                let bbox = BoundingBox::from_bboxes(polygons.iter().map(|(bbox, _)| bbox)).pad(0.01);
                 let axis = bbox.greatest_dimension();
                 polygons.sort_by(|a, b| a.1.center[axis].partial_cmp(&b.1.center[axis]).unwrap());
 
@@ -842,7 +853,7 @@ impl BspData {
         }
 
         if polygons.is_empty() {
-            BspNode::Leaf { bbox: BBox::default(), poly_list: vec![] }
+            BspNode::Leaf { bbox: BoundingBox::default(), poly_list: vec![] }
         } else {
             recalc_recurse(&mut polygons.iter().collect::<Vec<_>>())
         }
@@ -957,7 +968,7 @@ pub struct SubObject {
     pub parent: Option<ObjectId>,
     pub offset: Vec3d,
     pub geo_center: Vec3d,
-    pub bbox: BBox,
+    pub bbox: BoundingBox,
     pub name: String,
     pub properties: String,
     pub movement_type: SubsysMovementType,
@@ -1327,16 +1338,17 @@ impl Model {
                 continue;
             }
 
+            let offset = self.get_total_subobj_offset(subobj.obj_id);
             for vert in &subobj.bsp_data.verts {
-                if (*vert + subobj.offset).magnitude() > self.header.max_radius {
-                    self.header.max_radius = (*vert + subobj.offset).magnitude();
+                if (*vert + offset).magnitude() > self.header.max_radius {
+                    self.header.max_radius = (*vert + offset).magnitude();
                 }
             }
         }
     }
 
     pub fn recalc_bbox(&mut self) {
-        let mut new_bbox = self.header.bounding_box;
+        let mut new_bbox = self.header.bbox;
         new_bbox.min = Vec3d { x: -0.00001, y: -0.00001, z: -0.00001 };
         new_bbox.max = Vec3d { x: 0.00001, y: 0.00001, z: 0.00001 };
 
@@ -1345,30 +1357,33 @@ impl Model {
                 continue;
             }
 
+            let offset = self.get_total_subobj_offset(subobj.obj_id);
+            let min = offset + subobj.bbox.min;
+            let max = offset + subobj.bbox.max;
             new_bbox.min = Vec3d {
-                x: f32::min(new_bbox.min.x, subobj.bbox.min.x),
-                y: f32::min(new_bbox.min.y, subobj.bbox.min.y),
-                z: f32::min(new_bbox.min.z, subobj.bbox.min.z),
+                x: f32::min(new_bbox.min.x, min.x),
+                y: f32::min(new_bbox.min.y, min.y),
+                z: f32::min(new_bbox.min.z, min.z),
             };
 
             new_bbox.max = Vec3d {
-                x: f32::max(new_bbox.max.x, subobj.bbox.max.x),
-                y: f32::max(new_bbox.max.y, subobj.bbox.max.y),
-                z: f32::max(new_bbox.max.z, subobj.bbox.max.z),
+                x: f32::max(new_bbox.max.x, max.x),
+                y: f32::max(new_bbox.max.y, max.y),
+                z: f32::max(new_bbox.max.z, max.z),
             };
         }
 
-        self.header.bounding_box = new_bbox;
+        self.header.bbox = new_bbox;
     }
 
     pub fn recalc_mass(&mut self) {
-        self.header.mass = 4.65 * (self.header.bounding_box.volume().powf(2.0 / 3.0));
+        self.header.mass = 4.65 * (self.header.bbox.volume().powf(2.0 / 3.0));
     }
 
     pub fn recalc_moi(&mut self) {
-        let dx = self.header.bounding_box.x_width();
-        let dy = self.header.bounding_box.y_height();
-        let dz = self.header.bounding_box.z_length();
+        let dx = self.header.bbox.x_width();
+        let dy = self.header.bbox.y_height();
+        let dz = self.header.bbox.z_length();
         let mass = self.header.mass;
         self.header.moment_of_inertia.rvec = Vec3d::new(1.0 / (0.08 * mass * (dy * dy + dz * dz)), 0.0, 0.0);
         self.header.moment_of_inertia.uvec = Vec3d::new(0.0, 1.0 / (0.08 * mass * (dx * dx + dz * dz)), 0.0);

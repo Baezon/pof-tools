@@ -548,6 +548,7 @@ pub enum Error {
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub enum Warning {
     RadiusTooSmall(Option<ObjectId>),
+    BBoxTooSmall(Option<ObjectId>),
     DockingBayWithoutPath(usize),
     // path with no parent
     // thruster with no engine subsys
@@ -958,8 +959,8 @@ impl UiState {
         match &self.tree_view_selection {
             TreeSelection::Header => {
                 self.properties_panel = PropertiesPanel::Header {
-                    bbox_min_string: format!("{}", model.header.bounding_box.min),
-                    bbox_max_string: format!("{}", model.header.bounding_box.max),
+                    bbox_min_string: format!("{}", model.header.bbox.min),
+                    bbox_max_string: format!("{}", model.header.bbox.max),
                     radius_string: format!("{}", model.header.max_radius),
                     mass_string: format!("{}", model.header.mass),
                     moir_string: format!(
@@ -1240,6 +1241,13 @@ impl PofToolsGui {
                             Warning::RadiusTooSmall(id_opt) => {
                                 let str = format!(
                                     "⚠ {}'s radius does not encompass all of its geometry",
+                                    id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
+                                );
+                                ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                            }
+                            Warning::BBoxTooSmall(id_opt) => {
+                                let str = format!(
+                                    "⚠ {}'s bounding box does not encompass all of its geometry",
                                     id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
                                 );
                                 ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
@@ -1628,34 +1636,40 @@ impl PofToolsGui {
                                 self.model.recalc_radius();
                             }
 
+                            let mut bbox_changed = false;
                             ui.horizontal(|ui| {
                                 ui.label("Bounding Box:");
                                 if ui.button("Recalculate").clicked() {
                                     self.model.recalc_bbox();
                                     self.ui_state.properties_panel_dirty = true;
+                                    bbox_changed = true;
                                 }
                             });
 
                             ui.horizontal(|ui| {
                                 ui.label("Min:");
-                                UiState::model_value_edit(
+                                if UiState::model_value_edit(
                                     &mut self.ui_state.viewport_3d_dirty,
                                     ui,
-                                    false,
-                                    Some(&mut self.model.header.bounding_box.min),
+                                    self.warnings.contains(&Warning::BBoxTooSmall(None)),
+                                    Some(&mut self.model.header.bbox.min),
                                     bbox_min_string,
-                                );
+                                ) {
+                                    bbox_changed = true;
+                                }
                             });
 
                             ui.horizontal(|ui| {
                                 ui.label("Max:");
-                                UiState::model_value_edit(
+                                if UiState::model_value_edit(
                                     &mut self.ui_state.viewport_3d_dirty,
                                     ui,
-                                    false,
-                                    Some(&mut self.model.header.bounding_box.max),
+                                    self.warnings.contains(&Warning::BBoxTooSmall(None)),
+                                    Some(&mut self.model.header.bbox.max),
                                     bbox_max_string,
-                                );
+                                ) {
+                                    bbox_changed = true;
+                                }
                             });
 
                             let mut radius_changed = false;
@@ -1723,6 +1737,9 @@ impl PofToolsGui {
 
                             if radius_changed {
                                 PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::RadiusTooSmall(None)));
+                            }
+                            if bbox_changed {
+                                PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::BBoxTooSmall(None)));
                             }
                         }
                         PropertiesPanel::SubObject {
@@ -1800,35 +1817,45 @@ impl PofToolsGui {
 
                             ui.add_space(5.0);
 
+                            let mut bbox_changed = false;
                             ui.horizontal(|ui| {
                                 ui.label("Bounding Box:");
                                 if ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate")).clicked() {
                                     self.model.sub_objects[selected_id.unwrap()].recalc_bbox();
                                     self.ui_state.properties_panel_dirty = true;
+                                    bbox_changed = true;
                                 }
                             });
 
                             ui.horizontal(|ui| {
                                 ui.label("Min:");
-                                UiState::model_value_edit(
+                                if UiState::model_value_edit(
                                     &mut self.ui_state.viewport_3d_dirty,
                                     ui,
                                     false,
                                     selected_id.map(|id| &mut self.model.sub_objects[id].bbox.min),
                                     bbox_min_string,
-                                );
+                                ) {
+                                    bbox_changed = true;
+                                }
                             });
 
                             ui.horizontal(|ui| {
                                 ui.label("Max:");
-                                UiState::model_value_edit(
+                                if UiState::model_value_edit(
                                     &mut self.ui_state.viewport_3d_dirty,
                                     ui,
                                     false,
                                     selected_id.map(|id| &mut self.model.sub_objects[id].bbox.max),
                                     bbox_max_string,
-                                );
+                                ) {
+                                    bbox_changed = true;
+                                }
                             });
+
+                            if bbox_changed {
+                                PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::BBoxTooSmall(selected_id)));
+                            }
 
                             ui.label("Offset:");
                             UiState::model_value_edit(
@@ -2639,6 +2666,7 @@ impl PofToolsGui {
         if let One(warning) = warning_to_check {
             let failed_check = match warning {
                 Warning::RadiusTooSmall(subobj_opt) => PofToolsGui::radius_test_failed(model, subobj_opt),
+                Warning::BBoxTooSmall(subobj_opt) => PofToolsGui::bbox_test_failed(model, subobj_opt),
                 Warning::DockingBayWithoutPath(bay_num) => model.docking_bays[bay_num].path.is_none(),
             };
 
@@ -2654,10 +2682,18 @@ impl PofToolsGui {
             if PofToolsGui::radius_test_failed(model, None) {
                 warnings.insert(Warning::RadiusTooSmall(None));
             }
-
             for subobj in &model.sub_objects {
                 if PofToolsGui::radius_test_failed(model, Some(subobj.obj_id)) {
                     warnings.insert(Warning::RadiusTooSmall(Some(subobj.obj_id)));
+                }
+            }
+
+            if PofToolsGui::bbox_test_failed(model, None) {
+                warnings.insert(Warning::BBoxTooSmall(None));
+            }
+            for subobj in &model.sub_objects {
+                if PofToolsGui::bbox_test_failed(model, Some(subobj.obj_id)) {
+                    warnings.insert(Warning::BBoxTooSmall(Some(subobj.obj_id)));
                 }
             }
 
@@ -2669,7 +2705,7 @@ impl PofToolsGui {
         }
     }
 
-    // tests if the radius for a subobjects or the header is too small for its geometry
+    // tests if the radius for a subobject or the header is too small for its geometry
     // None means the header/entire model's radius
     fn radius_test_failed(model: &Model, subobj_opt: Option<ObjectId>) -> bool {
         if let Some(subobj) = subobj_opt {
@@ -2691,6 +2727,34 @@ impl PofToolsGui {
                 let offset = model.get_total_subobj_offset(subobj.obj_id);
                 for vert in &subobj.bsp_data.verts {
                     if (*vert + offset).magnitude() > radius_with_margin {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    // tests if the bbox for a subobject or the header is too small for its geometry
+    // None means the header/entire model's radius
+    fn bbox_test_failed(model: &Model, subobj_opt: Option<ObjectId>) -> bool {
+        if let Some(subobj) = subobj_opt {
+            let subobj = &model.sub_objects[subobj];
+            for vert in &subobj.bsp_data.verts {
+                if !subobj.bbox.contains(*vert) {
+                    return true;
+                }
+            }
+        } else {
+            for subobj in &model.sub_objects {
+                // we dont care about subobjects which aren't part of the detail0 hierarchy
+                if !model.header.detail_levels.is_empty() && !model.is_obj_id_ancestor(subobj.obj_id, model.header.detail_levels[0]) {
+                    continue;
+                }
+
+                for vert in &subobj.bsp_data.verts {
+                    if !model.header.bbox.contains(*vert) {
                         return true;
                     }
                 }

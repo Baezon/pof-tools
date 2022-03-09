@@ -1,13 +1,13 @@
-//! Example how to use [epi::NativeTexture] with glium.
+#![windows_subsystem = "windows"]
 use native_dialog::FileDialog;
-use std::{collections::HashMap, ffi::OsStr, fs::File, io::Write, path::PathBuf, sync::mpsc::TryRecvError};
+use std::{collections::HashMap, fs::File, path::PathBuf, sync::mpsc::TryRecvError};
 
 //use egui::{FontFamily, TextStyle};
 use glium::{
     glutin::{self, event::WindowEvent, platform::windows::WindowBuilderExtWindows, window::Icon},
     BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer,
 };
-use pof::{BspNode, Insignia, Model, ObjVec, ObjectId, Parser, ShieldData, SubObject, TextureId, Texturing, Vec3d};
+use pof::{Insignia, Model, ObjVec, ObjectId, Parser, ShieldData, SubObject, TextureId, Texturing, Vec3d};
 extern crate nalgebra_glm as glm;
 
 mod sphere;
@@ -454,6 +454,7 @@ fn main() {
 
     event_loop.run(move |event, _, control_flow| {
         let mut redraw = || {
+            // handle whether the thread which handles loading has responded (if it exists)
             if let Some(thread) = &pt_gui.loading_thread {
                 let response = thread.try_recv();
                 match response {
@@ -500,7 +501,7 @@ fn main() {
                 let model = &pt_gui.model;
 
                 // handle user interactions like rotating the camera
-                let rect = egui.egui_ctx.available_rect();
+                let rect = egui.egui_ctx.available_rect(); // the rectangle not covered by egui UI, i.e. the 3d viewport
                 let input = egui.egui_ctx.input();
                 if rect.is_positive() {
                     let mouse_pos = input.pointer.hover_pos();
@@ -851,26 +852,33 @@ fn get_list_of_display_subobjects(model: &Model, tree_selection: &TreeSelection)
 
     // if they have something selected...
     if let TreeSelection::SubObjects(SubObjectSelection::SubObject(selected_id)) = *tree_selection {
-        // first lets see if they a have a detail level (or a child of it) selected
-        let mut detail_selected = None;
-        for detail_level in &model.header.detail_levels {
-            if model.is_obj_id_ancestor(selected_id, *detail_level) {
-                detail_selected = Some(*detail_level);
+        //find the top level parent of the currently subobject
+        let mut top_level_parent = selected_id;
+        loop {
+            if let Some(id) = model.sub_objects[top_level_parent].parent {
+                top_level_parent = id;
+            } else {
+                break;
             }
         }
 
-        // if so, display it and all its children
-        if let Some(detail_level) = detail_selected {
-            for (i, sub_object) in model.sub_objects.iter().enumerate() {
-                out.0[i] = model.is_obj_id_ancestor(sub_object.obj_id, detail_level) && !sub_object.is_destroyed_model();
+        fn display_subobject_recursive(display_subobjects: &mut ObjVec<bool>, subobjects: &ObjVec<SubObject>, id: ObjectId) {
+            display_subobjects[id] = true;
+
+            for child_id in &subobjects[id].children {
+                if !subobjects[*child_id].is_destroyed_model() {
+                    display_subobject_recursive(display_subobjects, subobjects, *child_id);
+                }
             }
-        } else if model.sub_objects[selected_id].is_debris_model {
-            // if they have debris selected show all the debris
+        }
+
+        display_subobject_recursive(&mut out, &model.sub_objects, top_level_parent);
+
+        // if they have debris selected show all the debris
+        if model.sub_objects[selected_id].is_debris_model {
             for (i, sub_object) in model.sub_objects.iter().enumerate() {
                 out.0[i] = sub_object.is_debris_model;
             }
-        } else {
-            out[selected_id] = true
         }
     } else if let TreeSelection::Insignia(InsigniaSelection::Insignia(idx)) = *tree_selection {
         // show the LOD objects according to the detail level of the currently selected insignia

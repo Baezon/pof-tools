@@ -35,6 +35,7 @@ id_type! {NormalId, u16}
 id_type! {PolygonId, u32}
 id_type! {PathId, u32}
 
+// like a regular vector, but indexed with ObjectIds only, for some safety
 #[derive(Debug)]
 pub struct ObjVec<T>(pub Vec<T>);
 impl<T> Index<ObjectId> for ObjVec<T> {

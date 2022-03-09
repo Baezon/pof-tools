@@ -355,8 +355,8 @@ impl Model {
 
             write_chunk(w, b"SLC2", shield_data.collision_tree.as_ref())?;
         }
-        if self.auto_center != Vec3d::default() {
-            write_chunk(w, b"ACEN", Some(&self.auto_center))?;
+        if self.visual_center != Vec3d::default() {
+            write_chunk(w, b"ACEN", Some(&self.visual_center))?;
         }
 
         Ok(())
@@ -606,10 +606,10 @@ fn make_eyes_node(eye_points: &Vec<EyePoint>) -> Node {
     node
 }
 
-fn make_auto_center_node(auto_center: &Vec3d) -> Node {
-    let mut node = Node::new(format!("#auto-center"), Some(format!("#auto-center")));
+fn make_visual_center_node(visual_center: &Vec3d) -> Node {
+    let mut node = Node::new(format!("#visual-center"), Some(format!("#visual-center")));
 
-    node.push_transform(Translate::new([auto_center.x, auto_center.z, auto_center.y]));
+    node.push_transform(Translate::new([visual_center.x, visual_center.z, visual_center.y]));
 
     node
 }
@@ -945,8 +945,8 @@ impl Model {
             nodes.push(make_eyes_node(&self.eye_points));
         }
 
-        if !self.auto_center.is_null() {
-            nodes.push(make_auto_center_node(&self.auto_center));
+        if !self.visual_center.is_null() {
+            nodes.push(make_visual_center_node(&self.visual_center));
         }
 
         let mut doc = Document::create_now();

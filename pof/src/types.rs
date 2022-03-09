@@ -1172,7 +1172,7 @@ pub struct Model {
     pub turrets: Vec<Turret>,
     pub thruster_banks: Vec<ThrusterBank>,
     pub glow_banks: Vec<GlowPointBank>,
-    pub auto_center: Vec3d,
+    pub visual_center: Vec3d,
     pub comments: String,
     pub docking_bays: Vec<Dock>,
     pub insignias: Vec<Insignia>,

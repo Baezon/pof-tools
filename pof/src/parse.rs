@@ -59,7 +59,7 @@ impl<R: Read + Seek> Parser<R> {
         let mut dock_points = None;
         let mut glow_banks = None;
         let mut insignias = None;
-        let mut auto_center = None;
+        let mut visual_center = None;
         let mut shield_data = None;
 
         let mut shield_tree_chunk = None;
@@ -292,8 +292,8 @@ impl<R: Read + Seek> Parser<R> {
                     //println!("{:#?}", glow_banks);
                 }
                 b"ACEN" => {
-                    assert!(auto_center.is_none());
-                    auto_center = Some(self.read_vec3d()?);
+                    assert!(visual_center.is_none());
+                    visual_center = Some(self.read_vec3d()?);
                 }
                 b"DOCK" => {
                     assert!(dock_points.is_none());
@@ -438,7 +438,7 @@ impl<R: Read + Seek> Parser<R> {
             docking_bays: dock_points.unwrap_or_default(),
             insignias: insignias.unwrap_or_default(),
             glow_banks: glow_banks.unwrap_or_default(),
-            auto_center: auto_center.unwrap_or_default(),
+            visual_center: visual_center.unwrap_or_default(),
             shield_data,
             filename,
         })
@@ -1040,7 +1040,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
     let mut eye_points = vec![];
     let mut insignias = vec![];
     let mut turrets = vec![];
-    let mut auto_center = Vec3d::ZERO;
+    let mut visual_center = Vec3d::ZERO;
 
     for node in &scene.nodes {
         let transform = node.transform_as_matrix();
@@ -1349,9 +1349,9 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
 
                     eye_points.push(new_point);
                 }
-            } else if name == "#auto-center" {
+            } else if name == "#visual-center" {
                 let (pos, _, _) = dae_parse_point(node);
-                auto_center = pos;
+                visual_center = pos;
             }
         }
     }
@@ -1384,7 +1384,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
         turrets,
         thruster_banks,
         glow_banks,
-        auto_center,
+        visual_center,
         comments: Default::default(),
         docking_bays,
         insignias,

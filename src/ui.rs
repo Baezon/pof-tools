@@ -114,7 +114,7 @@ enum PropertiesPanel {
         normal_string: String,
         attached_subobj_idx: usize,
     },
-    AutoCenter {
+    VisualCenter {
         position: String,
     },
     Comments,
@@ -252,7 +252,7 @@ pub(crate) enum TreeSelection {
     Shield,
     EyePoints(EyeSelection),
     Insignia(InsigniaSelection),
-    AutoCenter,
+    VisualCenter,
     Comments,
 }
 impl Default for TreeSelection {
@@ -578,6 +578,7 @@ pub(crate) struct PofToolsGui {
     pub camera_pitch: f32,
     pub camera_heading: f32,
     pub camera_scale: f32,
+    pub camera_offset: Vec3d,
 
     pub buffer_objects: Vec<GlBufferedObject>, // all the subobjects, conditionally rendered based on the current tree selection
     pub buffer_shield: Option<GlBufferedShield>, // the shield, similar to the above
@@ -1155,7 +1156,7 @@ impl UiState {
                 _ => self.properties_panel = PropertiesPanel::default_eye(),
             },
             TreeSelection::Shield => self.properties_panel = PropertiesPanel::Shield, // nothing mutable to refresh! woohoo!'
-            TreeSelection::AutoCenter => self.properties_panel = PropertiesPanel::AutoCenter { position: format!("{}", model.auto_center) },
+            TreeSelection::VisualCenter => self.properties_panel = PropertiesPanel::VisualCenter { position: format!("{}", model.visual_center) },
             TreeSelection::Comments => self.properties_panel = PropertiesPanel::Comments,
         }
     }
@@ -1578,7 +1579,7 @@ impl PofToolsGui {
                     );
 
                     self.ui_state
-                        .tree_selectable_item(&self.model, ui, "Auto-Center", TreeSelection::AutoCenter);
+                        .tree_selectable_item(&self.model, ui, "Visual Center", TreeSelection::VisualCenter);
 
                     self.ui_state.tree_selectable_item(&self.model, ui, "Comments", TreeSelection::Comments);
                 });
@@ -2595,10 +2596,13 @@ impl PofToolsGui {
                                 self.ui_state.viewport_3d_dirty = true;
                             }
                         }
-                        PropertiesPanel::AutoCenter { position } => {
-                            ui.heading("Auto-Center");
+                        PropertiesPanel::VisualCenter { position } => {
+                            ui.heading("Visual Center");
                             ui.separator();
-                            if UiState::parsable_text_edit(ui, &mut self.model.auto_center, position) {
+
+                            ui.label("The visual center is treated as the center for things like the targeting box, or tech room.");
+
+                            if UiState::parsable_text_edit(ui, &mut self.model.visual_center, position) {
                                 self.viewport_3d_dirty = true;
                             }
                         }

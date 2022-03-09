@@ -371,6 +371,7 @@ impl PofToolsGui {
         self.ui_state.refresh_properties_panel(&self.model);
         self.camera_heading = 2.7;
         self.camera_pitch = -0.4;
+        self.camera_offset = Vec3d::ZERO;
         self.camera_scale = self.model.header.max_radius * 2.0;
         display
             .gl_window()
@@ -450,6 +451,7 @@ fn main() {
 
     pt_gui.camera_heading = 2.7;
     pt_gui.camera_pitch = -0.4;
+    pt_gui.camera_offset = Vec3d::ZERO;
     pt_gui.camera_scale = model.header.max_radius * 2.0;
 
     event_loop.run(move |event, _, control_flow| {
@@ -500,6 +502,9 @@ fn main() {
 
                 let model = &pt_gui.model;
 
+                let mut view_mat = glm::rotation(pt_gui.camera_pitch, &glm::vec3(1., 0., 0.)); // pitch
+                view_mat *= glm::rotation(pt_gui.camera_heading, &glm::vec3(0., 1., 0.)); // heading
+
                 // handle user interactions like rotating the camera
                 let rect = egui.egui_ctx.available_rect(); // the rectangle not covered by egui UI, i.e. the 3d viewport
                 let input = egui.egui_ctx.input();
@@ -508,41 +513,29 @@ fn main() {
                     let last_click_pos = input.pointer.press_origin();
                     let in_3d_viewport = mouse_pos.map_or(false, |hover_pos| rect.contains(hover_pos));
                     let clicked_in_3d_viewport = last_click_pos.map_or(false, |hover_pos| rect.contains(hover_pos));
-                    if clicked_in_3d_viewport && input.pointer.button_down(egui::PointerButton::Secondary) {
-                        pt_gui.camera_heading += input.pointer.delta().x * -0.01;
-                        pt_gui.camera_pitch += input.pointer.delta().y * -0.01;
+                    if clicked_in_3d_viewport {
+                        if !input.modifiers.shift && input.pointer.button_down(egui::PointerButton::Secondary) {
+                            pt_gui.camera_heading += input.pointer.delta().x * -0.01;
+                            pt_gui.camera_pitch += input.pointer.delta().y * -0.01;
+                        }
+                        if input.pointer.button_down(egui::PointerButton::Middle)
+                            || input.modifiers.shift && input.pointer.button_down(egui::PointerButton::Secondary)
+                        {
+                            let x = input.pointer.delta().x * -0.005 * pt_gui.camera_scale; // for some reason x gets inverted
+                            let y = input.pointer.delta().y * 0.005 * pt_gui.camera_scale;
+
+                            pt_gui.camera_offset += view_mat.transpose().transform_vector(&glm::vec3(x, y, 0.)).into();
+                        }
                     }
                     if in_3d_viewport {
                         pt_gui.camera_scale *= 1.0 + (input.scroll_delta.y * -0.001)
                     }
                 }
 
-                // set up the camera matrix
-                let perspective_matrix = {
-                    let (width, height) = target.get_dimensions();
-                    let aspect_ratio = height as f32 / width as f32;
+                view_mat.append_translation_mut(&glm::vec3(0.0, 0.0, pt_gui.camera_scale));
 
-                    let fov: f32 = 3.141592 / 3.0;
-                    let zfar = (model.header.max_radius + pt_gui.camera_scale) * 2.0;
-                    let znear = (model.header.max_radius + pt_gui.camera_scale) / 1000.;
-
-                    let f = 1.0 / (fov / 2.0).tan();
-
-                    [
-                        [f * aspect_ratio, 0.0, 0.0, 0.0],
-                        [0.0, f, 0.0, 0.0],
-                        [0.0, 0.0, (zfar + znear) / (zfar - znear), 1.0],
-                        [0.0, 0.0, -(2.0 * zfar * znear) / (zfar - znear), 0.0],
-                    ]
-                };
-
-                let mut view_mat = glm::translation(&glm::vec3(0.0, 0.0, pt_gui.camera_scale));
-
-                let light_vec = glm::vec3(0.5, 1.0, -1.0);
-
-                view_mat *= glm::rotation(pt_gui.camera_pitch, &glm::vec3(1., 0., 0.)); // pitch
-                view_mat *= glm::rotation(pt_gui.camera_heading, &glm::vec3(0., 1., 0.)); // heading
-                view_mat.prepend_translation_mut(&glm::vec3(-model.auto_center.x, -model.auto_center.y, -model.auto_center.z));
+                view_mat.prepend_translation_mut(&glm::vec3(-pt_gui.camera_offset.x, -pt_gui.camera_offset.y, -pt_gui.camera_offset.z));
+                view_mat.prepend_translation_mut(&glm::vec3(-model.visual_center.x, -model.visual_center.y, -model.visual_center.z));
 
                 let view_mat: [[f32; 4]; 4] = view_mat.into(); // the final matrix used by the graphics
 
@@ -571,7 +564,7 @@ fn main() {
                     | TreeSelection::Turrets(_)
                     | TreeSelection::Paths(_)
                     | TreeSelection::EyePoints(_)
-                    | TreeSelection::AutoCenter => {
+                    | TreeSelection::VisualCenter => {
                         light_color = [0.3, 0.3, 0.3f32];
                         if pt_gui.wireframe_enabled {
                             dark_color = [0.05, 0.05, 0.05f32];
@@ -579,6 +572,27 @@ fn main() {
                     }
                     _ => light_color = [0.9, 0.9, 0.9f32],
                 }
+
+                // set up the camera matrix
+                let perspective_matrix = {
+                    let (width, height) = target.get_dimensions();
+                    let aspect_ratio = height as f32 / width as f32;
+
+                    let fov: f32 = 3.141592 / 3.0;
+                    let zfar = (model.header.max_radius + pt_gui.camera_scale) * 2.0;
+                    let znear = (model.header.max_radius + pt_gui.camera_scale) / 1000.;
+
+                    let f = 1.0 / (fov / 2.0).tan();
+
+                    [
+                        [f * aspect_ratio, 0.0, 0.0, 0.0],
+                        [0.0, f, 0.0, 0.0],
+                        [0.0, 0.0, (zfar + znear) / (zfar - znear), 1.0],
+                        [0.0, 0.0, -(2.0 * zfar * znear) / (zfar - znear), 0.0],
+                    ]
+                };
+
+                let light_vec = glm::vec3(0.5, 1.0, -1.0);
 
                 // draw the actual subobjects of the model
                 for buffer_obj in &pt_gui.buffer_objects {
@@ -741,7 +755,7 @@ fn main() {
                     | TreeSelection::Turrets(_)
                     | TreeSelection::Paths(_)
                     | TreeSelection::EyePoints(_)
-                    | TreeSelection::AutoCenter => {
+                    | TreeSelection::VisualCenter => {
                         // draw lollipops!
                         for lollipop_group in &pt_gui.lollipops {
                             if let TreeSelection::Paths(_) = &pt_gui.ui_state.tree_view_selection {
@@ -1232,18 +1246,18 @@ impl PofToolsGui {
                     }),
                 );
             }
-            TreeSelection::AutoCenter => {
+            TreeSelection::VisualCenter => {
                 let size = 0.02 * model.header.max_radius;
 
                 let mut lollipop_origin = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_BANK_COLOR);
                 lollipop_origin.push(Vec3d::ZERO, Vec3d::ZERO, size);
                 let lollipop_origin = lollipop_origin.finish(&display);
 
-                let mut lollipop_auto_center = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_POINT_COLOR);
-                lollipop_auto_center.push(model.auto_center, Vec3d::ZERO, size);
-                let lollipop_auto_center = lollipop_auto_center.finish(&display);
+                let mut lollipop_visual_center = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_POINT_COLOR);
+                lollipop_visual_center.push(model.visual_center, Vec3d::ZERO, size);
+                let lollipop_visual_center = lollipop_visual_center.finish(&display);
 
-                self.lollipops = vec![lollipop_origin, lollipop_auto_center];
+                self.lollipops = vec![lollipop_origin, lollipop_visual_center];
             }
             _ => {}
         }

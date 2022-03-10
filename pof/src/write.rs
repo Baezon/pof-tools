@@ -150,9 +150,10 @@ impl Fixup {
         buf.write_u32::<LE>(0)?;
         Ok(Self { location: n, base })
     }
-    fn finish(self, buf: &mut Vec<u8>) {
+    fn finish(self, buf: &mut Vec<u8>) -> u32 {
         let size = (buf.len() - self.base) as u32;
-        buf[self.location..][..4].copy_from_slice(&u32::to_le_bytes(size))
+        buf[self.location..][..4].copy_from_slice(&u32::to_le_bytes(size));
+        size
     }
 }
 
@@ -219,11 +220,12 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, bsp_data: &BspData) -> io::Resul
 
                     chunk_size_pointer.finish(buf);
                 }
-
-                buf.write_u32::<LE>(BspData::ENDOFBRANCH)?;
-                buf.write_u32::<LE>(0)?;
             }
         }
+
+        buf.write_u32::<LE>(BspData::ENDOFBRANCH)?;
+        buf.write_u32::<LE>(0)?;
+
         Ok(())
     }
 
@@ -388,7 +390,8 @@ fn make_properties_node(properties: &String, id: String) -> Node {
 
     for substr in properties.split("\n") {
         node.children
-            .push(Node::new(format!("#{}:{}", id, substr), Some(format!("{}:{}", id, substr))));
+            .push(Node::new(format!("#{}:{}", id, substr), Some(format!("{}:{}", id, substr.trim_end()))));
+        // trailing spaces can mess up parsing, so remove them
     }
 
     node

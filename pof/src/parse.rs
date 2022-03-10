@@ -1100,6 +1100,8 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                     if let Ok(level) = name[(idx + 6)..].parse::<usize>() {
                         if level >= details.len() {
                             details.resize(level + 1, obj_id);
+                        } else {
+                            details[level] = obj_id;
                         }
                         detail_level = Some(level as u32);
                     }
@@ -1368,6 +1370,11 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
         // this is pretty bad, but not having any detail levels is worse
     }
 
+    let mut textures = vec![String::new(); material_map.len()];
+    for (tex, id) in material_map {
+        textures[id.0 as usize] = tex.strip_suffix("-material").unwrap_or(tex).to_string();
+    }
+
     let mut model = Model {
         header: ObjHeader {
             num_subobjects: sub_objects.len() as _,
@@ -1375,7 +1382,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
             ..Default::default()
         },
         sub_objects,
-        textures: material_map.into_iter().map(|(tex, _)| tex.to_string()).collect(),
+        textures,
         paths,
         special_points,
         eye_points,

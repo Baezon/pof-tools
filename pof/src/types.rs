@@ -206,9 +206,9 @@ impl Vec3d {
     pub fn magnitude(self) -> f32 {
         f32::sqrt(self.x * self.x + self.y * self.y + self.z * self.z)
     }
-    pub fn normalize(mut self) {
+    pub fn normalize(self) -> Vec3d {
         let mag = self.magnitude();
-        self *= 1.0 / mag;
+        self * (1.0 / mag)
     }
     pub fn is_null(self) -> bool {
         self.x.abs() <= 0.000001 && self.y.abs() <= 0.000001 && self.z.abs() <= 0.000001
@@ -825,10 +825,34 @@ impl BspData {
 }
 impl BspData {
     pub fn recalculate(verts: &Vec<Vec3d>, polygons: impl Iterator<Item = Polygon>) -> BspNode {
+        // first go over the polygons, filling some data, and exporting their bboxes, which is important for the actual BSP generation
         let polygons = polygons
             .map(|mut poly| {
                 let vert_iter = poly.verts.iter().map(|polyvert| verts[polyvert.vertex_id.0 as usize]);
+
                 poly.center = Vec3d::average(vert_iter.clone());
+
+                // generate the normal by averaging the cross products of adjacent edges
+                let mut glm_verts = vert_iter.clone().map(|vert| glm::Vec3::from(vert)); // first convert to glm vectors
+                poly.normal = if poly.verts.len() == 3 {
+                    // optimize a bit for for triangles, which we'll have a lot of
+                    if let [Some(a), Some(b), Some(c)] = [glm_verts.next(), glm_verts.next(), glm_verts.next()] {
+                        (a - b).cross(&(b - c)).into()
+                    } else {
+                        unreachable!()
+                    }
+                } else {
+                    Vec3d::average(
+                        glm_verts
+                            .cycle() // cycle through the verts indefinitely...
+                            .take(poly.verts.len() + 2) // ..but stop 2 after the end...
+                            .collect::<Vec<_>>()
+                            .windows(3) //...so with windows(3) we get 1,2,3 -> 2,3,1 -> 3,1,2 (for an example with 3 verts)
+                            .map(|verts| (verts[0] - verts[1]).cross(&(verts[1] - verts[2])).into()), // ...and then get the cross from each triple, and average them
+                    )
+                }
+                .normalize(); // and then normalize
+
                 (BoundingBox::from_vectors(vert_iter).pad(0.01), poly)
             })
             .collect::<Vec<_>>();
@@ -1308,8 +1332,7 @@ impl Model {
         let norm_matrix = matrix.try_inverse().unwrap().transpose();
 
         for norm in &mut subobj.bsp_data.norms {
-            *norm = &norm_matrix * *norm;
-            norm.normalize();
+            *norm = (&norm_matrix * *norm).normalize();
         }
 
         subobj.bsp_data.collision_tree.recalculate_bboxes(&subobj.bsp_data.verts);

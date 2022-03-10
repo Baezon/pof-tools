@@ -10,7 +10,7 @@ use std::{collections::BTreeSet, str::FromStr, sync::mpsc::Receiver};
 use eframe::egui::{self, Button, TextStyle, Ui};
 use pof::ObjectId;
 
-use crate::{GlBufferedInsignia, GlBufferedObject, GlBufferedShield, GlLollipops};
+use crate::{GlBufferedInsignia, GlBufferedObject, GlBufferedShield, GlLollipops, POF_TOOLS_VERISON};
 
 #[derive(PartialEq)]
 enum TransformType {
@@ -562,6 +562,7 @@ pub enum Warning {
 pub(crate) struct UiState {
     pub tree_view_selection: TreeSelection,
     pub viewport_3d_dirty: bool,
+    pub last_selected_subobj: ObjectId,
     properties_panel: PropertiesPanel,
     properties_panel_dirty: bool,
 }
@@ -569,9 +570,10 @@ pub(crate) struct UiState {
 #[derive(Default)]
 pub(crate) struct PofToolsGui {
     pub model: Box<Model>,
+    pub loading_thread: Option<Receiver<Option<Box<Model>>>>,
+
     pub ui_state: UiState,
     pub wireframe_enabled: bool,
-    pub loading_thread: Option<Receiver<Option<Box<Model>>>>,
     pub warnings: BTreeSet<Warning>,
     pub errors: BTreeSet<Error>,
 
@@ -630,6 +632,13 @@ impl UiState {
         if ui.selectable_value(&mut self.tree_view_selection, selection, name).clicked() {
             self.refresh_properties_panel(model);
             self.viewport_3d_dirty = true;
+
+            // maybe update ast selected object
+            if let TreeSelection::SubObjects(SubObjectSelection::SubObject(id)) = self.tree_view_selection {
+                self.last_selected_subobj = id;
+            } else if let TreeSelection::SubObjects(SubObjectSelection::Header) | TreeSelection::Header = self.tree_view_selection {
+                self.last_selected_subobj = model.header.detail_levels[0];
+            }
         }
     }
 
@@ -643,6 +652,13 @@ impl UiState {
             self.tree_view_selection = tree_value;
             self.refresh_properties_panel(model);
             self.viewport_3d_dirty = true;
+
+            // maybe update last selected object
+            if let TreeSelection::SubObjects(SubObjectSelection::SubObject(id)) = self.tree_view_selection {
+                self.last_selected_subobj = id;
+            } else if let TreeSelection::SubObjects(SubObjectSelection::Header) | TreeSelection::Header = self.tree_view_selection {
+                self.last_selected_subobj = model.header.detail_levels[0];
+            }
         }
     }
 
@@ -1185,7 +1201,14 @@ impl PofToolsGui {
                     .on_disabled_hover_text("All errors must be corrected before saving.")
                     .clicked()
                 {
-                    PofToolsGui::save_model(&self.model);
+                    let new_filename = PofToolsGui::save_model(&self.model);
+                    if let Some(filename) = new_filename {
+                        display
+                            .gl_window()
+                            .window()
+                            .set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERISON, filename));
+                        self.model.filename = filename;
+                    }
                 }
 
                 ui.separator();
@@ -1910,7 +1933,7 @@ impl PofToolsGui {
                                 self.model.sub_objects[selected_id.unwrap()].movement_axis = *rot_axis;
                             }
 
-                            // DEBUG - prints total bsp node bbox volume at all depths (divided by actual top-levle bbox volume so literla size doesn't matter)
+                            // DEBUG - prints total bsp node bbox volume at all depths (divided by actual top-level bbox volume so literal size doesn't matter)
                             // Theoretically should be a decent metric for BSP tree efficiency; lower = better
                             //
                             // if ui.button("avg depth").clicked() {

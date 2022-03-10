@@ -1,4 +1,4 @@
-#![windows_subsystem = "windows"]
+//#![windows_subsystem = "windows"]
 use native_dialog::FileDialog;
 use std::{collections::HashMap, fs::File, path::PathBuf, sync::mpsc::TryRecvError};
 
@@ -274,7 +274,8 @@ pub struct Normal {
 glium::implement_vertex!(Normal, normal);
 
 impl PofToolsGui {
-    fn save_model(model: &Model) {
+    fn save_model(model: &Model) -> Option<String> {
+        let mut out = None;
         // use a scoped thread here, its ok to block the main window for now i guess
         crossbeam::thread::scope(|s| {
             s.spawn(|_| {
@@ -290,11 +291,13 @@ impl PofToolsGui {
                         } else {
                             model.write(&mut file).unwrap();
                         }
+                        out = Some(path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string());
                     }
                 }
             });
         })
         .unwrap();
+        out
     }
 
     // opens a thread which opens the dialog and starts parsing a model
@@ -373,6 +376,7 @@ impl PofToolsGui {
         self.camera_pitch = -0.4;
         self.camera_offset = Vec3d::ZERO;
         self.camera_scale = self.model.header.max_radius * 2.0;
+        self.ui_state.last_selected_subobj = self.model.header.detail_levels[0];
         display
             .gl_window()
             .window()
@@ -539,7 +543,8 @@ fn main() {
 
                 let view_mat: [[f32; 4]; 4] = view_mat.into(); // the final matrix used by the graphics
 
-                let displayed_subobjects = get_list_of_display_subobjects(model, &pt_gui.ui_state.tree_view_selection);
+                let displayed_subobjects =
+                    get_list_of_display_subobjects(model, &pt_gui.ui_state.tree_view_selection, pt_gui.ui_state.last_selected_subobj);
 
                 // brighten up the dark bits so wireframe is easier to see
                 let mut dark_color;
@@ -861,13 +866,22 @@ fn main() {
 
 // based on the current selection which submodels should be displayed
 // TODO show destroyed models
-fn get_list_of_display_subobjects(model: &Model, tree_selection: &TreeSelection) -> ObjVec<bool> {
+fn get_list_of_display_subobjects(model: &Model, tree_selection: &TreeSelection, last_selected_subobj: ObjectId) -> ObjVec<bool> {
     let mut out = ObjVec(vec![false; model.sub_objects.len()]);
 
-    // if they have something selected...
-    if let TreeSelection::SubObjects(SubObjectSelection::SubObject(selected_id)) = *tree_selection {
+    if model.sub_objects.is_empty() {
+        return out;
+    }
+
+    if let TreeSelection::Insignia(InsigniaSelection::Insignia(idx)) = *tree_selection {
+        // show the LOD objects according to the detail level of the currently selected insignia
+        for (i, sub_object) in model.sub_objects.iter().enumerate() {
+            out.0[i] = model.is_obj_id_ancestor(sub_object.obj_id, model.header.detail_levels[model.insignias[idx].detail_level as usize])
+                && !sub_object.is_destroyed_model();
+        }
+    } else {
         //find the top level parent of the currently subobject
-        let mut top_level_parent = selected_id;
+        let mut top_level_parent = last_selected_subobj;
         loop {
             if let Some(id) = model.sub_objects[top_level_parent].parent {
                 top_level_parent = id;
@@ -889,26 +903,9 @@ fn get_list_of_display_subobjects(model: &Model, tree_selection: &TreeSelection)
         display_subobject_recursive(&mut out, &model.sub_objects, top_level_parent);
 
         // if they have debris selected show all the debris
-        if model.sub_objects[selected_id].is_debris_model {
+        if model.sub_objects[last_selected_subobj].is_debris_model {
             for (i, sub_object) in model.sub_objects.iter().enumerate() {
                 out.0[i] = sub_object.is_debris_model;
-            }
-        }
-    } else if let TreeSelection::Insignia(InsigniaSelection::Insignia(idx)) = *tree_selection {
-        // show the LOD objects according to the detail level of the currently selected insignia
-        for (i, sub_object) in model.sub_objects.iter().enumerate() {
-            out.0[i] = model.is_obj_id_ancestor(sub_object.obj_id, model.header.detail_levels[model.insignias[idx].detail_level as usize])
-                && !sub_object.is_destroyed_model();
-        }
-    } else {
-        // initialize to all the detail0 children by default
-        for (i, sub_object) in model.sub_objects.iter().enumerate() {
-            if model.header.detail_levels.is_empty() {
-                // wut, no detail levels? ok just show only the currently selected one...
-                out.0[i] = sub_object.obj_id == ObjectId(0);
-            } else {
-                let detail0 = model.header.detail_levels[0];
-                out.0[i] = model.is_obj_id_ancestor(sub_object.obj_id, detail0) && !sub_object.is_destroyed_model();
             }
         }
     }

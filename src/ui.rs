@@ -567,13 +567,14 @@ pub(crate) struct UiState {
     properties_panel_dirty: bool,
 }
 
-#[derive(Default)]
 pub(crate) struct PofToolsGui {
     pub model: Box<Model>,
     pub loading_thread: Option<Receiver<Option<Box<Model>>>>,
+    pub glow_point_sim_start: std::time::Instant,
 
     pub ui_state: UiState,
     pub wireframe_enabled: bool,
+    pub glow_point_simulation: bool,
     pub warnings: BTreeSet<Warning>,
     pub errors: BTreeSet<Error>,
 
@@ -600,6 +601,26 @@ impl std::ops::DerefMut for PofToolsGui {
     }
 }
 impl PofToolsGui {
+    pub fn new() -> Self {
+        Self {
+            model: Default::default(),
+            loading_thread: Default::default(),
+            glow_point_sim_start: std::time::Instant::now(),
+            ui_state: Default::default(),
+            wireframe_enabled: Default::default(),
+            glow_point_simulation: Default::default(),
+            warnings: Default::default(),
+            errors: Default::default(),
+            camera_pitch: Default::default(),
+            camera_heading: Default::default(),
+            camera_scale: Default::default(),
+            camera_offset: Default::default(),
+            buffer_objects: Default::default(),
+            buffer_shield: Default::default(),
+            buffer_insignias: Default::default(),
+            lollipops: Default::default(),
+        }
+    }
     // fn warnings_contains_any_subobj_radius_too_small(&self) -> bool {
     //     matches!(self.warnings.range(Warning::RadiusTooSmall(Some(ObjectId(0)))..).next(), Some(Warning::RadiusTooSmall(Some(_))))
     // }
@@ -2266,6 +2287,13 @@ impl PofToolsGui {
                                 ui.label("Type:");
                                 UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, glow_type, glow_type_string);
                             });
+
+                            ui.separator();
+
+                            if ui.checkbox(&mut self.glow_point_simulation, "Glow Point Simulation").clicked() {
+                                self.glow_point_sim_start = std::time::Instant::now();
+                                self.ui_state.viewport_3d_dirty = true; // for the case when this is disabled
+                            }
 
                             ui.label("Displacement Time:");
                             UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, disp_time, disp_time_string);

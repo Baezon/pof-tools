@@ -5,7 +5,7 @@ use std::ops::{Add, AddAssign, Deref, DerefMut, Div, DivAssign, Index, IndexMut,
 use std::str::FromStr;
 
 use byteorder::{WriteBytesExt, LE};
-use glm::TMat4;
+use glm::{Mat3x3, TMat4};
 use nalgebra_glm::Mat4;
 extern crate nalgebra_glm as glm;
 
@@ -318,13 +318,43 @@ impl IndexMut<Axis> for Vec3d {
 }
 
 mk_struct! {
-    #[derive(Debug, Default)]
+    #[derive(Debug, Default, Copy, Clone)]
     pub struct Mat3d {
         pub rvec: Vec3d,
         pub uvec: Vec3d,
         pub fvec: Vec3d,
     }
+}
+impl From<Mat3d> for glm::Mat3x3 {
+    fn from(Mat3d { rvec, uvec, fvec }: Mat3d) -> Self {
+        glm::Mat3x3::from_columns(&[rvec.into(), uvec.into(), fvec.into()])
+    }
+}
+impl From<glm::Mat3x3> for Mat3d {
+    fn from(mat: glm::Mat3x3) -> Self {
+        Mat3d {
+            rvec: glm::Vec3::from(mat.column(0)).into(),
+            uvec: glm::Vec3::from(mat.column(1)).into(),
+            fvec: glm::Vec3::from(mat.column(2)).into(),
+        }
+    }
+}
 
+impl Mat3d {
+    pub fn add_point_mass_moi(&mut self, pos: Vec3d) {
+        self.rvec.x += pos.y * pos.y + pos.z * pos.z;
+        self.rvec.y -= pos.x * pos.y;
+        self.rvec.z -= pos.x * pos.z;
+        self.uvec.x -= pos.x * pos.y;
+        self.uvec.y += pos.x * pos.x + pos.z * pos.z;
+        self.uvec.z -= pos.y * pos.z;
+        self.fvec.x -= pos.x * pos.z;
+        self.fvec.y -= pos.y * pos.z;
+        self.fvec.z += pos.x * pos.x + pos.y * pos.y;
+    }
+}
+
+mk_struct! {
     #[derive(Default, Clone, Copy)]
     pub struct BoundingBox {
         pub min: Vec3d,
@@ -428,6 +458,7 @@ impl Serialize for BspLightKind {
 
 mk_struct! {
     #[derive(Debug)]
+    // this is pretty much unused by the engine
     pub struct BspLight {
         pub location: Vec3d,
         pub kind: BspLightKind,
@@ -1405,12 +1436,25 @@ impl Model {
     }
 
     pub fn recalc_moi(&mut self) {
-        let dx = self.header.bbox.x_width();
-        let dy = self.header.bbox.y_height();
-        let dz = self.header.bbox.z_length();
-        let mass = self.header.mass;
-        self.header.moment_of_inertia.rvec = Vec3d::new(1.0 / (0.08 * mass * (dy * dy + dz * dz)), 0.0, 0.0);
-        self.header.moment_of_inertia.uvec = Vec3d::new(0.0, 1.0 / (0.08 * mass * (dx * dx + dz * dz)), 0.0);
-        self.header.moment_of_inertia.fvec = Vec3d::new(0.0, 0.0, 1.0 / (0.08 * mass * (dx * dx + dy * dy)));
+        self.header.moment_of_inertia = Mat3d::default();
+
+        fn sum_verts_recurse(subobjects: &ObjVec<SubObject>, id: ObjectId) -> usize {
+            subobjects[id].bsp_data.verts.len() + subobjects[id].children.iter().map(|id| sum_verts_recurse(subobjects, *id)).sum::<usize>()
+        }
+
+        let num_verts = sum_verts_recurse(&self.sub_objects, self.header.detail_levels[0]);
+
+        let point_mass = self.header.mass / num_verts as f32;
+
+        fn accumulate_moi_recurse(subobjects: &ObjVec<SubObject>, id: ObjectId, moi: &mut Mat3d) {
+            subobjects[id].bsp_data.verts.iter().for_each(|vert| moi.add_point_mass_moi(*vert));
+            subobjects[id].children.iter().for_each(|id| accumulate_moi_recurse(subobjects, *id, moi));
+        }
+
+        accumulate_moi_recurse(&self.sub_objects, self.header.detail_levels[0], &mut self.header.moment_of_inertia);
+
+        let mut glm_mat: Mat3x3 = self.header.moment_of_inertia.into();
+        glm_mat *= point_mass;
+        self.header.moment_of_inertia = glm_mat.try_inverse().unwrap().into();
     }
 }

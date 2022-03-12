@@ -388,7 +388,7 @@ const POF_TOOLS_VERISON: f32 = 0.9;
 
 fn main() {
     let event_loop = glutin::event_loop::EventLoop::with_user_event();
-    let mut pt_gui = PofToolsGui::default();
+    let mut pt_gui = PofToolsGui::new();
     let display = create_display(&event_loop);
 
     // this creates the raw bytes from png, how i make the icon
@@ -919,7 +919,7 @@ impl PofToolsGui {
             return;
         }
 
-        if !self.ui_state.viewport_3d_dirty {
+        if !(self.ui_state.viewport_3d_dirty || (self.glow_point_simulation && matches!(self.tree_view_selection, TreeSelection::Glows(_)))) {
             return;
         }
 
@@ -1096,15 +1096,20 @@ impl PofToolsGui {
                     _ => {}
                 }
 
+                let elapsed = self.glow_point_sim_start.elapsed().as_millis();
+
                 const COLORS: [[f32; 4]; 3] = [LOLLIPOP_UNSELECTED_COLOR, LOLLIPOP_SELECTED_POINT_COLOR, LOLLIPOP_SELECTED_BANK_COLOR];
                 self.lollipops = build_lollipops(
                     &COLORS,
                     &display,
                     model.glow_banks.iter().enumerate().flat_map(|(bank_idx, glow_bank)| {
+                        let enabled = !self.glow_point_simulation
+                            || (elapsed as i128 - glow_bank.disp_time as i128).rem_euclid(glow_bank.on_time as i128 + glow_bank.off_time as i128)
+                                < glow_bank.on_time as i128;
                         glow_bank.glow_points.iter().enumerate().map(move |(point_idx, glow_point)| {
                             let position = glow_point.position;
                             let normal = glow_point.normal * glow_point.radius * 2.0;
-                            let radius = glow_point.radius;
+                            let radius = glow_point.radius * if enabled { 1.0 } else { 0.25 };
                             let selection = if selected_bank == Some(bank_idx) {
                                 if selected_point == Some(point_idx) {
                                     SELECTED_POINT

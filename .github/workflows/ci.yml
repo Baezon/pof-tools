@@ -40,7 +40,7 @@ jobs:
           cargo build --all-features
 
   build-windows:
-    name: Build
+    name: Build Windows
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v2

@@ -3,8 +3,8 @@ on: [push, pull_request]
 name: Continuous integration
 
 jobs:
-  check:
-    name: Check
+  build:
+    name: Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -16,7 +16,7 @@ jobs:
       - run: sudo apt-get install -y libxcb-shape0-dev libxcb-xfixes0-dev
       - uses: actions-rs/cargo@v1
         with:
-          command: check
+          command: build
 
   test:
     name: Test Suite
@@ -52,4 +52,4 @@ jobs:
       - run: sudo apt-get install -y libxcb-shape0-dev libxcb-xfixes0-dev
       - name: Check whether it compiles
         run: |
-          cargo check --all-features
+          cargo build --all-features

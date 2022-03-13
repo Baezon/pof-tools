@@ -4,7 +4,7 @@ use std::{collections::HashMap, fs::File, path::PathBuf, sync::mpsc::TryRecvErro
 
 //use egui::{FontFamily, TextStyle};
 use glium::{
-    glutin::{self, event::WindowEvent, platform::windows::WindowBuilderExtWindows, window::Icon},
+    glutin::{self, event::WindowEvent, window::Icon},
     BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer,
 };
 use pof::{Insignia, Model, ObjVec, ObjectId, Parser, ShieldData, SubObject, TextureId, Texturing, Vec3d};
@@ -24,9 +24,9 @@ use ui::Set::*;
 fn create_display(event_loop: &glutin::event_loop::EventLoop<()>) -> glium::Display {
     let window_builder = glutin::window::WindowBuilder::new()
         .with_resizable(true)
-        .with_inner_size(glutin::dpi::LogicalSize { width: 800.0, height: 600.0 })
+        .with_inner_size(glutin::dpi::LogicalSize { width: 800.0f32, height: 600.0f32 })
         .with_title(format!("Pof Tools v{}", POF_TOOLS_VERISON))
-        .with_taskbar_icon(Some(Icon::from_rgba(include_bytes!("icon.raw").to_vec(), 32, 32).unwrap()));
+        .with_window_icon(Some(Icon::from_rgba(include_bytes!("icon.raw").to_vec(), 32, 32).unwrap()));
 
     let context_builder = glutin::ContextBuilder::new()
         .with_depth_buffer(0)
@@ -279,7 +279,9 @@ impl PofToolsGui {
         // use a scoped thread here, its ok to block the main window for now i guess
         crossbeam::thread::scope(|s| {
             s.spawn(|_| {
+                let x: &str = "asd";
                 let path = FileDialog::new()
+                    .add_filter("All Supported Files", &["pof", "dae"])
                     .add_filter("Parallax Object File", &["pof"])
                     .add_filter("Digital Asset Exchange file", &["dae"])
                     .show_save_single_file();
@@ -919,6 +921,7 @@ impl PofToolsGui {
             return;
         }
 
+        // always recalculate for glowpoint sim, TODO maybe make that a little smarter
         if !(self.ui_state.viewport_3d_dirty || (self.glow_point_simulation && matches!(self.tree_view_selection, TreeSelection::Glows(_)))) {
             return;
         }

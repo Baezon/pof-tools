@@ -279,7 +279,6 @@ impl PofToolsGui {
         // use a scoped thread here, its ok to block the main window for now i guess
         crossbeam::thread::scope(|s| {
             s.spawn(|_| {
-                let x: &str = "asd";
                 let path = FileDialog::new()
                     .add_filter("All Supported Files", &["pof", "dae"])
                     .add_filter("Parallax Object File", &["pof"])

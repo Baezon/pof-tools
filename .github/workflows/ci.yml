@@ -13,6 +13,7 @@ jobs:
           profile: minimal
           toolchain: stable
           override: true
+      - run: sudo apt-get install -y libxcb-shape0-dev libxcb-xfixes0-dev
       - uses: actions-rs/cargo@v1
         with:
           command: check
@@ -27,6 +28,7 @@ jobs:
           profile: minimal
           toolchain: stable
           override: true
+      - run: sudo apt-get install -y libxcb-shape0-dev libxcb-xfixes0-dev
       - uses: actions-rs/cargo@v1
         with:
           command: test
@@ -47,6 +49,7 @@ jobs:
           profile: minimal
           toolchain: ${{ matrix.rust-version }}
           override: true
+      - run: sudo apt-get install -y libxcb-shape0-dev libxcb-xfixes0-dev
       - name: Check whether it compiles
         run: |
           cargo check --all-features

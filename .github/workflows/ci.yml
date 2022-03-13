@@ -3,8 +3,8 @@ on: [push, pull_request]
 name: Continuous integration
 
 jobs:
-  build:
-    name: Build
+  build-linux:
+    name: Build Linux
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -17,21 +17,6 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: build
-
-  test:
-    name: Test Suite
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - run: sudo apt-get install -y libxcb-shape0-dev libxcb-xfixes0-dev
-      - uses: actions-rs/cargo@v1
-        with:
-          command: test
 
   msrv:
     strategy:
@@ -53,3 +38,17 @@ jobs:
       - name: Check whether it compiles
         run: |
           cargo build --all-features
+
+  build-windows:
+    name: Build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build

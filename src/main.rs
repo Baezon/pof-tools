@@ -1,4 +1,5 @@
-//#![windows_subsystem = "windows"]
+#![windows_subsystem = "windows"]
+#![allow(clippy::useless_format)]
 use native_dialog::FileDialog;
 use std::{collections::HashMap, fs::File, path::PathBuf, sync::mpsc::TryRecvError};
 
@@ -284,16 +285,14 @@ impl PofToolsGui {
                     .add_filter("Parallax Object File", &["pof"])
                     .add_filter("Digital Asset Exchange file", &["dae"])
                     .show_save_single_file();
-                if let Ok(path) = path {
-                    if let Some(path) = path {
-                        let mut file = File::create(path.clone()).unwrap();
-                        if path.extension().map_or(false, |s| s == "dae") {
-                            model.write_dae(&mut file).unwrap();
-                        } else {
-                            model.write(&mut file).unwrap();
-                        }
-                        out = Some(path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string());
+                if let Ok(Some(path)) = path {
+                    let mut file = File::create(path.clone()).unwrap();
+                    if path.extension().map_or(false, |s| s == "dae") {
+                        model.write_dae(&mut file).unwrap();
+                    } else {
+                        model.write(&mut file).unwrap();
                     }
+                    out = Some(path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string());
                 }
             });
         })
@@ -344,7 +343,7 @@ impl PofToolsGui {
 
         for subobject in &self.model.sub_objects {
             for i in 0..self.model.textures.len() {
-                let buf = GlBufferedObject::new(&display, &subobject, Some(TextureId(i as u32)));
+                let buf = GlBufferedObject::new(display, subobject, Some(TextureId(i as u32)));
                 if let Some(buf) = buf {
                     self.buffer_objects.push(buf);
                 }
@@ -352,21 +351,21 @@ impl PofToolsGui {
 
             //println!("{}", subobject.bsp_data.verts.len());
 
-            let buf = GlBufferedObject::new(&display, &subobject, None);
+            let buf = GlBufferedObject::new(display, subobject, None);
             if let Some(buf) = buf {
                 self.buffer_objects.push(buf);
             }
         }
 
         for insignia in &self.model.insignias {
-            self.buffer_insignias.push(GlBufferedInsignia::new(&display, &insignia));
+            self.buffer_insignias.push(GlBufferedInsignia::new(display, insignia));
         }
 
         if let Some(shield) = &self.model.shield_data {
-            self.buffer_shield = Some(GlBufferedShield::new(&display, &shield));
+            self.buffer_shield = Some(GlBufferedShield::new(display, shield));
         }
 
-        self.maybe_recalculate_3d_helpers(&display);
+        self.maybe_recalculate_3d_helpers(display);
 
         self.warnings.clear();
         PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All);
@@ -397,7 +396,7 @@ fn main() {
     //     .unwrap()
     //     .write_all(&image::open("icon.png").unwrap().into_rgba8().to_vec());
 
-    let mut args = std::env::args().into_iter();
+    let mut args = std::env::args();
     args.next();
     let path = args.next().map(|arg| PathBuf::from(arg.as_str()));
 
@@ -584,7 +583,7 @@ fn main() {
                     let (width, height) = target.get_dimensions();
                     let aspect_ratio = height as f32 / width as f32;
 
-                    let fov: f32 = 3.141592 / 3.0;
+                    let fov: f32 = std::f32::consts::PI / 3.0;
                     let zfar = (model.header.max_radius + pt_gui.camera_scale) * 2.0;
                     let znear = (model.header.max_radius + pt_gui.camera_scale) / 1000.;
 
@@ -643,12 +642,11 @@ fn main() {
                             let mut mat = glm::identity::<f32, 4>();
                             mat.append_translation_mut(&insignia.offset.into());
 
-                            let color;
-                            if current_insignia_idx == Some(i) {
-                                color = [1.0, 0.0, 0.0f32];
+                            let color = if current_insignia_idx == Some(i) {
+                                [1.0, 0.0, 0.0f32]
                             } else {
-                                color = [0.0, 0.0, 1.0f32];
-                            }
+                                [0.0, 0.0, 1.0f32]
+                            };
 
                             // only render if its currently being displayed
                             let uniforms = glium::uniform! {
@@ -883,12 +881,8 @@ fn get_list_of_display_subobjects(model: &Model, tree_selection: &TreeSelection,
     } else {
         //find the top level parent of the currently subobject
         let mut top_level_parent = last_selected_subobj;
-        loop {
-            if let Some(id) = model.sub_objects[top_level_parent].parent {
-                top_level_parent = id;
-            } else {
-                break;
-            }
+        while let Some(id) = model.sub_objects[top_level_parent].parent {
+            top_level_parent = id;
         }
 
         fn display_subobject_recursive(display_subobjects: &mut ObjVec<bool>, subobjects: &ObjVec<SubObject>, id: ObjectId) {
@@ -970,7 +964,7 @@ impl PofToolsGui {
                 const COLORS: [[f32; 4]; 3] = [LOLLIPOP_UNSELECTED_COLOR, LOLLIPOP_SELECTED_POINT_COLOR, LOLLIPOP_SELECTED_BANK_COLOR];
                 self.lollipops = build_lollipops(
                     &COLORS,
-                    &display,
+                    display,
                     model.thruster_banks.iter().enumerate().flat_map(|(bank_idx, thruster_bank)| {
                         thruster_bank.glows.iter().enumerate().map(move |(point_idx, thruster_point)| {
                             let position = thruster_point.position;
@@ -1031,7 +1025,7 @@ impl PofToolsGui {
                 const COLORS: [[f32; 4]; 3] = [LOLLIPOP_UNSELECTED_COLOR, LOLLIPOP_SELECTED_POINT_COLOR, LOLLIPOP_SELECTED_BANK_COLOR];
                 self.lollipops = build_lollipops(
                     &COLORS,
-                    &display,
+                    display,
                     weapon_system.iter().enumerate().flat_map(|(bank_idx, weapon_bank)| {
                         weapon_bank.iter().enumerate().map(move |(point_idx, weapon_point)| {
                             let position = weapon_point.position;
@@ -1066,7 +1060,7 @@ impl PofToolsGui {
                 const COLORS: [[f32; 4]; 3] = [LOLLIPOP_UNSELECTED_COLOR, LOLLIPOP_SELECTED_POINT_COLOR, LOLLIPOP_SELECTED_BANK_COLOR];
                 self.lollipops = build_lollipops(
                     &COLORS,
-                    &display,
+                    display,
                     model.docking_bays.iter().enumerate().flat_map(|(bay_idx, docking_bay)| {
                         docking_bay.points.iter().enumerate().map(move |(point_idx, docking_point)| {
                             let position = docking_point.position;
@@ -1103,7 +1097,7 @@ impl PofToolsGui {
                 const COLORS: [[f32; 4]; 3] = [LOLLIPOP_UNSELECTED_COLOR, LOLLIPOP_SELECTED_POINT_COLOR, LOLLIPOP_SELECTED_BANK_COLOR];
                 self.lollipops = build_lollipops(
                     &COLORS,
-                    &display,
+                    display,
                     model.glow_banks.iter().enumerate().flat_map(|(bank_idx, glow_bank)| {
                         let enabled = !self.glow_point_simulation
                             || (elapsed as i128 - glow_bank.disp_time as i128).rem_euclid(glow_bank.on_time as i128 + glow_bank.off_time as i128)
@@ -1135,7 +1129,7 @@ impl PofToolsGui {
                 const COLORS: [[f32; 4]; 2] = [LOLLIPOP_SELECTED_BANK_COLOR, LOLLIPOP_SELECTED_POINT_COLOR];
                 self.lollipops = build_lollipops(
                     &COLORS,
-                    &display,
+                    display,
                     model.special_points.iter().enumerate().map(|(point_idx, special_point)| {
                         let position = special_point.position;
                         let normal = Default::default(); // 0 vec
@@ -1162,7 +1156,7 @@ impl PofToolsGui {
                 const COLORS: [[f32; 4]; 3] = [LOLLIPOP_UNSELECTED_COLOR, LOLLIPOP_SELECTED_POINT_COLOR, LOLLIPOP_SELECTED_BANK_COLOR];
                 self.lollipops = build_lollipops(
                     &COLORS,
-                    &display,
+                    display,
                     model.turrets.iter().enumerate().flat_map(|(turret_idx, turret)| {
                         let offset = self.model.get_total_subobj_offset(turret.gun_obj);
                         turret.fire_points.iter().enumerate().map(move |(point_idx, fire_point)| {
@@ -1202,7 +1196,7 @@ impl PofToolsGui {
                 ];
                 self.lollipops = build_lollipops(
                     &COLORS,
-                    &display,
+                    display,
                     model.paths.iter().enumerate().flat_map(|(path_idx, path)| {
                         path.points.iter().enumerate().map(move |(point_idx, path_point)| {
                             let position = path_point.position;
@@ -1230,9 +1224,8 @@ impl PofToolsGui {
             }
             TreeSelection::EyePoints(eye_selection) => {
                 let mut selected_eye = None;
-                match *eye_selection {
-                    EyeSelection::EyePoint(point) => selected_eye = Some(point),
-                    _ => {}
+                if let EyeSelection::EyePoint(point) = *eye_selection {
+                    selected_eye = Some(point)
                 }
 
                 let size = 0.007 * model.header.max_radius;
@@ -1240,7 +1233,7 @@ impl PofToolsGui {
                 const COLORS: [[f32; 4]; 2] = [LOLLIPOP_SELECTED_BANK_COLOR, LOLLIPOP_SELECTED_POINT_COLOR];
                 self.lollipops = build_lollipops(
                     &COLORS,
-                    &display,
+                    display,
                     model.eye_points.iter().enumerate().map(|(eye_idx, eye_point)| {
                         let position = eye_point.offset;
                         let normal = eye_point.normal * size * 2.0;
@@ -1255,11 +1248,11 @@ impl PofToolsGui {
 
                 let mut lollipop_origin = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_BANK_COLOR);
                 lollipop_origin.push(Vec3d::ZERO, Vec3d::ZERO, size);
-                let lollipop_origin = lollipop_origin.finish(&display);
+                let lollipop_origin = lollipop_origin.finish(display);
 
                 let mut lollipop_visual_center = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_POINT_COLOR);
                 lollipop_visual_center.push(model.visual_center, Vec3d::ZERO, size);
-                let lollipop_visual_center = lollipop_visual_center.finish(&display);
+                let lollipop_visual_center = lollipop_visual_center.finish(display);
 
                 self.lollipops = vec![lollipop_origin, lollipop_visual_center];
             }

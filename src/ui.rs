@@ -723,7 +723,7 @@ impl UiState {
             ui.vertical(|ui| {
                 ui.add_sized(
                     [remaining_width, (height - ui.spacing().item_spacing.y) / 2.0],
-                    egui::Label::new(current_num.map_or_else(|| format!("-"), |num| format!("{} {}", index_name, num + 1))),
+                    egui::Label::new(current_num.map_or_else(|| "-".to_string(), |num| format!("{} {}", index_name, num + 1))),
                 );
 
                 ui.add_enabled_ui(current_num.is_some(), |ui| {
@@ -738,10 +738,9 @@ impl UiState {
                             )
                             .on_hover_text(format!("Copy this {} into a new {}", index_name, index_name))
                             .clicked()
+                            && list_len.is_some()
                         {
-                            if let Some(_) = list_len {
-                                ret = Some(IndexingButtonsResponse::Copy(current_num.unwrap()));
-                            }
+                            ret = Some(IndexingButtonsResponse::Copy(current_num.unwrap()));
                         }
                         if ui
                             .add_sized(
@@ -753,10 +752,9 @@ impl UiState {
                             )
                             .on_hover_text(format!("Delete this {}", index_name))
                             .clicked()
+                            && list_len.is_some()
                         {
-                            if let Some(_) = list_len {
-                                ret = Some(IndexingButtonsResponse::Delete(current_num.unwrap()));
-                            }
+                            ret = Some(IndexingButtonsResponse::Delete(current_num.unwrap()));
                         }
                     });
                 });
@@ -772,14 +770,12 @@ impl UiState {
                     {
                         ret = Some(IndexingButtonsResponse::Push);
                     }
-                } else {
-                    if ui
-                        .add_sized([side_button_size, height], egui::Button::new("▶"))
-                        .on_hover_text(format!("Switch to the next {}", index_name))
-                        .clicked()
-                    {
-                        ret = Some(IndexingButtonsResponse::Switch(current_num.map_or(0, |num| num + 1)));
-                    }
+                } else if ui
+                    .add_sized([side_button_size, height], egui::Button::new("▶"))
+                    .on_hover_text(format!("Switch to the next {}", index_name))
+                    .clicked()
+                {
+                    ret = Some(IndexingButtonsResponse::Switch(current_num.map_or(0, |num| num + 1)));
                 }
             });
         });
@@ -788,7 +784,7 @@ impl UiState {
 
     // a text edit field attached to a model value that will show up red if it cannot parse
     fn parsable_text_edit<T: FromStr>(ui: &mut Ui, model_value: &mut T, parsable_string: &mut String) -> bool {
-        if let Err(_) = parsable_string.parse::<T>() {
+        if parsable_string.parse::<T>().is_err() {
             ui.visuals_mut().override_text_color = Some(Color32::RED);
         }
         if ui.text_edit_singleline(parsable_string).changed() {
@@ -802,13 +798,13 @@ impl UiState {
 
     // a combo box for subobjects
     fn subobject_combo_box(
-        ui: &mut Ui, name_list: &Vec<String>, mut_selection: &mut usize, selector_value: Option<usize>, label: &str, active_error_idx: Option<usize>,
+        ui: &mut Ui, name_list: &[String], mut_selection: &mut usize, selector_value: Option<usize>, label: &str, active_error_idx: Option<usize>,
     ) -> Option<usize> {
         let mut ret = None;
 
         ui.add_enabled_ui(selector_value.is_some(), |ui| {
-            if let Some(_) = selector_value {
-                let color = if let Some(_) = active_error_idx {
+            if selector_value.is_some() {
+                let color = if active_error_idx.is_some() {
                     UiState::set_widget_color(ui, Color32::RED);
                     Color32::RED
                 } else {
@@ -841,7 +837,7 @@ impl UiState {
     ) -> bool {
         let mut val_changed = false;
         if let Some(value) = model_value {
-            if let Err(_) = parsable_string.parse::<T>() {
+            if parsable_string.parse::<T>().is_err() {
                 ui.visuals_mut().override_text_color = Some(Color32::RED);
             } else if active_warning {
                 ui.visuals_mut().override_text_color = Some(Color32::YELLOW);
@@ -916,14 +912,14 @@ impl UiState {
                     ui.separator();
                     ui.label("Axis:");
 
-                    if let Err(_) = transform_window.vector.parse::<Vec3d>() {
+                    if transform_window.vector.parse::<Vec3d>().is_err() {
                         ui.visuals_mut().override_text_color = Some(Color32::RED);
                     }
                     ui.text_edit_singleline(&mut transform_window.vector);
                     ui.visuals_mut().override_text_color = None;
 
                     ui.label("Angle:");
-                    if let Err(_) = transform_window.value.parse::<f32>() {
+                    if transform_window.value.parse::<f32>().is_err() {
                         ui.visuals_mut().override_text_color = Some(Color32::RED);
                     }
                     ui.text_edit_singleline(&mut transform_window.value);
@@ -931,7 +927,7 @@ impl UiState {
 
                     if let Ok(vector) = transform_window.vector.parse::<Vec3d>() {
                         if let Ok(angle) = transform_window.value.parse::<f32>() {
-                            mat = glm::rotation(angle, &vector.into());
+                            mat = glm::rotation(angle.to_radians(), &vector.into());
                             valid_input = true;
                         }
                     }
@@ -949,7 +945,7 @@ impl UiState {
                     });
                     ui.separator();
                     ui.label("Scalar (negative values flip):");
-                    if let Err(_) = transform_window.value.parse::<f32>() {
+                    if transform_window.value.parse::<f32>().is_err() {
                         ui.visuals_mut().override_text_color = Some(Color32::RED);
                     }
                     ui.text_edit_singleline(&mut transform_window.value);
@@ -970,7 +966,7 @@ impl UiState {
                 TransformType::Translate => {
                     ui.label("Translation Vector:");
 
-                    if let Err(_) = transform_window.vector.parse::<Vec3d>() {
+                    if transform_window.vector.parse::<Vec3d>().is_err() {
                         ui.visuals_mut().override_text_color = Some(Color32::RED);
                     }
                     ui.text_edit_singleline(&mut transform_window.vector);
@@ -1668,7 +1664,7 @@ impl PofToolsGui {
 
                                         for buf in &mut self.buffer_objects {
                                             if buf.obj_id == ObjectId(i as u32) || self.model.is_obj_id_ancestor(buf.obj_id, ObjectId(i as u32)) {
-                                                let new_buf = GlBufferedObject::new(&display, &self.model.sub_objects[buf.obj_id], buf.tmap);
+                                                let new_buf = GlBufferedObject::new(display, &self.model.sub_objects[buf.obj_id], buf.tmap);
                                                 if let Some(new_buf) = new_buf {
                                                     *buf = new_buf;
                                                 }
@@ -1819,7 +1815,7 @@ impl PofToolsGui {
 
                                     for buf in &mut self.buffer_objects {
                                         if buf.obj_id == id || self.model.is_obj_id_ancestor(buf.obj_id, id) {
-                                            let new_buf = GlBufferedObject::new(&display, &self.model.sub_objects[buf.obj_id], buf.tmap);
+                                            let new_buf = GlBufferedObject::new(display, &self.model.sub_objects[buf.obj_id], buf.tmap);
                                             if let Some(new_buf) = new_buf {
                                                 *buf = new_buf;
                                             }
@@ -2247,7 +2243,7 @@ impl PofToolsGui {
                             ui.label("Glow Texture:");
                             if let Some(bank) = bank_num {
                                 if ui.add(egui::TextEdit::multiline(glow_texture_string).desired_rows(1)).changed() {
-                                    self.model.glow_banks[bank].set_glow_texture(&glow_texture_string);
+                                    self.model.glow_banks[bank].set_glow_texture(glow_texture_string);
                                 }
                             } else {
                                 ui.add_enabled(false, egui::TextEdit::multiline(glow_texture_string).desired_rows(1));
@@ -2438,7 +2434,10 @@ impl PofToolsGui {
                                 }
                             }
                             // assemble the string names list from the id list
-                            let gun_subobj_names_list = gun_subobj_ids_list.iter().map(|id| self.model.sub_objects[*id].name.clone()).collect();
+                            let gun_subobj_names_list = gun_subobj_ids_list
+                                .iter()
+                                .map(|id| self.model.sub_objects[*id].name.clone())
+                                .collect::<Vec<_>>();
 
                             // then make the combo box, giving it the list of names and the index
                             if let Some(new_idx) =

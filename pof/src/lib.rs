@@ -1,4 +1,5 @@
 // #![warn(missing_docs)]
+#![allow(clippy::useless_format)]
 
 mod parse;
 mod types;

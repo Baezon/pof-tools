@@ -1,4 +1,5 @@
 // #![warn(missing_docs)]
+#![allow(clippy::useless_format)]
 
 mod parse;
 mod types;
@@ -64,7 +65,7 @@ fn main() -> io::Result<()> {
 
     let file = File::open("cube.pof").unwrap();
     let mut parser = Parser::new(file)?;
-    let model = parser.parse()?;
+    let model = parser.parse(format!(""))?;
     // write!(File::create("output2.log").unwrap(), "{:#?}", model).unwrap();
 
     // let mut file = File::create("output2.pof").unwrap();

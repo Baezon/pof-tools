@@ -215,25 +215,25 @@ impl<R: Read + Seek> Parser<R> {
                 }
                 b"GPNT" => {
                     primary_weps = Some(self.read_list(|this| {
-                        Ok(this.read_list(|this| {
+                        this.read_list(|this| {
                             Ok(WeaponHardpoint {
                                 position: this.read_vec3d()?,
                                 normal: this.read_vec3d()?,
                                 offset: (this.version >= Version::V22_01).then(|| this.read_f32().unwrap()).unwrap_or(0.0),
                             })
-                        })?)
+                        })
                     })?);
                     //println!("{:#?}", primary_weps);
                 }
                 b"MPNT" => {
                     secondary_weps = Some(self.read_list(|this| {
-                        Ok(this.read_list(|this| {
+                        this.read_list(|this| {
                             Ok(WeaponHardpoint {
                                 position: this.read_vec3d()?,
                                 normal: this.read_vec3d()?,
                                 offset: (this.version >= Version::V22_01).then(|| this.read_f32().unwrap()).unwrap_or(0.0),
                             })
-                        })?)
+                        })
                     })?);
                     //println!("{:#?}", secondary_weps);
                 }
@@ -243,7 +243,7 @@ impl<R: Read + Seek> Parser<R> {
                             base_obj: ObjectId(this.read_u32()?),
                             gun_obj: ObjectId(this.read_u32()?),
                             normal: this.read_vec3d()?,
-                            fire_points: this.read_list(|this| Ok(this.read_vec3d()?))?,
+                            fire_points: this.read_list(|this| this.read_vec3d())?,
                         })
                     })?);
                     //println!("{:#?}", turrets);
@@ -302,7 +302,7 @@ impl<R: Read + Seek> Parser<R> {
                             properties: this.read_string()?,
                             path: {
                                 // spec allows for a list of paths but only the first will be used so dont bother
-                                let paths = this.read_list(|this| Ok(this.read_u32()?))?;
+                                let paths = this.read_list(|this| this.read_u32())?;
                                 paths.first().map(|&x| PathId(x))
                             },
                             points: {
@@ -353,11 +353,7 @@ impl<R: Read + Seek> Parser<R> {
                                     VertexId(this.read_u32()?.try_into().unwrap()),
                                     VertexId(this.read_u32()?.try_into().unwrap()),
                                 ),
-                                neighbors: (
-                                    PolygonId(this.read_u32()?.try_into().unwrap()),
-                                    PolygonId(this.read_u32()?.try_into().unwrap()),
-                                    PolygonId(this.read_u32()?.try_into().unwrap()),
-                                ),
+                                neighbors: (PolygonId(this.read_u32()?), PolygonId(this.read_u32()?), PolygonId(this.read_u32()?)),
                             })
                         })?,
                     ))
@@ -411,17 +407,6 @@ impl<R: Read + Seek> Parser<R> {
         for id in debris_objs {
             sub_objects[id].is_debris_model = true;
         }
-
-        // turn path ids into more useful path strings in docking bays
-        // if let Some(dock_points) = dock_points {
-        //     for dock in dock_points {
-        //         if let Some(num) = dock.path_num {
-        //             if let Some(paths) = paths {
-        //                 if num < paths.len() {}
-        //             }
-        //         }
-        //     }
-        // }
 
         Ok(Model {
             header: header.expect("No header chunk found???"),
@@ -787,7 +772,7 @@ fn dae_parse_geometry(
     let transform = node.transform_as_matrix();
     let zero = Vec3d::ZERO.into();
     let center = transform.transform_point(&zero) - zero;
-    let local_transform = transform.append_translation(&(-center).into());
+    let local_transform = transform.append_translation(&(-center));
 
     let mut vertices_out: Vec<Vec3d> = vec![];
     let mut normals_out: Vec<Vec3d> = vec![];
@@ -798,9 +783,8 @@ fn dae_parse_geometry(
         let geo = local_maps[&geo.url].element.as_mesh().unwrap();
         let verts = geo.vertices.as_ref().unwrap().importer(local_maps).unwrap();
         let mut vert_ctx = VertexContext { vertex_offset: vertices_out.len() as u16, normal_ids: vec![] };
-        let mut iter = Clone::clone(verts.position_importer().unwrap());
 
-        while let Some(position) = iter.next() {
+        for position in Clone::clone(verts.position_importer().unwrap()) {
             vertices_out.push(flip_y_z(&local_transform * Vec3d::from(position)));
         }
 
@@ -887,7 +871,7 @@ fn dae_parse_subobject_recursive(
     }
     let name = name.unwrap();
 
-    let (vertices_out, normals_out, polygons_out) = dae_parse_geometry(node, &local_maps, &material_map);
+    let (vertices_out, normals_out, polygons_out) = dae_parse_geometry(node, local_maps, material_map);
 
     let transform = node.transform_as_matrix();
     let zero = Vec3d::ZERO.into();
@@ -959,7 +943,7 @@ fn dae_parse_subobject_recursive(
             let subobj = &mut sub_objects[len];
 
             if let Some(name) = node.name.as_ref() {
-                if name.starts_with("#") && name.contains("point") {
+                if name.starts_with('#') && name.contains("point") {
                     let turret = {
                         match turrets.iter().position(|turret| turret.gun_obj == obj_id) {
                             Some(idx) => &mut turrets[idx],
@@ -978,18 +962,18 @@ fn dae_parse_subobject_recursive(
                     turret.fire_points.push(pos);
                     turret.normal = norm;
                     continue;
-                } else if name.starts_with("#") && name.contains("properties") {
+                } else if name.starts_with('#') && name.contains("properties") {
                     dae_parse_properties(node, &mut subobj.properties);
                     continue;
-                } else if name.starts_with("#") && name.contains("mov-type") {
-                    if let Some(idx) = name.find(":") {
+                } else if name.starts_with('#') && name.contains("mov-type") {
+                    if let Some(idx) = name.find(':') {
                         if let Ok(val) = &name[(idx + 1)..].parse::<i32>() {
                             subobj.movement_type = parse_subsys_mov_type(*val);
                         }
                     }
                     continue;
-                } else if name.starts_with("#") && name.contains("mov-axis") {
-                    if let Some(idx) = name.find(":") {
+                } else if name.starts_with('#') && name.contains("mov-axis") {
+                    if let Some(idx) = name.find(':') {
                         if let Ok(val) = &name[(idx + 1)..].parse::<i32>() {
                             subobj.movement_axis = parse_subsys_mov_axis(*val);
                         }
@@ -998,7 +982,7 @@ fn dae_parse_subobject_recursive(
                 }
             }
 
-            dae_parse_subobject_recursive(&node, sub_objects, obj_id, insignias, detail_level, turrets, local_maps, material_map);
+            dae_parse_subobject_recursive(node, sub_objects, obj_id, insignias, detail_level, turrets, local_maps, material_map);
         }
     }
 }
@@ -1006,7 +990,7 @@ fn dae_parse_subobject_recursive(
 fn node_children_with_keyword<'a>(node_list: &'a [Node], keyword: &'a str) -> impl Iterator<Item = (&'a Node, &'a String)> {
     node_list.iter().filter_map(move |node| {
         let name = node.name.as_ref()?;
-        if name.starts_with("#") && name.contains(keyword) {
+        if name.starts_with('#') && name.contains(keyword) {
             Some((node, name))
         } else {
             None
@@ -1143,7 +1127,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
 
                 for node in &node.children {
                     dae_parse_subobject_recursive(
-                        &node,
+                        node,
                         &mut sub_objects,
                         obj_id,
                         &mut insignias,

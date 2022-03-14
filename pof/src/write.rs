@@ -291,7 +291,7 @@ fn write_chunk<T: Serialize>(w: &mut impl Write, chunk_name: &[u8], data: Option
     Ok(())
 }
 
-fn write_chunk_vec<T: Serialize>(w: &mut impl Write, chunk_name: &[u8], data: &Vec<T>) -> io::Result<()> {
+fn write_chunk_vec<T: Serialize>(w: &mut impl Write, chunk_name: &[u8], data: &[T]) -> io::Result<()> {
     if !data.is_empty() {
         write_chunk_raw(w, chunk_name, |w| data.write_to(w))?
     }
@@ -388,7 +388,7 @@ fn vec_to_rotation(vec: &Vec3d) -> Rotate {
 fn make_properties_node(properties: &String, id: String) -> Node {
     let mut node = Node::new(format!("#{}properties", id), Some(format!("#{}properties", id)));
 
-    for substr in properties.split("\n") {
+    for substr in properties.split('\n') {
         node.children
             .push(Node::new(format!("#{}:{}", id, substr), Some(format!("{}:{}", id, substr.trim_end()))));
         // trailing spaces can mess up parsing, so remove them
@@ -397,7 +397,7 @@ fn make_properties_node(properties: &String, id: String) -> Node {
     node
 }
 
-fn make_thrusters_node(thruster_banks: &Vec<ThrusterBank>) -> Node {
+fn make_thrusters_node(thruster_banks: &[ThrusterBank]) -> Node {
     let mut node = Node::new("#thrusters", Some(format!("#thrusters")));
 
     for (i, bank) in thruster_banks.iter().enumerate() {
@@ -424,7 +424,7 @@ fn make_thrusters_node(thruster_banks: &Vec<ThrusterBank>) -> Node {
     node
 }
 
-fn make_paths_node(paths: &Vec<Path>) -> Node {
+fn make_paths_node(paths: &[Path]) -> Node {
     let mut node = Node::new("#paths", Some(format!("#paths")));
 
     for (i, path) in paths.iter().enumerate() {
@@ -454,7 +454,7 @@ fn make_paths_node(paths: &Vec<Path>) -> Node {
     node
 }
 
-fn make_weapons_node(weapons: &Vec<Vec<WeaponHardpoint>>, kind: &str) -> Node {
+fn make_weapons_node(weapons: &[Vec<WeaponHardpoint>], kind: &str) -> Node {
     let mut node = Node::new(format!("#{} weapons", kind), Some(format!("#{} weapons", kind)));
 
     for (i, bank) in weapons.iter().enumerate() {
@@ -482,7 +482,7 @@ fn make_weapons_node(weapons: &Vec<Vec<WeaponHardpoint>>, kind: &str) -> Node {
     node
 }
 
-fn make_docking_bays_node(docks: &Vec<Dock>) -> Node {
+fn make_docking_bays_node(docks: &[Dock]) -> Node {
     let mut node = Node::new(format!("#docking bays"), Some(format!("#docking bays")));
 
     for (i, dock) in docks.iter().enumerate() {
@@ -513,7 +513,7 @@ fn make_docking_bays_node(docks: &Vec<Dock>) -> Node {
     node
 }
 
-fn make_glows_node(glows: &Vec<GlowPointBank>) -> Node {
+fn make_glows_node(glows: &[GlowPointBank]) -> Node {
     let mut node = Node::new("#glows", Some(format!("#glows")));
 
     for (i, glow_bank) in glows.iter().enumerate() {
@@ -568,7 +568,7 @@ fn make_glows_node(glows: &Vec<GlowPointBank>) -> Node {
     node
 }
 
-fn make_specials_node(special_points: &Vec<SpecialPoint>) -> Node {
+fn make_specials_node(special_points: &[SpecialPoint]) -> Node {
     let mut node = Node::new(format!("#special points"), Some(format!("#special points")));
 
     for (i, point) in special_points.iter().enumerate() {
@@ -589,7 +589,7 @@ fn make_specials_node(special_points: &Vec<SpecialPoint>) -> Node {
     node
 }
 
-fn make_eyes_node(eye_points: &Vec<EyePoint>) -> Node {
+fn make_eyes_node(eye_points: &[EyePoint]) -> Node {
     let mut node = Node::new(format!("#eye points"), Some(format!("#eye points")));
 
     for (i, point) in eye_points.iter().enumerate() {
@@ -648,16 +648,16 @@ fn make_insignia_node(insignia: &Insignia, geometries: &mut Vec<Geometry>, id: u
     let instance = Instance::<Geometry>::new(Url::Fragment(geo_id.clone()));
 
     geometries.push(Geometry::new_mesh(
-        geo_id.clone(),
+        geo_id,
         vec![Source::new_local(
             pos_id.clone(),
             Param::new_xyz(),
-            ArrayElement::Float(FloatArray { id: Some(pos_array_id.clone()), val: positions.into() }), // TODO make a new func
+            ArrayElement::Float(FloatArray { id: Some(pos_array_id), val: positions.into() }), // TODO make a new func
         )],
         Vertices::new(vert_id.clone(), vec![Input::new(Semantic::Position, Url::Fragment(pos_id.clone()))]),
         vec![Primitive::Triangles(Triangles::new(
             None,
-            vec![InputS::new(Semantic::Vertex, Url::Fragment(vert_id.clone()), 0, None)],
+            vec![InputS::new(Semantic::Vertex, Url::Fragment(vert_id), 0, None)],
             tricount,
             indices.into_boxed_slice(),
         ))],
@@ -717,20 +717,16 @@ fn make_shield_node(shield: &ShieldData, geometries: &mut Vec<Geometry>) -> Node
             Source::new_local(
                 pos_id.clone(),
                 Param::new_xyz(),
-                ArrayElement::Float(FloatArray { id: Some(pos_array_id.clone()), val: positions.into() }), // TODO make a new func
+                ArrayElement::Float(FloatArray { id: Some(pos_array_id), val: positions.into() }), // TODO make a new func
             ),
-            Source::new_local(
-                norm_id.clone(),
-                Param::new_xyz(),
-                ArrayElement::Float(FloatArray { id: Some(norm_array_id.clone()), val: normals.into() }),
-            ),
+            Source::new_local(norm_id.clone(), Param::new_xyz(), ArrayElement::Float(FloatArray { id: Some(norm_array_id), val: normals.into() })),
         ],
-        Vertices::new(vert_id.clone(), vec![Input::new(Semantic::Position, Url::Fragment(pos_id.clone()))]),
+        Vertices::new(vert_id.clone(), vec![Input::new(Semantic::Position, Url::Fragment(pos_id))]),
         vec![Primitive::Triangles(Triangles::new(
             None,
             vec![
-                InputS::new(Semantic::Vertex, Url::Fragment(vert_id.clone()), 0, None),
-                InputS::new(Semantic::Normal, Url::Fragment(norm_id.clone()), 1, None),
+                InputS::new(Semantic::Vertex, Url::Fragment(vert_id), 0, None),
+                InputS::new(Semantic::Normal, Url::Fragment(norm_id), 1, None),
             ],
             tricount,
             indices.into_boxed_slice(),
@@ -745,7 +741,7 @@ fn make_shield_node(shield: &ShieldData, geometries: &mut Vec<Geometry>) -> Node
 }
 
 fn make_subobj_node(
-    subobjs: &ObjVec<SubObject>, subobj: &SubObject, turrets: &Vec<Turret>, geometries: &mut Vec<Geometry>, materials: &[String],
+    subobjs: &ObjVec<SubObject>, subobj: &SubObject, turrets: &[Turret], geometries: &mut Vec<Geometry>, materials: &[String],
 ) -> Node {
     let geo_id = format!("{}-geometry", subobj.name);
     let pos_id = format!("{}-geometry-position", subobj.name);
@@ -806,25 +802,17 @@ fn make_subobj_node(
     }
 
     geometries.push(Geometry::new_mesh(
-        geo_id.clone(),
+        geo_id,
         vec![
             Source::new_local(
                 pos_id.clone(),
                 Param::new_xyz(),
-                ArrayElement::Float(FloatArray { id: Some(pos_array_id.clone()), val: positions.into() }), // TODO make a new func
+                ArrayElement::Float(FloatArray { id: Some(pos_array_id), val: positions.into() }), // TODO make a new func
             ),
-            Source::new_local(
-                norm_id.clone(),
-                Param::new_xyz(),
-                ArrayElement::Float(FloatArray { id: Some(norm_array_id.clone()), val: normals.into() }),
-            ),
-            Source::new_local(
-                uv_id.clone(),
-                Param::new_st(),
-                ArrayElement::Float(FloatArray { id: Some(uv_array_id.clone()), val: uv_coords.into() }),
-            ),
+            Source::new_local(norm_id.clone(), Param::new_xyz(), ArrayElement::Float(FloatArray { id: Some(norm_array_id), val: normals.into() })),
+            Source::new_local(uv_id.clone(), Param::new_st(), ArrayElement::Float(FloatArray { id: Some(uv_array_id), val: uv_coords.into() })),
         ],
-        Vertices::new(vert_id.clone(), vec![Input::new(Semantic::Position, Url::Fragment(pos_id.clone()))]),
+        Vertices::new(vert_id.clone(), vec![Input::new(Semantic::Position, Url::Fragment(pos_id))]),
         prim_elems
             .into_iter()
             .zip([None].into_iter().chain(materials.iter().map(Some)))
@@ -913,7 +901,7 @@ impl Model {
         }
 
         if self.shield_data.is_some() {
-            nodes.push(make_shield_node(&(self.shield_data.as_ref()).unwrap(), &mut geometries));
+            nodes.push(make_shield_node((self.shield_data.as_ref()).unwrap(), &mut geometries));
         }
 
         if !self.thruster_banks.is_empty() {

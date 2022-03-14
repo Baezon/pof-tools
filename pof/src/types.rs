@@ -175,7 +175,7 @@ impl FromStr for Vec3d {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut iter = s.split(",");
+        let mut iter = s.split(',');
 
         let vec = Vec3d {
             x: iter.next().ok_or(())?.trim().parse().map_err(|_| ())?,
@@ -757,7 +757,7 @@ impl BspNode {
         }
     }
 
-    pub fn recalculate_bboxes(&mut self, verts: &Vec<Vec3d>) {
+    pub fn recalculate_bboxes(&mut self, verts: &[Vec3d]) {
         match self {
             BspNode::Split { bbox, front, back, .. } => {
                 front.recalculate_bboxes(verts);
@@ -855,7 +855,7 @@ impl BspData {
     pub(crate) const BOUNDBOX: u32 = 5;
 }
 impl BspData {
-    pub fn recalculate(verts: &Vec<Vec3d>, polygons: impl Iterator<Item = Polygon>) -> BspNode {
+    pub fn recalculate(verts: &[Vec3d], polygons: impl Iterator<Item = Polygon>) -> BspNode {
         // first go over the polygons, filling some data, and exporting their bboxes, which is important for the actual BSP generation
         let polygons = polygons
             .map(|mut poly| {
@@ -864,7 +864,7 @@ impl BspData {
                 poly.center = Vec3d::average(vert_iter.clone());
 
                 // generate the normal by averaging the cross products of adjacent edges
-                let mut glm_verts = vert_iter.clone().map(|vert| glm::Vec3::from(vert)); // first convert to glm vectors
+                let mut glm_verts = vert_iter.clone().map(glm::Vec3::from); // first convert to glm vectors
                 poly.normal = if poly.verts.len() == 3 {
                     // optimize a bit for for triangles, which we'll have a lot of
                     if let [Some(a), Some(b), Some(c)] = [glm_verts.next(), glm_verts.next(), glm_verts.next()] {
@@ -1113,7 +1113,7 @@ impl Serialize for Dock {
 }
 impl Dock {
     pub fn get_name(&self) -> Option<&str> {
-        for str in self.properties.split("\n") {
+        for str in self.properties.split('\n') {
             if let Some(name) = str.strip_prefix("$name=") {
                 return Some(name);
             }
@@ -1382,7 +1382,7 @@ impl Model {
         let children = subobj.children.clone();
 
         for child_id in children {
-            self.apply_transform(child_id, &matrix, true)
+            self.apply_transform(child_id, matrix, true)
         }
     }
 

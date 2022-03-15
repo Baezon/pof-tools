@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"]
 #![allow(clippy::useless_format)]
+use egui::{Color32, RichText};
 use native_dialog::FileDialog;
 use std::{collections::HashMap, fs::File, path::PathBuf, sync::mpsc::TryRecvError};
 
@@ -458,197 +459,151 @@ fn main() {
     pt_gui.camera_offset = Vec3d::ZERO;
     pt_gui.camera_scale = model.header.max_radius * 2.0;
 
+    let mut frame_result = Ok(());
+
     event_loop.run(move |event, _, control_flow| {
-        let mut redraw = || {
-            // handle whether the thread which handles loading has responded (if it exists)
-            if let Some(thread) = &pt_gui.loading_thread {
-                let response = thread.try_recv();
-                match response {
-                    Ok(Some(data)) => {
-                        pt_gui.model = data;
-                        pt_gui.finish_loading_model(&display);
+        let mut catch_redraw = || {
+            let redraw = || {
+                // handle whether the thread which handles loading has responded (if it exists)
+                if let Some(thread) = &pt_gui.loading_thread {
+                    let response = thread.try_recv();
+                    match response {
+                        Ok(Some(data)) => {
+                            pt_gui.model = data;
+                            pt_gui.finish_loading_model(&display);
 
-                        pt_gui.loading_thread = None;
+                            pt_gui.loading_thread = None;
 
-                        egui.egui_ctx.output().cursor_icon = egui::CursorIcon::Default;
-                    }
-
-                    Err(TryRecvError::Disconnected) => {
-                        pt_gui.loading_thread = None;
-                    }
-
-                    Ok(None) => {
-                        pt_gui.loading_thread = None;
-                    }
-
-                    Err(TryRecvError::Empty) => {}
-                }
-            }
-
-            let (needs_repaint, shapes) = egui.run(&display, |ctx| pt_gui.show_ui(ctx, &display));
-
-            *control_flow = if needs_repaint {
-                display.gl_window().window().request_redraw();
-                glutin::event_loop::ControlFlow::Poll
-            } else {
-                let next_frame_time = std::time::Instant::now() + std::time::Duration::from_nanos(16_666_667);
-                glutin::event_loop::ControlFlow::WaitUntil(next_frame_time)
-            };
-
-            {
-                use glium::Surface as _;
-                let mut target = display.draw();
-
-                target.clear_color_and_depth((0.0, 0.0, 0.0, 1.0), 1.0);
-
-                // maybe redo lollipops and stuff
-                pt_gui.maybe_recalculate_3d_helpers(&display);
-
-                let model = &pt_gui.model;
-
-                let mut view_mat = glm::rotation(pt_gui.camera_pitch, &glm::vec3(1., 0., 0.)); // pitch
-                view_mat *= glm::rotation(pt_gui.camera_heading, &glm::vec3(0., 1., 0.)); // heading
-
-                // handle user interactions like rotating the camera
-                let rect = egui.egui_ctx.available_rect(); // the rectangle not covered by egui UI, i.e. the 3d viewport
-                let input = egui.egui_ctx.input();
-                if rect.is_positive() {
-                    let mouse_pos = input.pointer.hover_pos();
-                    let last_click_pos = input.pointer.press_origin();
-                    let in_3d_viewport = mouse_pos.map_or(false, |hover_pos| rect.contains(hover_pos));
-                    let clicked_in_3d_viewport = last_click_pos.map_or(false, |hover_pos| rect.contains(hover_pos));
-                    if clicked_in_3d_viewport {
-                        if !input.modifiers.shift && input.pointer.button_down(egui::PointerButton::Secondary) {
-                            pt_gui.camera_heading += input.pointer.delta().x * -0.01;
-                            pt_gui.camera_pitch += input.pointer.delta().y * -0.01;
+                            egui.egui_ctx.output().cursor_icon = egui::CursorIcon::Default;
                         }
-                        if input.pointer.button_down(egui::PointerButton::Middle)
-                            || input.modifiers.shift && input.pointer.button_down(egui::PointerButton::Secondary)
-                        {
-                            let x = input.pointer.delta().x * -0.005 * pt_gui.camera_scale; // for some reason x gets inverted
-                            let y = input.pointer.delta().y * 0.005 * pt_gui.camera_scale;
+                        Err(TryRecvError::Disconnected) => pt_gui.loading_thread = None,
+                        Ok(None) => pt_gui.loading_thread = None,
 
-                            pt_gui.camera_offset += view_mat.transpose().transform_vector(&glm::vec3(x, y, 0.)).into();
-                        }
-                    }
-                    if in_3d_viewport {
-                        pt_gui.camera_scale *= 1.0 + (input.scroll_delta.y * -0.001)
+                        Err(TryRecvError::Empty) => {}
                     }
                 }
 
-                view_mat.append_translation_mut(&glm::vec3(0.0, 0.0, pt_gui.camera_scale));
+                let (needs_repaint, shapes) = egui.run(&display, |ctx| pt_gui.show_ui(ctx, &display));
 
-                view_mat.prepend_translation_mut(&glm::vec3(-pt_gui.camera_offset.x, -pt_gui.camera_offset.y, -pt_gui.camera_offset.z));
-                view_mat.prepend_translation_mut(&glm::vec3(-model.visual_center.x, -model.visual_center.y, -model.visual_center.z));
-
-                let view_mat: [[f32; 4]; 4] = view_mat.into(); // the final matrix used by the graphics
-
-                let displayed_subobjects =
-                    get_list_of_display_subobjects(model, &pt_gui.ui_state.tree_view_selection, pt_gui.ui_state.last_selected_subobj);
-
-                // brighten up the dark bits so wireframe is easier to see
-                let mut dark_color;
-                if pt_gui.wireframe_enabled {
-                    default_material_draw_params.polygon_mode = glium::draw_parameters::PolygonMode::Line;
-                    default_material_draw_params.backface_culling = glium::draw_parameters::BackfaceCullingMode::CullingDisabled;
-                    dark_color = [0.2, 0.2, 0.2f32];
+                *control_flow = if needs_repaint {
+                    display.gl_window().window().request_redraw();
+                    glutin::event_loop::ControlFlow::Poll
                 } else {
-                    default_material_draw_params.polygon_mode = glium::draw_parameters::PolygonMode::Fill;
-                    default_material_draw_params.backface_culling = glium::draw_parameters::BackfaceCullingMode::CullCounterClockwise;
-                    dark_color = [0.01, 0.01, 0.01f32];
-                }
-
-                // dim down the bright bits when lollipops are on screen
-                let light_color;
-                match &pt_gui.ui_state.tree_view_selection {
-                    TreeSelection::Thrusters(_)
-                    | TreeSelection::Weapons(_)
-                    | TreeSelection::DockingBays(_)
-                    | TreeSelection::Glows(_)
-                    | TreeSelection::SpecialPoints(_)
-                    | TreeSelection::Turrets(_)
-                    | TreeSelection::Paths(_)
-                    | TreeSelection::EyePoints(_)
-                    | TreeSelection::VisualCenter => {
-                        light_color = [0.3, 0.3, 0.3f32];
-                        if pt_gui.wireframe_enabled {
-                            dark_color = [0.05, 0.05, 0.05f32];
-                        }
-                    }
-                    _ => light_color = [0.9, 0.9, 0.9f32],
-                }
-
-                // set up the camera matrix
-                let perspective_matrix = {
-                    let (width, height) = target.get_dimensions();
-                    let aspect_ratio = height as f32 / width as f32;
-
-                    let fov: f32 = std::f32::consts::PI / 3.0;
-                    let zfar = (model.header.max_radius + pt_gui.camera_scale) * 2.0;
-                    let znear = (model.header.max_radius + pt_gui.camera_scale) / 1000.;
-
-                    let f = 1.0 / (fov / 2.0).tan();
-
-                    [
-                        [f * aspect_ratio, 0.0, 0.0, 0.0],
-                        [0.0, f, 0.0, 0.0],
-                        [0.0, 0.0, (zfar + znear) / (zfar - znear), 1.0],
-                        [0.0, 0.0, -(2.0 * zfar * znear) / (zfar - znear), 0.0],
-                    ]
+                    let next_frame_time = std::time::Instant::now() + std::time::Duration::from_nanos(16_666_667);
+                    glutin::event_loop::ControlFlow::WaitUntil(next_frame_time)
                 };
 
-                let light_vec = glm::vec3(0.5, 1.0, -1.0);
+                {
+                    use glium::Surface as _;
+                    let mut target = display.draw();
 
-                // draw the actual subobjects of the model
-                for buffer_obj in &pt_gui.buffer_objects {
-                    // only render if its currently being displayed
-                    if displayed_subobjects[buffer_obj.obj_id] {
-                        let mut mat = glm::identity::<f32, 4>();
-                        mat.append_translation_mut(&pt_gui.model.get_total_subobj_offset(buffer_obj.obj_id).into());
+                    target.clear_color_and_depth((0.0, 0.0, 0.0, 1.0), 1.0);
 
-                        let uniforms = glium::uniform! {
-                            model: <[[f32; 4]; 4]>::from(mat),
-                            view: view_mat,
-                            perspective: perspective_matrix,
-                            u_light: <[f32; 3]>::from(light_vec),
-                            dark_color: dark_color,
-                            light_color: light_color,
-                            tint_color: [0.0, 0.0, 1.0f32],
-                            tint_val: buffer_obj.tint_val,
-                        };
+                    // maybe redo lollipops and stuff
+                    pt_gui.maybe_recalculate_3d_helpers(&display);
 
-                        target
-                            .draw(
-                                (&buffer_obj.vertices, &buffer_obj.normals),
-                                &buffer_obj.indices,
-                                &default_material_shader,
-                                &uniforms,
-                                &default_material_draw_params,
-                            )
-                            .unwrap();
+                    let model = &pt_gui.model;
+
+                    let mut view_mat = glm::rotation(pt_gui.camera_pitch, &glm::vec3(1., 0., 0.)); // pitch
+                    view_mat *= glm::rotation(pt_gui.camera_heading, &glm::vec3(0., 1., 0.)); // heading
+
+                    // handle user interactions like rotating the camera
+                    let rect = egui.egui_ctx.available_rect(); // the rectangle not covered by egui UI, i.e. the 3d viewport
+                    let input = egui.egui_ctx.input();
+                    if rect.is_positive() {
+                        let mouse_pos = input.pointer.hover_pos();
+                        let last_click_pos = input.pointer.press_origin();
+                        let in_3d_viewport = mouse_pos.map_or(false, |hover_pos| rect.contains(hover_pos));
+                        let clicked_in_3d_viewport = last_click_pos.map_or(false, |hover_pos| rect.contains(hover_pos));
+                        if clicked_in_3d_viewport {
+                            if !input.modifiers.shift && input.pointer.button_down(egui::PointerButton::Secondary) {
+                                pt_gui.camera_heading += input.pointer.delta().x * -0.01;
+                                pt_gui.camera_pitch += input.pointer.delta().y * -0.01;
+                            }
+                            if input.pointer.button_down(egui::PointerButton::Middle)
+                                || input.modifiers.shift && input.pointer.button_down(egui::PointerButton::Secondary)
+                            {
+                                let x = input.pointer.delta().x * -0.005 * pt_gui.camera_scale; // for some reason x gets inverted
+                                let y = input.pointer.delta().y * 0.005 * pt_gui.camera_scale;
+
+                                pt_gui.camera_offset += view_mat.transpose().transform_vector(&glm::vec3(x, y, 0.)).into();
+                            }
+                        }
+                        if in_3d_viewport {
+                            pt_gui.camera_scale *= 1.0 + (input.scroll_delta.y * -0.001)
+                        }
                     }
-                }
 
-                // maybe draw the insignias
-                if let TreeSelection::Insignia(insignia_select) = &pt_gui.tree_view_selection {
-                    let (current_detail_level, current_insignia_idx) = match *insignia_select {
-                        InsigniaSelection::Header => (0, None),
-                        InsigniaSelection::Insignia(idx) => (pt_gui.model.insignias[idx].detail_level, Some(idx)),
+                    view_mat.append_translation_mut(&glm::vec3(0.0, 0.0, pt_gui.camera_scale));
+
+                    view_mat.prepend_translation_mut(&glm::vec3(-pt_gui.camera_offset.x, -pt_gui.camera_offset.y, -pt_gui.camera_offset.z));
+                    view_mat.prepend_translation_mut(&glm::vec3(-model.visual_center.x, -model.visual_center.y, -model.visual_center.z));
+
+                    let view_mat: [[f32; 4]; 4] = view_mat.into(); // the final matrix used by the graphics
+
+                    let displayed_subobjects =
+                        get_list_of_display_subobjects(model, &pt_gui.ui_state.tree_view_selection, pt_gui.ui_state.last_selected_subobj);
+
+                    // brighten up the dark bits so wireframe is easier to see
+                    let mut dark_color;
+                    if pt_gui.wireframe_enabled {
+                        default_material_draw_params.polygon_mode = glium::draw_parameters::PolygonMode::Line;
+                        default_material_draw_params.backface_culling = glium::draw_parameters::BackfaceCullingMode::CullingDisabled;
+                        dark_color = [0.2, 0.2, 0.2f32];
+                    } else {
+                        default_material_draw_params.polygon_mode = glium::draw_parameters::PolygonMode::Fill;
+                        default_material_draw_params.backface_culling = glium::draw_parameters::BackfaceCullingMode::CullCounterClockwise;
+                        dark_color = [0.01, 0.01, 0.01f32];
+                    }
+
+                    // dim down the bright bits when lollipops are on screen
+                    let light_color;
+                    match &pt_gui.ui_state.tree_view_selection {
+                        TreeSelection::Thrusters(_)
+                        | TreeSelection::Weapons(_)
+                        | TreeSelection::DockingBays(_)
+                        | TreeSelection::Glows(_)
+                        | TreeSelection::SpecialPoints(_)
+                        | TreeSelection::Turrets(_)
+                        | TreeSelection::Paths(_)
+                        | TreeSelection::EyePoints(_)
+                        | TreeSelection::VisualCenter => {
+                            light_color = [0.3, 0.3, 0.3f32];
+                            if pt_gui.wireframe_enabled {
+                                dark_color = [0.05, 0.05, 0.05f32];
+                            }
+                        }
+                        _ => light_color = [0.9, 0.9, 0.9f32],
+                    }
+
+                    // set up the camera matrix
+                    let perspective_matrix = {
+                        let (width, height) = target.get_dimensions();
+                        let aspect_ratio = height as f32 / width as f32;
+
+                        let fov: f32 = std::f32::consts::PI / 3.0;
+                        let zfar = (model.header.max_radius + pt_gui.camera_scale) * 2.0;
+                        let znear = (model.header.max_radius + pt_gui.camera_scale) / 1000.;
+
+                        let f = 1.0 / (fov / 2.0).tan();
+
+                        [
+                            [f * aspect_ratio, 0.0, 0.0, 0.0],
+                            [0.0, f, 0.0, 0.0],
+                            [0.0, 0.0, (zfar + znear) / (zfar - znear), 1.0],
+                            [0.0, 0.0, -(2.0 * zfar * znear) / (zfar - znear), 0.0],
+                        ]
                     };
 
-                    for (i, insig_buffer) in pt_gui.buffer_insignias.iter().enumerate() {
-                        let insignia = &pt_gui.model.insignias[i];
-                        if insignia.detail_level == current_detail_level {
+                    let light_vec = glm::vec3(0.5, 1.0, -1.0);
+
+                    // draw the actual subobjects of the model
+                    for buffer_obj in &pt_gui.buffer_objects {
+                        // only render if its currently being displayed
+                        if displayed_subobjects[buffer_obj.obj_id] {
                             let mut mat = glm::identity::<f32, 4>();
-                            mat.append_translation_mut(&insignia.offset.into());
+                            mat.append_translation_mut(&pt_gui.model.get_total_subobj_offset(buffer_obj.obj_id).into());
 
-                            let color = if current_insignia_idx == Some(i) {
-                                [1.0, 0.0, 0.0f32]
-                            } else {
-                                [0.0, 0.0, 1.0f32]
-                            };
-
-                            // only render if its currently being displayed
                             let uniforms = glium::uniform! {
                                 model: <[[f32; 4]; 4]>::from(mat),
                                 view: view_mat,
@@ -656,14 +611,14 @@ fn main() {
                                 u_light: <[f32; 3]>::from(light_vec),
                                 dark_color: dark_color,
                                 light_color: light_color,
-                                tint_color: color,
-                                tint_val: 0.3f32,
+                                tint_color: [0.0, 0.0, 1.0f32],
+                                tint_val: buffer_obj.tint_val,
                             };
 
                             target
                                 .draw(
-                                    (&insig_buffer.vertices, &insig_buffer.normals),
-                                    &insig_buffer.indices,
+                                    (&buffer_obj.vertices, &buffer_obj.normals),
+                                    &buffer_obj.indices,
                                     &default_material_shader,
                                     &uniforms,
                                     &default_material_draw_params,
@@ -671,141 +626,151 @@ fn main() {
                                 .unwrap();
                         }
                     }
-                }
 
-                // maybe draw the shield
-                if let TreeSelection::Shield = pt_gui.tree_view_selection {
-                    if let Some(shield) = &pt_gui.buffer_shield {
-                        let uniforms = glium::uniform! {
-                            model: <[[f32; 4]; 4]>::from(glm::identity::<f32, 4>()),
-                            view: view_mat,
-                            perspective: perspective_matrix,
-                            u_light: [0.0, 0.0, -1.0f32],
-                            dark_color: [0.0, 0.0, 0.0f32],
-                            light_color: [0.2, 0.3, 0.9f32],
-                            tint_color: [0.0, 0.0, 1.0f32],
-                            tint_val: 0.0f32,
+                    // maybe draw the insignias
+                    if let TreeSelection::Insignia(insignia_select) = &pt_gui.tree_view_selection {
+                        let (current_detail_level, current_insignia_idx) = match *insignia_select {
+                            InsigniaSelection::Header => (0, None),
+                            InsigniaSelection::Insignia(idx) => (pt_gui.model.insignias[idx].detail_level, Some(idx)),
                         };
 
-                        target
-                            .draw((&shield.vertices, &shield.normals), &shield.indices, &shield_shader, &uniforms, &shield_draw_params)
-                            .unwrap();
-                    }
-                }
+                        for (i, insig_buffer) in pt_gui.buffer_insignias.iter().enumerate() {
+                            let insignia = &pt_gui.model.insignias[i];
+                            if insignia.detail_level == current_detail_level {
+                                let mut mat = glm::identity::<f32, 4>();
+                                mat.append_translation_mut(&insignia.offset.into());
 
-                // draw 'helpers'
-                // bounding boxes, lollipops, etc
-                match &pt_gui.ui_state.tree_view_selection {
-                    &TreeSelection::SubObjects(SubObjectSelection::SubObject(obj_id)) => {
-                        // draw wireframe bounding boxes
-                        let bbox = &pt_gui.model.sub_objects[obj_id].bbox;
+                                let color = if current_insignia_idx == Some(i) {
+                                    [1.0, 0.0, 0.0f32]
+                                } else {
+                                    [0.0, 0.0, 1.0f32]
+                                };
 
-                        let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
-                        mat.append_translation_mut(&(bbox.min + pt_gui.model.get_total_subobj_offset(obj_id)).into());
-                        let uniforms = glium::uniform! {
-                            model: <[[f32; 4]; 4]>::from(mat),
-                            view: view_mat,
-                            perspective: perspective_matrix,
-                        };
+                                // only render if its currently being displayed
+                                let uniforms = glium::uniform! {
+                                    model: <[[f32; 4]; 4]>::from(mat),
+                                    view: view_mat,
+                                    perspective: perspective_matrix,
+                                    u_light: <[f32; 3]>::from(light_vec),
+                                    dark_color: dark_color,
+                                    light_color: light_color,
+                                    tint_color: color,
+                                    tint_val: 0.3f32,
+                                };
 
-                        for buffer in &pt_gui.buffer_objects {
-                            if buffer.obj_id == obj_id {
                                 target
-                                    .draw(&box_verts, &box_indices, &wireframe_shader, &uniforms, &wireframe_params)
+                                    .draw(
+                                        (&insig_buffer.vertices, &insig_buffer.normals),
+                                        &insig_buffer.indices,
+                                        &default_material_shader,
+                                        &uniforms,
+                                        &default_material_draw_params,
+                                    )
                                     .unwrap();
                             }
                         }
-
-                        //      DEBUG - Draw BSP node bounding boxes
-                        //      This is quite useful but incredibly ineffcient
-                        //      TODO make this more efficient
-                        //
-                        // let mut node_stack = vec![(&pt_gui.model.sub_objects[obj_id].bsp_data.collision_tree, 0u32)];
-                        // loop {
-                        //     if let Some((node, depth)) = node_stack.pop() {
-                        //         let bbox = match node {
-                        //             BspNode::Split { bbox, front, back, .. } => {
-                        //                 node_stack.push((front, depth + 1));
-                        //                 node_stack.push((back, depth + 1));
-                        //                 bbox
-                        //             }
-                        //             BspNode::Leaf { bbox, .. } => bbox,
-                        //         };
-
-                        //         let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
-                        //         mat.append_translation_mut(&(bbox.min + pt_gui.model.get_total_subobj_offset(obj_id)).into());
-                        //         let color = 2.0 / (1.5f32.powf(depth as f32));
-
-                        //         let uniforms = glium::uniform! {
-                        //             model: <[[f32; 4]; 4]>::from(mat),
-                        //             view: view_mat,
-                        //             perspective: perspective_matrix,
-                        //             lollipop_color: [color, color, color, 1.0f32],
-                        //         };
-
-                        //         target
-                        //             .draw(&box_verts, &box_indices, &lollipop_stick_shader, &uniforms, &lollipop_stick_params)
-                        //             .unwrap();
-                        //     } else {
-                        //         break;
-                        //     }
-                        // }
                     }
-                    TreeSelection::Thrusters(_)
-                    | TreeSelection::Weapons(_)
-                    | TreeSelection::DockingBays(_)
-                    | TreeSelection::Glows(_)
-                    | TreeSelection::SpecialPoints(_)
-                    | TreeSelection::Turrets(_)
-                    | TreeSelection::Paths(_)
-                    | TreeSelection::EyePoints(_)
-                    | TreeSelection::VisualCenter => {
-                        // draw lollipops!
-                        for lollipop_group in &pt_gui.lollipops {
-                            if let TreeSelection::Paths(_) = &pt_gui.ui_state.tree_view_selection {
-                                lollipop_params.blend = glium::Blend::alpha_blending();
-                            } else {
-                                lollipop_params.blend = ADDITIVE_BLEND;
-                            }
 
+                    // maybe draw the shield
+                    if let TreeSelection::Shield = pt_gui.tree_view_selection {
+                        if let Some(shield) = &pt_gui.buffer_shield {
                             let uniforms = glium::uniform! {
                                 model: <[[f32; 4]; 4]>::from(glm::identity::<f32, 4>()),
                                 view: view_mat,
                                 perspective: perspective_matrix,
-                                lollipop_color: lollipop_group.color,
+                                u_light: [0.0, 0.0, -1.0f32],
+                                dark_color: [0.0, 0.0, 0.0f32],
+                                light_color: [0.2, 0.3, 0.9f32],
+                                tint_color: [0.0, 0.0, 1.0f32],
+                                tint_val: 0.0f32,
                             };
 
                             target
-                                .draw(
-                                    (&icosphere_verts, lollipop_group.lolly_vertices.per_instance().unwrap()),
-                                    &icosphere_indices,
-                                    &lollipop_shader,
-                                    &uniforms,
-                                    &lollipop_params,
-                                )
+                                .draw((&shield.vertices, &shield.normals), &shield.indices, &shield_shader, &uniforms, &shield_draw_params)
                                 .unwrap();
-                            target
-                                .draw(
-                                    &lollipop_group.stick_vertices,
-                                    &lollipop_group.stick_indices,
-                                    &lollipop_stick_shader,
-                                    &uniforms,
-                                    &lollipop_stick_params,
-                                )
-                                .unwrap();
+                        }
+                    }
 
-                            if !matches!(pt_gui.ui_state.tree_view_selection, TreeSelection::Paths(_)) {
-                                // ...then draw the lollipops with reverse depth order, darker
-                                // this gives the impression that the lollipops are dimly visible through the model
-                                // (dont do it for path lollipops, they're busy enough)
+                    // draw 'helpers'
+                    // bounding boxes, lollipops, etc
+                    match &pt_gui.ui_state.tree_view_selection {
+                        &TreeSelection::SubObjects(SubObjectSelection::SubObject(obj_id)) => {
+                            // draw wireframe bounding boxes
+                            let bbox = &pt_gui.model.sub_objects[obj_id].bbox;
 
-                                // same uniforms as above, but darkened
-                                // i cant just modify the previous uniforms variable, the uniforms! macro is doing some crazy shit
+                            let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
+                            mat.append_translation_mut(&(bbox.min + pt_gui.model.get_total_subobj_offset(obj_id)).into());
+                            let uniforms = glium::uniform! {
+                                model: <[[f32; 4]; 4]>::from(mat),
+                                view: view_mat,
+                                perspective: perspective_matrix,
+                            };
+
+                            for buffer in &pt_gui.buffer_objects {
+                                if buffer.obj_id == obj_id {
+                                    target
+                                        .draw(&box_verts, &box_indices, &wireframe_shader, &uniforms, &wireframe_params)
+                                        .unwrap();
+                                }
+                            }
+
+                            //      DEBUG - Draw BSP node bounding boxes
+                            //      This is quite useful but incredibly ineffcient
+                            //      TODO make this more efficient
+                            //
+                            // let mut node_stack = vec![(&pt_gui.model.sub_objects[obj_id].bsp_data.collision_tree, 0u32)];
+                            // loop {
+                            //     if let Some((node, depth)) = node_stack.pop() {
+                            //         let bbox = match node {
+                            //             BspNode::Split { bbox, front, back, .. } => {
+                            //                 node_stack.push((front, depth + 1));
+                            //                 node_stack.push((back, depth + 1));
+                            //                 bbox
+                            //             }
+                            //             BspNode::Leaf { bbox, .. } => bbox,
+                            //         };
+
+                            //         let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
+                            //         mat.append_translation_mut(&(bbox.min + pt_gui.model.get_total_subobj_offset(obj_id)).into());
+                            //         let color = 2.0 / (1.5f32.powf(depth as f32));
+
+                            //         let uniforms = glium::uniform! {
+                            //             model: <[[f32; 4]; 4]>::from(mat),
+                            //             view: view_mat,
+                            //             perspective: perspective_matrix,
+                            //             lollipop_color: [color, color, color, 1.0f32],
+                            //         };
+
+                            //         target
+                            //             .draw(&box_verts, &box_indices, &lollipop_stick_shader, &uniforms, &lollipop_stick_params)
+                            //             .unwrap();
+                            //     } else {
+                            //         break;
+                            //     }
+                            // }
+                        }
+                        TreeSelection::Thrusters(_)
+                        | TreeSelection::Weapons(_)
+                        | TreeSelection::DockingBays(_)
+                        | TreeSelection::Glows(_)
+                        | TreeSelection::SpecialPoints(_)
+                        | TreeSelection::Turrets(_)
+                        | TreeSelection::Paths(_)
+                        | TreeSelection::EyePoints(_)
+                        | TreeSelection::VisualCenter => {
+                            // draw lollipops!
+                            for lollipop_group in &pt_gui.lollipops {
+                                if let TreeSelection::Paths(_) = &pt_gui.ui_state.tree_view_selection {
+                                    lollipop_params.blend = glium::Blend::alpha_blending();
+                                } else {
+                                    lollipop_params.blend = ADDITIVE_BLEND;
+                                }
+
                                 let uniforms = glium::uniform! {
                                     model: <[[f32; 4]; 4]>::from(glm::identity::<f32, 4>()),
                                     view: view_mat,
                                     perspective: perspective_matrix,
-                                    lollipop_color: lollipop_group.color.map(|col| col * 0.15 ), // <<< THIS IS DIFFERENT FROM ABOVE
+                                    lollipop_color: lollipop_group.color,
                                 };
 
                                 target
@@ -814,27 +779,93 @@ fn main() {
                                         &icosphere_indices,
                                         &lollipop_shader,
                                         &uniforms,
-                                        &lollipop_rev_depth_params,
+                                        &lollipop_params,
                                     )
                                     .unwrap();
+                                target
+                                    .draw(
+                                        &lollipop_group.stick_vertices,
+                                        &lollipop_group.stick_indices,
+                                        &lollipop_stick_shader,
+                                        &uniforms,
+                                        &lollipop_stick_params,
+                                    )
+                                    .unwrap();
+
+                                if !matches!(pt_gui.ui_state.tree_view_selection, TreeSelection::Paths(_)) {
+                                    // ...then draw the lollipops with reverse depth order, darker
+                                    // this gives the impression that the lollipops are dimly visible through the model
+                                    // (dont do it for path lollipops, they're busy enough)
+
+                                    // same uniforms as above, but darkened
+                                    // i cant just modify the previous uniforms variable, the uniforms! macro is doing some crazy shit
+                                    let uniforms = glium::uniform! {
+                                        model: <[[f32; 4]; 4]>::from(glm::identity::<f32, 4>()),
+                                        view: view_mat,
+                                        perspective: perspective_matrix,
+                                        lollipop_color: lollipop_group.color.map(|col| col * 0.15 ), // <<< THIS IS DIFFERENT FROM ABOVE
+                                    };
+
+                                    target
+                                        .draw(
+                                            (&icosphere_verts, lollipop_group.lolly_vertices.per_instance().unwrap()),
+                                            &icosphere_indices,
+                                            &lollipop_shader,
+                                            &uniforms,
+                                            &lollipop_rev_depth_params,
+                                        )
+                                        .unwrap();
+                                }
                             }
                         }
+                        _ => {}
                     }
-                    _ => {}
+
+                    egui.paint(&display, &mut target, shapes);
+
+                    target.finish().unwrap();
                 }
+            };
+
+            // error handling (crude as it is)
+            // do the whole frame, catch any panics
+            if frame_result.is_ok() {
+                frame_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(redraw)).map_err(|err| {
+                    err.downcast::<String>()
+                        .unwrap_or_else(|_| Box::new(format!("Error didn't give a string sorry :(")))
+                });
+            }
+
+            // if there was an error, do this mini event loop and display the error message
+            if let Err(error) = &frame_result {
+                let (needs_repaint, shapes) = egui.run(&display, |ctx| {
+                    egui::CentralPanel::default()
+                        .show(ctx, |ui| ui.heading(RichText::new(format!("Error! Please report this!\n\n{}", error)).color(Color32::RED)));
+                });
+
+                *control_flow = if needs_repaint {
+                    display.gl_window().window().request_redraw();
+                    glutin::event_loop::ControlFlow::Poll
+                } else {
+                    let next_frame_time = std::time::Instant::now() + std::time::Duration::from_nanos(16_666_667);
+                    glutin::event_loop::ControlFlow::WaitUntil(next_frame_time)
+                };
+                let mut target = display.draw();
+                use glium::Surface as _;
+                target.clear_color_and_depth((0.0, 0.0, 0.0, 1.0), 1.0);
 
                 egui.paint(&display, &mut target, shapes);
 
                 target.finish().unwrap();
             }
         };
-        //println!("{:#?}", event);
+
         match event {
             // Platform-dependent event handlers to workaround a winit bug
             // See: https://github.com/rust-windowing/winit/issues/987
             // See: https://github.com/rust-windowing/winit/issues/1619
-            glutin::event::Event::RedrawEventsCleared if cfg!(windows) => redraw(),
-            glutin::event::Event::RedrawRequested(_) if !cfg!(windows) => redraw(),
+            glutin::event::Event::RedrawEventsCleared if cfg!(windows) => catch_redraw(),
+            glutin::event::Event::RedrawRequested(_) if !cfg!(windows) => catch_redraw(),
             glutin::event::Event::DeviceEvent { .. } => {
                 // match event {
                 //     glutin::event::DeviceEvent::Added => todo!(),
@@ -859,7 +890,7 @@ fn main() {
             }
 
             _ => (),
-        }
+        };
     });
 }
 

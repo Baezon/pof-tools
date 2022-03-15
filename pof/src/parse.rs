@@ -877,7 +877,7 @@ fn dae_parse_subobject_recursive(
     let zero = Vec3d::ZERO.into();
     let center = transform.transform_point(&zero) - zero;
 
-    if name.to_lowercase().contains("insignia") {
+    if name.to_lowercase().contains("insig") {
         let mut faces = vec![];
         for (_, verts) in polygons_out {
             if let [vert1, ref rest @ ..] = &*verts {
@@ -1055,7 +1055,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                     }
                 }
                 shield_data = Some(ShieldData { verts: vertices_out, polygons, collision_tree: None });
-            } else if name.to_lowercase().contains("insignia") {
+            } else if name.to_lowercase().contains("insig") {
                 let mut faces = vec![];
                 for (_, verts) in polygons_out {
                     if let [vert1, ref rest @ ..] = &*verts {

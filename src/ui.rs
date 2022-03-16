@@ -10,7 +10,7 @@ use std::{collections::BTreeSet, str::FromStr, sync::mpsc::Receiver};
 use eframe::egui::{self, Button, TextStyle, Ui};
 use pof::ObjectId;
 
-use crate::{GlBufferedInsignia, GlBufferedObject, GlBufferedShield, GlLollipops, POF_TOOLS_VERISON};
+use crate::{GlBufferedInsignia, GlBufferedObject, GlBufferedShield, GlLollipops, POF_TOOLS_VERSION};
 
 #[derive(PartialEq)]
 enum TransformType {
@@ -237,7 +237,7 @@ impl PropertiesPanel {
     }
 }
 
-#[derive(PartialEq, Hash)]
+#[derive(PartialEq, Hash, Debug)]
 pub(crate) enum TreeSelection {
     Header,
     SubObjects(SubObjectSelection),
@@ -254,6 +254,27 @@ pub(crate) enum TreeSelection {
     Insignia(InsigniaSelection),
     VisualCenter,
     Comments,
+}
+impl std::fmt::Display for TreeSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TreeSelection::Header => write!(f, "Treeview - Header"),
+            TreeSelection::SubObjects(selection) => write!(f, "Treeview - Subobjects - {}", selection),
+            TreeSelection::Textures(selection) => write!(f, "Treeview - Textures - {}", selection),
+            TreeSelection::Weapons(selection) => write!(f, "Treeview - Weapons - {}", selection),
+            TreeSelection::DockingBays(selection) => write!(f, "Treeview - DockingBays - {}", selection),
+            TreeSelection::Thrusters(selection) => write!(f, "Treeview - Thrusters - {}", selection),
+            TreeSelection::Glows(selection) => write!(f, "Treeview - Glows - {}", selection),
+            TreeSelection::SpecialPoints(selection) => write!(f, "Treeview - SpecialPoints - {}", selection),
+            TreeSelection::Turrets(selection) => write!(f, "Treeview - Turrets - {}", selection),
+            TreeSelection::Paths(selection) => write!(f, "Treeview - Paths - {}", selection),
+            TreeSelection::Shield => write!(f, "Treeview - Shield"),
+            TreeSelection::EyePoints(selection) => write!(f, "Treeview - EyePoints - {}", selection),
+            TreeSelection::Insignia(selection) => write!(f, "Treeview - Insignia - {}", selection),
+            TreeSelection::VisualCenter => write!(f, "Treeview - VisualCenter"),
+            TreeSelection::Comments => write!(f, "Treeview - Comments"),
+        }
+    }
 }
 impl Default for TreeSelection {
     fn default() -> Self {
@@ -304,10 +325,18 @@ impl TreeSelection {
     //     }
     // }
 }
-#[derive(PartialEq, Hash)]
+#[derive(PartialEq, Hash, Debug)]
 pub(crate) enum InsigniaSelection {
     Header,
     Insignia(usize), // insignia idx
+}
+impl std::fmt::Display for InsigniaSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InsigniaSelection::Header => write!(f, "Header"),
+            InsigniaSelection::Insignia(idx) => write!(f, "{}", idx),
+        }
+    }
 }
 impl InsigniaSelection {
     fn _insignia(point: Option<usize>) -> Self {
@@ -318,10 +347,18 @@ impl InsigniaSelection {
     }
 }
 
-#[derive(PartialEq, Hash)]
+#[derive(PartialEq, Hash, Debug)]
 pub(crate) enum EyeSelection {
     Header,
     EyePoint(usize), // eye idx
+}
+impl std::fmt::Display for EyeSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EyeSelection::Header => write!(f, "Header"),
+            EyeSelection::EyePoint(idx) => write!(f, "{}", idx),
+        }
+    }
 }
 impl EyeSelection {
     fn point(point: Option<usize>) -> Self {
@@ -332,11 +369,20 @@ impl EyeSelection {
     }
 }
 
-#[derive(PartialEq, Hash)]
+#[derive(PartialEq, Hash, Debug)]
 pub(crate) enum PathSelection {
     Header,
     Path(usize),             // path idx
     PathPoint(usize, usize), // path idx, point idx
+}
+impl std::fmt::Display for PathSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PathSelection::Header => write!(f, "Header"),
+            PathSelection::Path(idx) => write!(f, "Path {}", idx),
+            PathSelection::PathPoint(idx, idx2) => write!(f, "Path {} Point {}", idx, idx2),
+        }
+    }
 }
 impl PathSelection {
     fn path_point(path: usize, point: Option<usize>) -> Self {
@@ -353,11 +399,21 @@ impl PathSelection {
     }
 }
 
-#[derive(PartialEq, Hash)]
+#[derive(PartialEq, Hash, Debug)]
 pub(crate) enum TurretSelection {
     Header,
     Turret(usize),             // turret idx
     TurretPoint(usize, usize), // turret idx, point idx
+}
+
+impl std::fmt::Display for TurretSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TurretSelection::Header => write!(f, "Header"),
+            TurretSelection::Turret(idx) => write!(f, "Turret {}", idx),
+            TurretSelection::TurretPoint(idx, idx2) => write!(f, "Turret {} Point {}", idx, idx2),
+        }
+    }
 }
 impl TurretSelection {
     fn turret_point(turret: usize, point: Option<usize>) -> Self {
@@ -374,10 +430,18 @@ impl TurretSelection {
     }
 }
 
-#[derive(PartialEq, Hash)]
+#[derive(PartialEq, Hash, Debug)]
 pub(crate) enum SpecialPointSelection {
     Header,
     Point(usize),
+}
+impl std::fmt::Display for SpecialPointSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SpecialPointSelection::Header => write!(f, "Header"),
+            SpecialPointSelection::Point(idx) => write!(f, "Point {}", idx),
+        }
+    }
 }
 impl SpecialPointSelection {
     fn point(point: Option<usize>) -> Self {
@@ -388,11 +452,21 @@ impl SpecialPointSelection {
     }
 }
 
-#[derive(PartialEq, Hash)]
+#[derive(PartialEq, Hash, Debug)]
 pub(crate) enum GlowSelection {
     Header,
     Bank(usize),             // bank idx
     BankPoint(usize, usize), // bank idx, point idx
+}
+
+impl std::fmt::Display for GlowSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GlowSelection::Header => write!(f, "Header"),
+            GlowSelection::Bank(idx) => write!(f, "Bank {}", idx),
+            GlowSelection::BankPoint(idx, idx2) => write!(f, "Bank {} Point {}", idx, idx2),
+        }
+    }
 }
 impl GlowSelection {
     fn bank_point(bank: usize, point: Option<usize>) -> Self {
@@ -409,11 +483,20 @@ impl GlowSelection {
     }
 }
 
-#[derive(PartialEq, Hash)]
+#[derive(PartialEq, Hash, Debug)]
 pub(crate) enum DockingSelection {
     Header,
     Bay(usize),             // bank idx
     BayPoint(usize, usize), // bank idx, point idx
+}
+impl std::fmt::Display for DockingSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DockingSelection::Header => write!(f, "Header"),
+            DockingSelection::Bay(idx) => write!(f, "Bay {}", idx),
+            DockingSelection::BayPoint(idx, idx2) => write!(f, "Bank {} Point {}", idx, idx2),
+        }
+    }
 }
 impl DockingSelection {
     fn bay_point(bay: usize, point: Option<usize>) -> Self {
@@ -430,7 +513,7 @@ impl DockingSelection {
     }
 }
 
-#[derive(PartialEq, Hash)]
+#[derive(PartialEq, Hash, Debug)]
 pub(crate) enum WeaponSelection {
     Header,
     PriHeader,
@@ -439,6 +522,19 @@ pub(crate) enum WeaponSelection {
     SecHeader,
     SecBank(usize),             // bank idx
     SecBankPoint(usize, usize), // bank idx, point idx
+}
+impl std::fmt::Display for WeaponSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WeaponSelection::Header => write!(f, "Header"),
+            WeaponSelection::PriHeader => write!(f, "Primary Header"),
+            WeaponSelection::PriBank(idx) => write!(f, "Primary Bank {}", idx),
+            WeaponSelection::PriBankPoint(idx, idx2) => write!(f, "Primary Bank {} Point {}", idx, idx2),
+            WeaponSelection::SecHeader => write!(f, "Secondary Header"),
+            WeaponSelection::SecBank(idx) => write!(f, "Secondary Bank {}", idx),
+            WeaponSelection::SecBankPoint(idx, idx2) => write!(f, "Secondary Bank {} Point {}", idx, idx2),
+        }
+    }
 }
 impl WeaponSelection {
     fn bank_point(is_primary: bool, bank: usize, point: Option<usize>) -> Self {
@@ -459,17 +555,34 @@ impl WeaponSelection {
     }
 }
 
-#[derive(PartialEq, Hash)]
+#[derive(PartialEq, Hash, Debug)]
 pub(crate) enum TextureSelection {
     Header,
     Texture(TextureId),
 }
+impl std::fmt::Display for TextureSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TextureSelection::Header => write!(f, "Header"),
+            TextureSelection::Texture(idx) => write!(f, "Texture {}", idx.0),
+        }
+    }
+}
 
-#[derive(PartialEq, Hash)]
+#[derive(PartialEq, Hash, Debug)]
 pub(crate) enum ThrusterSelection {
     Header,
     Bank(usize),             // bank idx
     BankPoint(usize, usize), // bank idx, point idx
+}
+impl std::fmt::Display for ThrusterSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ThrusterSelection::Header => write!(f, "Header"),
+            ThrusterSelection::Bank(idx) => write!(f, "Bank {}", idx),
+            ThrusterSelection::BankPoint(idx, idx2) => write!(f, "Bank {} Point {}", idx, idx2),
+        }
+    }
 }
 impl ThrusterSelection {
     fn bank_point(bank: usize, point: Option<usize>) -> Self {
@@ -486,10 +599,19 @@ impl ThrusterSelection {
     }
 }
 
-#[derive(PartialEq, Hash)]
+#[derive(PartialEq, Hash, Debug)]
 pub(crate) enum SubObjectSelection {
     Header,
     SubObject(ObjectId),
+}
+
+impl std::fmt::Display for SubObjectSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SubObjectSelection::Header => write!(f, "Header"),
+            SubObjectSelection::SubObject(idx) => write!(f, "SubObject {}", idx.0),
+        }
+    }
 }
 
 enum IndexingButtonsResponse {
@@ -621,13 +743,6 @@ impl PofToolsGui {
             lollipops: Default::default(),
         }
     }
-    // fn warnings_contains_any_subobj_radius_too_small(&self) -> bool {
-    //     matches!(self.warnings.range(Warning::RadiusTooSmall(Some(ObjectId(0)))..).next(), Some(Warning::RadiusTooSmall(Some(_))))
-    // }
-
-    // fn errors_contains_any_turret_invalid_gun(&self) -> bool {
-    //     matches!(self.errors.range(Error::InvalidTurretGunSubobject(0)..).next(), Some(Error::InvalidTurretGunSubobject(_)))
-    // }
 
     fn tree_selectable_item(&mut self, ui: &mut Ui, name: &str, selection: TreeSelection) {
         self.ui_state.tree_selectable_item(&self.model, ui, name, selection);
@@ -654,6 +769,8 @@ impl UiState {
             self.refresh_properties_panel(model);
             self.viewport_3d_dirty = true;
 
+            info!("Switched to {}", self.tree_view_selection);
+
             // maybe update ast selected object
             if let TreeSelection::SubObjects(SubObjectSelection::SubObject(id)) = self.tree_view_selection {
                 self.last_selected_subobj = id;
@@ -673,6 +790,8 @@ impl UiState {
             self.tree_view_selection = tree_value;
             self.refresh_properties_panel(model);
             self.viewport_3d_dirty = true;
+
+            info!("Switched to {}", self.tree_view_selection);
 
             // maybe update last selected object
             if let TreeSelection::SubObjects(SubObjectSelection::SubObject(id)) = self.tree_view_selection {
@@ -1223,7 +1342,7 @@ impl PofToolsGui {
                         display
                             .gl_window()
                             .window()
-                            .set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERISON, filename));
+                            .set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, filename));
                         self.model.filename = filename;
                     }
                 }
@@ -1966,6 +2085,13 @@ impl PofToolsGui {
                             //         sum_depth as f32 / size as f32,
                             //     );
                             // }
+
+                            ui.separator();
+
+                            if let Some(id) = selected_id {
+                                ui.label(RichText::new(format!("Vertices: {}", self.model.sub_objects[id].bsp_data.verts.len())).weak());
+                                ui.label(RichText::new(format!("Normals: {}", self.model.sub_objects[id].bsp_data.norms.len())).weak());
+                            }
                         }
                         PropertiesPanel::Texture { texture_name } => {
                             ui.heading("Textures");

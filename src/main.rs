@@ -1,33 +1,35 @@
 #![windows_subsystem = "windows"]
 #![allow(clippy::useless_format)]
-use egui::{Color32, RichText};
-use native_dialog::FileDialog;
-use std::{collections::HashMap, fs::File, path::PathBuf, sync::mpsc::TryRecvError};
-
-//use egui::{FontFamily, TextStyle};
-use glium::{
-    glutin::{self, event::WindowEvent, window::Icon},
-    BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer,
-};
-use pof::{Insignia, Model, ObjVec, ObjectId, Parser, ShieldData, SubObject, TextureId, Texturing, Vec3d};
+#[macro_use]
+extern crate log;
 extern crate nalgebra_glm as glm;
-
-mod sphere;
-mod ui;
-use ui::{PofToolsGui, TreeSelection};
+extern crate simplelog;
 
 use crate::ui::{
     DockingSelection, EyeSelection, GlowSelection, InsigniaSelection, PathSelection, SpecialPointSelection, SubObjectSelection, TextureSelection,
     ThrusterSelection, TurretSelection, WeaponSelection,
 };
+use backtrace::Backtrace;
+use egui::{Color32, RichText, TextEdit};
+use glium::{
+    glutin::{self, event::WindowEvent, window::Icon},
+    BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer,
+};
+use native_dialog::FileDialog;
+use once_cell::sync::OnceCell;
+use pof::{Insignia, Model, ObjVec, ObjectId, Parser, ShieldData, SubObject, TextureId, Texturing, Vec3d};
+use simplelog::*;
+use std::{collections::HashMap, fs::File, path::PathBuf, sync::mpsc::TryRecvError};
+use ui::{PofToolsGui, Set::*, TreeSelection};
 
-use ui::Set::*;
+mod sphere;
+mod ui;
 
 fn create_display(event_loop: &glutin::event_loop::EventLoop<()>) -> glium::Display {
     let window_builder = glutin::window::WindowBuilder::new()
         .with_resizable(true)
         .with_inner_size(glutin::dpi::LogicalSize { width: 800.0f32, height: 600.0f32 })
-        .with_title(format!("Pof Tools v{}", POF_TOOLS_VERISON))
+        .with_title(format!("Pof Tools v{}", POF_TOOLS_VERSION))
         .with_window_icon(Some(Icon::from_rgba(include_bytes!("icon.raw").to_vec(), 32, 32).unwrap()));
 
     let context_builder = glutin::ContextBuilder::new()
@@ -102,6 +104,7 @@ struct GlBufferedShield {
 }
 impl GlBufferedShield {
     fn new(display: &Display, shield_data: &ShieldData) -> GlBufferedShield {
+        info!("Building buffer for the shield");
         let mut vertices = vec![];
         let mut normals = vec![];
         let mut indices = vec![];
@@ -141,6 +144,7 @@ struct GlBufferedInsignia {
 }
 impl GlBufferedInsignia {
     fn new(display: &Display, insignia: &Insignia) -> GlBufferedInsignia {
+        info!("Building buffer for a LOD {} insignia ", insignia.detail_level);
         let mut vertices = vec![];
         let mut normals = vec![];
         let mut indices = vec![];
@@ -242,6 +246,7 @@ impl GlBufferedObject {
         if vertices.is_empty() {
             None
         } else {
+            info!("Built buffer for subobj {}", object.name);
             Some(GlBufferedObject {
                 obj_id: object.obj_id,
                 tmap,
@@ -282,6 +287,7 @@ impl PofToolsGui {
         crossbeam::thread::scope(|s| {
             s.spawn(|_| {
                 let path = FileDialog::new()
+                    .set_filename(&model.filename)
                     .add_filter("All Supported Files", &["pof", "dae"])
                     .add_filter("Parallax Object File", &["pof"])
                     .add_filter("Digital Asset Exchange file", &["dae"])
@@ -319,6 +325,7 @@ impl PofToolsGui {
             if let Some(path) = path {
                 let ext = path.extension().map(|ext| ext.to_ascii_lowercase());
                 let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
+                info!("Attempting to load {}", filename);
                 let model = match ext.as_ref().and_then(|ext| ext.to_str()) {
                     Some("dae") => pof::parse_dae(path, filename),
                     Some("pof") => {
@@ -381,13 +388,47 @@ impl PofToolsGui {
         display
             .gl_window()
             .window()
-            .set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERISON, &self.model.filename));
+            .set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, &self.model.filename));
+
+        info!("Loaded {}", self.model.filename);
     }
 }
 
-const POF_TOOLS_VERISON: f32 = 0.9;
+const POF_TOOLS_VERSION: &str = "0.9.1";
+
+// we need this weird type specifically for catching panic info
+static LAST_PANIC: OnceCell<(String, Backtrace)> = OnceCell::new();
 
 fn main() {
+    // set up a panic handler to grab the backtrace
+    std::panic::set_hook(Box::new(|panic_info| {
+        let backtrace = backtrace::Backtrace::new();
+        let msg = format!("{},  {}", panic_info.payload().downcast_ref::<String>().unwrap(), panic_info.location().unwrap());
+        let mut frames = vec![];
+        for frame in backtrace.frames() {
+            // filter out anything which doesn't have pof-tools in the path
+            // maybe not great? but filters out a huge amount of unrelated shit
+            let should_print = frame
+                .symbols()
+                .iter()
+                .any(|symbol| (|| symbol.filename()?.to_str()?.contains("pof-tools").then(|| ()))().is_some());
+            if should_print {
+                frames.push(frame.clone())
+            }
+        }
+
+        LAST_PANIC.get_or_init(|| (msg, frames.into()));
+    }));
+
+    // set up the logger
+    let mut logger_config = ConfigBuilder::new();
+    logger_config.set_time_level(LevelFilter::Off);
+    logger_config.set_max_level(LevelFilter::Off);
+    if let Ok(file) = File::create("pof-tools.log") {
+        let _ = WriteLogger::init(LevelFilter::Info, logger_config.build(), file);
+    }
+    info!("Pof Tools {} - {}", POF_TOOLS_VERSION, chrono::Local::now());
+
     let event_loop = glutin::event_loop::EventLoop::with_user_event();
     let mut pt_gui = PofToolsGui::new();
     let display = create_display(&event_loop);
@@ -459,7 +500,7 @@ fn main() {
     pt_gui.camera_offset = Vec3d::ZERO;
     pt_gui.camera_scale = model.header.max_radius * 2.0;
 
-    let mut frame_result = Ok(());
+    let mut errored = false;
 
     event_loop.run(move |event, _, control_flow| {
         let mut catch_redraw = || {
@@ -829,18 +870,20 @@ fn main() {
 
             // error handling (crude as it is)
             // do the whole frame, catch any panics
-            if frame_result.is_ok() {
-                frame_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(redraw)).map_err(|err| {
-                    err.downcast::<String>()
-                        .unwrap_or_else(|_| Box::new(format!("Error didn't give a string sorry :(")))
-                });
+            if !errored {
+                errored = std::panic::catch_unwind(std::panic::AssertUnwindSafe(redraw)).is_err();
             }
 
             // if there was an error, do this mini event loop and display the error message
-            if let Err(error) = &frame_result {
+            if errored {
+                let (error_string, backtrace) = LAST_PANIC.get().unwrap();
                 let (needs_repaint, shapes) = egui.run(&display, |ctx| {
-                    egui::CentralPanel::default()
-                        .show(ctx, |ui| ui.heading(RichText::new(format!("Error! Please report this!\n\n{}", error)).color(Color32::RED)));
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                            ui.heading(RichText::new(format!("Error! Please report this!\n\n{}", error_string)).color(Color32::RED));
+                            ui.add_sized(ui.available_size(), TextEdit::multiline(&mut &*format!("{:?}", backtrace)));
+                        });
+                    });
                 });
 
                 *control_flow = if needs_repaint {

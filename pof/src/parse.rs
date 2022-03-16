@@ -13,7 +13,7 @@ fn parse_subsys_mov_type(val: i32) -> SubsysMovementType {
         2 => SubsysMovementType::ROTSPECIAL,
         3 => SubsysMovementType::TRIGGERED,
         4 => SubsysMovementType::INTRINSICROTATE,
-        _ => unreachable!(),
+        _ => SubsysMovementType::NONE,
     }
 }
 
@@ -24,7 +24,7 @@ fn parse_subsys_mov_axis(val: i32) -> SubsysMovementAxis {
         1 => SubsysMovementAxis::ZAXIS,
         2 => SubsysMovementAxis::YAXIS,
         3 => SubsysMovementAxis::OTHER,
-        _ => unreachable!(),
+        _ => SubsysMovementAxis::NONE,
     }
 }
 
@@ -899,6 +899,11 @@ fn dae_parse_subobject_recursive(
             faces,
         });
     } else {
+        // this should probably be warned about...
+        if vertices_out.is_empty() || normals_out.is_empty() {
+            return;
+        }
+
         let obj_id = ObjectId(sub_objects.len() as _);
 
         let mut new_subobj = SubObject {
@@ -1078,6 +1083,12 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                 });
             } else {
                 // must be a subobject
+
+                // this should probably be warned about...
+                if vertices_out.is_empty() || normals_out.is_empty() {
+                    continue;
+                }
+
                 let obj_id = ObjectId(sub_objects.len() as _);
                 let mut detail_level: Option<u32> = None;
                 if let Some(idx) = name.to_lowercase().find("detail") {

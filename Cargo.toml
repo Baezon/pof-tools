@@ -1,6 +1,6 @@
 [package]
 name = "pof-tools"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -16,3 +16,11 @@ nalgebra-glm = "0.16.0"
 native-dialog = "0.6.3"
 crossbeam = "0.8.1"
 image = "0.24.1"
+# for logging
+simplelog = "0.11.2"
+log = "0.4.14"
+# for panic handling
+backtrace = "0.3.64"
+once_cell = "1.10"
+# for display starup log date/time
+chrono = "0.4.19"

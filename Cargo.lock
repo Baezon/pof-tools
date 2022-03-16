@@ -1458,7 +1458,7 @@ dependencies = [
 
 [[package]]
 name = "pof"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "byteorder",
  "dae-parser",
@@ -1469,8 +1469,10 @@ dependencies = [
 
 [[package]]
 name = "pof-tools"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
+ "backtrace",
+ "chrono",
  "crossbeam",
  "eframe",
  "egui",
@@ -1478,9 +1480,12 @@ dependencies = [
  "epi",
  "glium",
  "image",
+ "log",
  "nalgebra-glm",
  "native-dialog",
+ "once_cell",
  "pof",
+ "simplelog",
 ]
 
 [[package]]
@@ -1705,6 +1710,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "simplelog"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1348164456f72ca0116e4538bdaabb0ddb622c7d9f16387c725af3e96d6001c"
+dependencies = [
+ "chrono",
+ "log",
+ "termcolor",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1770,6 +1786,15 @@ name = "takeable-option"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36ae8932fcfea38b7d3883ae2ab357b0d57a02caaa18ebb4f5ece08beaec4aa0"
+
+[[package]]
+name = "termcolor"
+version = "1.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bab24d30b911b2376f3a13cc2cd443142f0c81dda04c118693e35b3835757755"
+dependencies = [
+ "winapi-util",
+]
 
 [[package]]
 name = "thiserror"

@@ -746,7 +746,7 @@ impl ShieldData {
                 // if theres only one polygon we're at the base case
                 ShieldNode::Leaf { bbox: poly_info.bbox, poly_list: vec![poly_info.id] }
             } else {
-                let bbox = BoundingBox::from_bboxes(poly_infos.iter().map(|poly_info| &poly_info.bbox)).pad(0.1);
+                let bbox = BoundingBox::from_bboxes(poly_infos.iter().map(|poly_info| &poly_info.bbox)).pad(0.01);
                 let axis = bbox.greatest_dimension();
                 poly_infos.sort_by(|a, b| a.center[axis].partial_cmp(&b.center[axis]).unwrap());
 

@@ -549,7 +549,7 @@ impl Serialize for Color {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct ShieldPolygon {
     pub normal: Vec3d,
     pub verts: (VertexId, VertexId, VertexId),
@@ -581,7 +581,7 @@ pub enum ShieldNode {
         back: Box<ShieldNode>,
     },
     Leaf {
-        bbox: Option<BoundingBox>,
+        bbox: BoundingBox,
         poly_list: Vec<PolygonId>,
     },
 }
@@ -709,6 +709,63 @@ pub struct ShieldData {
     pub verts: Vec<Vec3d>,
     pub polygons: Vec<ShieldPolygon>,
     pub collision_tree: Option<ShieldNode>,
+}
+impl ShieldData {
+    pub fn recalculate_tree(verts: &[Vec3d], polygons: &[ShieldPolygon]) -> ShieldNode {
+        // these structs make up the smallest bits of data we'll need for this
+        // the regular data structure isn't well-optimized for this, so its easier to make something purpose built
+        struct ShieldPolyInfo {
+            id: PolygonId,
+            bbox: BoundingBox,
+            center: Vec3d,
+        }
+
+        // go over the polygons, making 'infos'
+        let poly_infos = polygons
+            .iter()
+            .enumerate()
+            .map(|(i, poly)| {
+                // hacky way to turn a tuple into an iterator
+                let verts = vec![
+                    verts[poly.verts.0 .0 as usize],
+                    verts[poly.verts.1 .0 as usize],
+                    verts[poly.verts.2 .0 as usize],
+                ];
+                let vert_iter = verts.iter().copied();
+
+                ShieldPolyInfo {
+                    id: PolygonId(i as u32),
+                    bbox: BoundingBox::from_vectors(vert_iter.clone()).pad(0.01),
+                    center: Vec3d::average(vert_iter),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        fn recalc_recurse(poly_infos: &mut [&ShieldPolyInfo]) -> ShieldNode {
+            if let [poly_info] = *poly_infos {
+                // if theres only one polygon we're at the base case
+                ShieldNode::Leaf { bbox: poly_info.bbox, poly_list: vec![poly_info.id] }
+            } else {
+                let bbox = BoundingBox::from_bboxes(poly_infos.iter().map(|poly_info| &poly_info.bbox)).pad(0.1);
+                let axis = bbox.greatest_dimension();
+                poly_infos.sort_by(|a, b| a.center[axis].partial_cmp(&b.center[axis]).unwrap());
+
+                let halfpoint = poly_infos.len() / 2;
+
+                ShieldNode::Split {
+                    front: Box::new(recalc_recurse(&mut poly_infos[..halfpoint])),
+                    back: Box::new(recalc_recurse(&mut poly_infos[halfpoint..])),
+                    bbox,
+                }
+            }
+        }
+
+        if poly_infos.is_empty() {
+            ShieldNode::Leaf { bbox: BoundingBox::default(), poly_list: vec![] }
+        } else {
+            recalc_recurse(&mut poly_infos.iter().collect::<Vec<_>>())
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -890,6 +947,7 @@ impl BspData {
 
         fn recalc_recurse(polygons: &mut [&(BoundingBox, Polygon)]) -> BspNode {
             if let [&(bbox, ref polygon)] = *polygons {
+                // if theres only one polygon were at the base case
                 BspNode::Leaf { bbox, poly_list: vec![polygon.clone()] }
             } else {
                 let bbox = BoundingBox::from_bboxes(polygons.iter().map(|(bbox, _)| bbox)).pad(0.01);

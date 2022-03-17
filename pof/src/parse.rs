@@ -681,7 +681,7 @@ fn parse_shield_node(buf: &[u8], version: Version) -> ShieldNode {
             },
         },
         ShieldNode::LEAF => ShieldNode::Leaf {
-            bbox: Some(read_bbox(&mut chunk)),
+            bbox: read_bbox(&mut chunk),
             poly_list: read_list_n(chunk.read_u32::<LE>().unwrap() as usize, &mut chunk, |chunk| PolygonId(chunk.read_u32::<LE>().unwrap())),
         },
         _ => unreachable!(),
@@ -1059,7 +1059,30 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                         }
                     }
                 }
-                shield_data = Some(ShieldData { verts: vertices_out, polygons, collision_tree: None });
+
+                // assign shield neighbors
+                // create a map keyed on each vertex pair, based on winding order, where the value is the polygon id
+                let mut map: HashMap<(VertexId, VertexId), PolygonId> = HashMap::new();
+                for (i, poly) in polygons.iter().enumerate() {
+                    map.insert((poly.verts.0, poly.verts.1), PolygonId(i as u32));
+                    map.insert((poly.verts.1, poly.verts.2), PolygonId(i as u32));
+                    map.insert((poly.verts.2, poly.verts.0), PolygonId(i as u32));
+                }
+
+                // for each polygon then, by swapping its vertex pairs, you can grab each adjacent polygon
+                for poly in &mut polygons {
+                    let neighbor1 = map.get(&(poly.verts.1, poly.verts.0)).unwrap_or(&PolygonId(0));
+                    let neighbor2 = map.get(&(poly.verts.2, poly.verts.1)).unwrap_or(&PolygonId(0));
+                    let neighbor3 = map.get(&(poly.verts.0, poly.verts.2)).unwrap_or(&PolygonId(0));
+                    poly.neighbors = (*neighbor1, *neighbor2, *neighbor3);
+                }
+                // a map insertion where an entry already exists or a failure to get from the map indicate non-manifoldness, TODO maybe indicate that
+
+                shield_data = Some(ShieldData {
+                    collision_tree: Some(ShieldData::recalculate_tree(&vertices_out, &polygons)),
+                    verts: vertices_out,
+                    polygons,
+                });
             } else if name.to_lowercase().contains("insig") {
                 let mut faces = vec![];
                 for (_, verts) in polygons_out {

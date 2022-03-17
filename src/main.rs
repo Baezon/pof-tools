@@ -1,4 +1,7 @@
-#![windows_subsystem = "windows"]
+// VVV This disables the console that pops up if you run the program on windows but also supresses output on stdout
+// VVV disable it if you need to print stuff for debugging purposes
+//#![windows_subsystem = "windows"]
+
 #![allow(clippy::useless_format)]
 #[macro_use]
 extern crate log;
@@ -729,6 +732,38 @@ fn main() {
                             target
                                 .draw((&shield.vertices, &shield.normals), &shield.indices, &shield_shader, &uniforms, &shield_draw_params)
                                 .unwrap();
+
+                            //      DEBUG - Draw BSP node bounding boxes
+                            //      This is quite useful but incredibly ineffcient
+                            //      TODO make this more efficient
+                            //
+                            // let initial_node = pt_gui.model.shield_data.as_ref().unwrap().collision_tree.as_ref().unwrap();
+                            // let mut node_stack = vec![(initial_node, 0u32)];
+                            // while let Some((node, depth)) = node_stack.pop() {
+                            //     let bbox = match node {
+                            //         pof::ShieldNode::Split { bbox, front, back, .. } => {
+                            //             node_stack.push((front, depth + 1));
+                            //             node_stack.push((back, depth + 1));
+                            //             bbox
+                            //         }
+                            //         pof::ShieldNode::Leaf { bbox, .. } => bbox,
+                            //     };
+
+                            //     let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
+                            //     mat.append_translation_mut(&(bbox.min).into());
+                            //     let color = 2.0 / (1.5f32.powf(depth as f32));
+
+                            //     let uniforms = glium::uniform! {
+                            //         model: <[[f32; 4]; 4]>::from(mat),
+                            //         view: view_mat,
+                            //         perspective: perspective_matrix,
+                            //         lollipop_color: [color, color, color, 1.0f32],
+                            //     };
+
+                            //     target
+                            //         .draw(&box_verts, &box_indices, &lollipop_stick_shader, &uniforms, &lollipop_stick_params)
+                            //         .unwrap();
+                            // }
                         }
                     }
 
@@ -760,34 +795,30 @@ fn main() {
                             //      TODO make this more efficient
                             //
                             // let mut node_stack = vec![(&pt_gui.model.sub_objects[obj_id].bsp_data.collision_tree, 0u32)];
-                            // loop {
-                            //     if let Some((node, depth)) = node_stack.pop() {
-                            //         let bbox = match node {
-                            //             BspNode::Split { bbox, front, back, .. } => {
-                            //                 node_stack.push((front, depth + 1));
-                            //                 node_stack.push((back, depth + 1));
-                            //                 bbox
-                            //             }
-                            //             BspNode::Leaf { bbox, .. } => bbox,
-                            //         };
+                            // while let Some((node, depth)) = node_stack.pop() {
+                            //     let bbox = match node {
+                            //         BspNode::Split { bbox, front, back, .. } => {
+                            //             node_stack.push((front, depth + 1));
+                            //             node_stack.push((back, depth + 1));
+                            //             bbox
+                            //         }
+                            //         BspNode::Leaf { bbox, .. } => bbox,
+                            //     };
 
-                            //         let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
-                            //         mat.append_translation_mut(&(bbox.min + pt_gui.model.get_total_subobj_offset(obj_id)).into());
-                            //         let color = 2.0 / (1.5f32.powf(depth as f32));
+                            //     let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
+                            //     mat.append_translation_mut(&(bbox.min + pt_gui.model.get_total_subobj_offset(obj_id)).into());
+                            //     let color = 2.0 / (1.5f32.powf(depth as f32));
 
-                            //         let uniforms = glium::uniform! {
-                            //             model: <[[f32; 4]; 4]>::from(mat),
-                            //             view: view_mat,
-                            //             perspective: perspective_matrix,
-                            //             lollipop_color: [color, color, color, 1.0f32],
-                            //         };
+                            //     let uniforms = glium::uniform! {
+                            //         model: <[[f32; 4]; 4]>::from(mat),
+                            //         view: view_mat,
+                            //         perspective: perspective_matrix,
+                            //         lollipop_color: [color, color, color, 1.0f32],
+                            //     };
 
-                            //         target
-                            //             .draw(&box_verts, &box_indices, &lollipop_stick_shader, &uniforms, &lollipop_stick_params)
-                            //             .unwrap();
-                            //     } else {
-                            //         break;
-                            //     }
+                            //     target
+                            //         .draw(&box_verts, &box_indices, &lollipop_stick_shader, &uniforms, &lollipop_stick_params)
+                            //         .unwrap();
                             // }
                         }
                         TreeSelection::Thrusters(_)

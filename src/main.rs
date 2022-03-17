@@ -1,7 +1,6 @@
 // VVV This disables the console that pops up if you run the program on windows but also supresses output on stdout
 // VVV disable it if you need to print stuff for debugging purposes
-//#![windows_subsystem = "windows"]
-
+#![windows_subsystem = "windows"]
 #![allow(clippy::useless_format)]
 #[macro_use]
 extern crate log;

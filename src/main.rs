@@ -1150,43 +1150,31 @@ impl PofToolsGui {
                 );
             }
             TreeSelection::DockingBays(docking_selection) => {
-                let mut selected_bank = None;
-                match *docking_selection {
-                    DockingSelection::Bay(bank) => selected_bank = Some(bank),
-                    DockingSelection::BayPoint(bank, _) => {
-                        selected_bank = Some(bank);
-                    }
-                    _ => {}
-                }
+                let selected_bank = if let DockingSelection::Bay(num) = docking_selection {
+                    Some(*num)
+                } else {
+                    None
+                };
 
                 const COLORS: [[f32; 4]; 3] = [LOLLIPOP_UNSELECTED_COLOR, LOLLIPOP_SELECTED_POINT_COLOR, LOLLIPOP_SELECTED_BANK_COLOR];
                 self.lollipops = build_lollipops(
                     &COLORS,
                     display,
-                    model
-                        .docking_bays
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, bay)| !bay.points.is_empty())
-                        .flat_map(|(bay_idx, docking_bay)| {
-                            let radius = self.model.header.max_radius.powf(0.4) / 4.0;
-                            let fvec = docking_bay.points[0].normal * radius * 3.0;
-                            if docking_bay.points.len() == 1 {
-                                let position = docking_bay.points[0].position;
-                                vec![(position, fvec, radius, if selected_bank == Some(bay_idx) { SELECTED_BANK } else { UNSELECTED })]
-                            } else {
-                                let position = (docking_bay.points[0].position + docking_bay.points[1].position) / 2.0;
-                                let uvec = (docking_bay.points[1].position - docking_bay.points[0].position).normalize() * radius * 3.0;
-                                let (selection1, selection2) = if selected_bank == Some(bay_idx) {
-                                    (SELECTED_BANK, SELECTED_POINT)
-                                } else {
-                                    (UNSELECTED, UNSELECTED)
-                                };
-                                let lollipop1 = (position, fvec, radius, selection1);
-                                let lollipop2 = (position, uvec, 0.0, selection2);
-                                vec![lollipop1, lollipop2]
-                            }
-                        }),
+                    model.docking_bays.iter().enumerate().flat_map(|(bay_idx, docking_bay)| {
+                        let position = docking_bay.position;
+                        let radius = self.model.header.max_radius.powf(0.4) / 4.0;
+                        let fvec = docking_bay.fvec.0 * radius * 3.0;
+                        let uvec = docking_bay.uvec.0 * radius * 3.0;
+                        let (selection1, selection2) = if selected_bank == Some(bay_idx) {
+                            (SELECTED_BANK, SELECTED_POINT)
+                        } else {
+                            (UNSELECTED, UNSELECTED)
+                        };
+
+                        let lollipop1 = (position, fvec, radius, selection1);
+                        let lollipop2 = (position, uvec, 0.0, selection2);
+                        vec![lollipop1, lollipop2]
+                    }),
                 );
             }
             TreeSelection::Glows(glow_selection) => {

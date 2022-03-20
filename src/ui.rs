@@ -2362,7 +2362,9 @@ impl PofToolsGui {
                                 _ => (None, None),
                             };
 
-                            let bank_idx_response = UiState::list_manipulator_widget(ui, bank_num, Some(self.model.glow_banks.len()), "Bank");
+                            // no subobjects = no glow banks allowed
+                            let glow_banks_len_opt = (!self.model.sub_objects.is_empty()).then(|| self.model.glow_banks.len());
+                            let bank_idx_response = UiState::list_manipulator_widget(ui, bank_num, glow_banks_len_opt, "Bank");
 
                             ui.add_space(10.0);
 
@@ -2528,7 +2530,9 @@ impl PofToolsGui {
                                 _ => (None, None),
                             };
 
-                            let turret_idx_response = UiState::list_manipulator_widget(ui, turret_num, Some(self.model.turrets.len()), "Turret");
+                            // no subobjects = no turrets allowed
+                            let turrets_len_opt = (!self.model.sub_objects.is_empty()).then(|| self.model.turrets.len());
+                            let turret_idx_response = UiState::list_manipulator_widget(ui, turret_num, turrets_len_opt, "Turret");
 
                             ui.add_space(10.0);
                             let subobj_names_list = self.model.get_subobj_names();
@@ -2730,7 +2734,9 @@ impl PofToolsGui {
                                 _ => None,
                             };
 
-                            let eye_idx_response = UiState::list_manipulator_widget(ui, eye_num, Some(self.model.eye_points.len()), "Eye Point");
+                            // no subobjects = no eye points allowed
+                            let eye_points_len_opt = (!self.model.sub_objects.is_empty()).then(|| self.model.eye_points.len());
+                            let eye_idx_response = UiState::list_manipulator_widget(ui, eye_num, eye_points_len_opt, "Eye Point");
 
                             ui.add_space(10.0);
 

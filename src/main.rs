@@ -396,7 +396,7 @@ impl PofToolsGui {
     }
 }
 
-const POF_TOOLS_VERSION: &str = "0.9.1";
+const POF_TOOLS_VERSION: &str = "1.0.0";
 
 // we need this weird type specifically for catching panic info
 static LAST_PANIC: OnceCell<(String, Backtrace)> = OnceCell::new();

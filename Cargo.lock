@@ -1458,7 +1458,7 @@ dependencies = [
 
 [[package]]
 name = "pof"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
  "byteorder",
  "dae-parser",
@@ -1469,7 +1469,7 @@ dependencies = [
 
 [[package]]
 name = "pof-tools"
-version = "0.9.1"
+version = "1.0.0"
 dependencies = [
  "backtrace",
  "chrono",

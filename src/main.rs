@@ -454,8 +454,8 @@ fn main() {
     // lots of graphics stuff to initialize
     let default_material_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, DEFAULT_MAT_FRAGMENT_SHADER, None).unwrap();
     let shield_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, SHIELD_FRAGMENT_SHADER, None).unwrap();
-    let wireframe_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, WIRE_FRAGMENT_SHADER, None).unwrap();
-    let lollipop_stick_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, LOLLIPOP_STICK_FRAGMENT_SHADER, None).unwrap();
+    let wireframe_shader = glium::Program::from_source(&display, NO_NORMS_VERTEX_SHADER, WIRE_FRAGMENT_SHADER, None).unwrap();
+    let lollipop_stick_shader = glium::Program::from_source(&display, NO_NORMS_VERTEX_SHADER, LOLLIPOP_STICK_FRAGMENT_SHADER, None).unwrap();
     let lollipop_shader = glium::Program::from_source(&display, LOLLIPOP_VERTEX_SHADER, LOLLIPOP_FRAGMENT_SHADER, None).unwrap();
 
     let mut default_material_draw_params = glium::DrawParameters {
@@ -1430,6 +1430,21 @@ void main() {
 }
 "#;
 
+const NO_NORMS_VERTEX_SHADER: &str = r#"
+#version 140
+
+in vec3 position;
+
+uniform mat4 perspective;
+uniform mat4 view;
+uniform mat4 model;
+
+void main() {
+    mat4 modelview = view * model;
+    gl_Position = perspective * modelview * vec4(position, 1.0);
+}
+"#;
+
 const DEFAULT_MAT_FRAGMENT_SHADER: &str = r#"
 #version 140
 
@@ -1485,9 +1500,6 @@ const LOLLIPOP_VERTEX_SHADER: &str = r#"
 
 in mat4 world_matrix;
 in vec3 position;
-in vec3 normal;
-
-out vec3 v_normal;
 
 uniform mat4 perspective;
 uniform mat4 view;
@@ -1495,7 +1507,6 @@ uniform mat4 model;
 
 void main() {
     mat4 modelview = view * model;
-    v_normal = transpose(inverse(mat3(modelview))) * normal;
     gl_Position = perspective * modelview * world_matrix * vec4(position, 1.0);
 }
 "#;

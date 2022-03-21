@@ -2904,7 +2904,7 @@ impl PofToolsGui {
             }
         } else {
             let radius_with_margin = (1.0 + f32::EPSILON) * model.header.max_radius;
-            if let Some(&detail_0) = self.header.detail_levels.first() {
+            if let Some(&detail_0) = model.header.detail_levels.first() {
                 for subobj in &model.sub_objects {
                     // we dont care about subobjects which aren't part of the detail0 hierarchy
                     if !model.is_obj_id_ancestor(subobj.obj_id, detail_0) {
@@ -2935,7 +2935,7 @@ impl PofToolsGui {
                 }
             }
         } else {
-            if let Some(&detail_0) = self.header.detail_levels.first() {
+            if let Some(&detail_0) = model.header.detail_levels.first() {
                 for subobj in &model.sub_objects {
                     // we dont care about subobjects which aren't part of the detail0 hierarchy
                     if !model.is_obj_id_ancestor(subobj.obj_id, detail_0) {

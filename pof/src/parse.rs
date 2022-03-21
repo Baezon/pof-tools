@@ -1252,10 +1252,12 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
 
                     let transform = node.transform_as_matrix();
                     let zero = Vec3d::ZERO.into();
-                    new_bay.position = (transform.transform_point(&zero) - zero).into();
-                    // let local_transform: Mat4x4 = transform.append_translation(&(-center));
+                    new_bay.position = Vec3d::from(transform.transform_point(&zero) - zero).flip_y_z();
                     new_bay.fvec = transform.transform_vector(&glm::vec3(0., 1., 0.)).try_into().unwrap_or_default();
+                    new_bay.fvec.0 = new_bay.fvec.0.flip_y_z();
+
                     new_bay.uvec = transform.transform_vector(&glm::vec3(0., 0., 1.)).try_into().unwrap_or_default();
+                    new_bay.uvec.0 = new_bay.uvec.0.flip_y_z();
 
                     for (node, name) in node_children_with_keyword(&node.children, "") {
                         if name.contains("properties") {

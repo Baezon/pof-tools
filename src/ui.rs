@@ -1190,7 +1190,7 @@ impl UiState {
                     self.properties_panel = PropertiesPanel::DockingBay {
                         position_string: format!("{}", model.docking_bays[bay].position),
                         fvec_string: format!("{}", model.docking_bays[bay].fvec.0),
-                        uvec_ang: model.docking_bays[bay].get_uvec_angle().to_degrees(),
+                        uvec_ang: model.docking_bays[bay].get_uvec_angle().to_degrees() % 360.0,
                         properties: format!("{}", model.docking_bays[bay].properties),
                         path_num: model.docking_bays[bay].path.unwrap_or(PathId(model.paths.len() as u32)).0 as usize,
                     }
@@ -2299,6 +2299,7 @@ impl PofToolsGui {
                                 if ui.add(DragValue::new(uvec_ang).speed(0.5)).changed() {
                                     self.ui_state.viewport_3d_dirty = true;
                                     self.model.docking_bays[bay_num.unwrap()].set_uvec_angle(uvec_ang.to_radians());
+                                    *uvec_ang %= 360.0;
                                 }
                             });
 

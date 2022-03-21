@@ -910,8 +910,13 @@ fn main() {
                 let (needs_repaint, shapes) = egui.run(&display, |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                            ui.heading(RichText::new(format!("Error! Please report this!\n\n{}", error_string)).color(Color32::RED));
-                            ui.add_sized(ui.available_size(), TextEdit::multiline(&mut &*format!("{:?}", backtrace)));
+                            ui.horizontal(|ui| {
+                                ui.heading(RichText::new("Error! Please report this!").color(Color32::RED));
+                                if ui.button("Copy").clicked() {
+                                    ui.output().copied_text = format!("{}\n\n{:?}", error_string, backtrace);
+                                }
+                            });
+                            ui.add_sized(ui.available_size(), TextEdit::multiline(&mut &*format!("{}\n\n{:?}", error_string, backtrace)));
                         });
                     });
                 });

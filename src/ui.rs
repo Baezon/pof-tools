@@ -691,7 +691,7 @@ pub(crate) struct UiState {
 
 pub(crate) struct PofToolsGui {
     pub model: Box<Model>,
-    pub loading_thread: Option<Receiver<Option<Box<Model>>>>,
+    pub loading_thread: Option<Receiver<Result<Option<Box<Model>>, String>>>,
     pub glow_point_sim_start: std::time::Instant,
 
     pub ui_state: UiState,

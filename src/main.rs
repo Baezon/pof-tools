@@ -315,33 +315,32 @@ impl PofToolsGui {
         self.loading_thread = Some(receiver);
 
         std::thread::spawn(move || {
-            let path = filepath.or_else(|| {
-                FileDialog::new()
-                    .add_filter("All supported files", &["pof", "dae"])
-                    .add_filter("COLLADA", &["dae"])
-                    .add_filter("Parallax Object File", &["pof"])
-                    .show_open_single_file()
-                    .unwrap()
-            });
+            let model = std::panic::catch_unwind(move || {
+                let path = filepath.or_else(|| {
+                    FileDialog::new()
+                        .add_filter("All supported files", &["pof", "dae"])
+                        .add_filter("COLLADA", &["dae"])
+                        .add_filter("Parallax Object File", &["pof"])
+                        .show_open_single_file()
+                        .unwrap()
+                });
 
-            if let Some(path) = path {
-                let ext = path.extension().map(|ext| ext.to_ascii_lowercase());
-                let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
-                info!("Attempting to load {}", filename);
-                let model = match ext.as_ref().and_then(|ext| ext.to_str()) {
-                    Some("dae") => pof::parse_dae(path, filename),
-                    Some("pof") => {
-                        let file = File::open(path).expect("TODO invalid file or smth i dunno");
-                        let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
-                        Box::new(parser.parse(filename).expect("TODO invalid pof file or smth i dunno"))
+                path.map(|path| {
+                    let ext = path.extension().map(|ext| ext.to_ascii_lowercase());
+                    let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
+                    info!("Attempting to load {}", filename);
+                    match ext.as_ref().and_then(|ext| ext.to_str()) {
+                        Some("dae") => pof::parse_dae(path, filename),
+                        Some("pof") => {
+                            let file = File::open(path).expect("TODO invalid file or smth i dunno");
+                            let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
+                            Box::new(parser.parse(filename).expect("TODO invalid pof file or smth i dunno"))
+                        }
+                        _ => todo!(),
                     }
-                    _ => todo!(),
-                };
-
-                let _ = sender.send(Some(model));
-            } else {
-                let _ = sender.send(None);
-            }
+                })
+            });
+            let _ = sender.send(model.map_err(|panic| *panic.downcast().unwrap()));
         });
     }
 
@@ -514,7 +513,7 @@ fn main() {
                 if let Some(thread) = &pt_gui.loading_thread {
                     let response = thread.try_recv();
                     match response {
-                        Ok(Some(data)) => {
+                        Ok(Ok(Some(data))) => {
                             pt_gui.model = data;
                             pt_gui.finish_loading_model(&display);
 
@@ -523,7 +522,8 @@ fn main() {
                             egui.egui_ctx.output().cursor_icon = egui::CursorIcon::Default;
                         }
                         Err(TryRecvError::Disconnected) => pt_gui.loading_thread = None,
-                        Ok(None) => pt_gui.loading_thread = None,
+                        Ok(Ok(None)) => pt_gui.loading_thread = None,
+                        Ok(Err(panic_msg)) => std::panic::panic_any(panic_msg),
 
                         Err(TryRecvError::Empty) => {}
                     }

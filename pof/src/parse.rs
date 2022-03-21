@@ -1381,7 +1381,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
         }
     }
 
-    if details.is_empty() {
+    if details.is_empty() && !sub_objects.is_empty() {
         details.push(ObjectId(0));
         // this is pretty bad, but not having any detail levels is worse
     }

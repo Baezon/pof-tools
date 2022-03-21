@@ -315,33 +315,32 @@ impl PofToolsGui {
         self.loading_thread = Some(receiver);
 
         std::thread::spawn(move || {
-            let path = filepath.or_else(|| {
-                FileDialog::new()
-                    .add_filter("All supported files", &["pof", "dae"])
-                    .add_filter("COLLADA", &["dae"])
-                    .add_filter("Parallax Object File", &["pof"])
-                    .show_open_single_file()
-                    .unwrap()
-            });
+            let model = std::panic::catch_unwind(move || {
+                let path = filepath.or_else(|| {
+                    FileDialog::new()
+                        .add_filter("All supported files", &["pof", "dae"])
+                        .add_filter("COLLADA", &["dae"])
+                        .add_filter("Parallax Object File", &["pof"])
+                        .show_open_single_file()
+                        .unwrap()
+                });
 
-            if let Some(path) = path {
-                let ext = path.extension().map(|ext| ext.to_ascii_lowercase());
-                let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
-                info!("Attempting to load {}", filename);
-                let model = match ext.as_ref().and_then(|ext| ext.to_str()) {
-                    Some("dae") => pof::parse_dae(path, filename),
-                    Some("pof") => {
-                        let file = File::open(path).expect("TODO invalid file or smth i dunno");
-                        let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
-                        Box::new(parser.parse(filename).expect("TODO invalid pof file or smth i dunno"))
+                path.map(|path| {
+                    let ext = path.extension().map(|ext| ext.to_ascii_lowercase());
+                    let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
+                    info!("Attempting to load {}", filename);
+                    match ext.as_ref().and_then(|ext| ext.to_str()) {
+                        Some("dae") => pof::parse_dae(path, filename),
+                        Some("pof") => {
+                            let file = File::open(path).expect("TODO invalid file or smth i dunno");
+                            let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
+                            Box::new(parser.parse(filename).expect("TODO invalid pof file or smth i dunno"))
+                        }
+                        _ => todo!(),
                     }
-                    _ => todo!(),
-                };
-
-                let _ = sender.send(Some(model));
-            } else {
-                let _ = sender.send(None);
-            }
+                })
+            });
+            let _ = sender.send(model.map_err(|panic| *panic.downcast().unwrap()));
         });
     }
 
@@ -386,7 +385,7 @@ impl PofToolsGui {
         self.camera_pitch = -0.4;
         self.camera_offset = Vec3d::ZERO;
         self.camera_scale = self.model.header.max_radius * 2.0;
-        self.ui_state.last_selected_subobj = self.model.header.detail_levels[0];
+        self.ui_state.last_selected_subobj = self.model.header.detail_levels.first().copied();
         display
             .gl_window()
             .window()
@@ -403,23 +402,26 @@ static LAST_PANIC: OnceCell<(String, Backtrace)> = OnceCell::new();
 
 fn main() {
     // set up a panic handler to grab the backtrace
-    std::panic::set_hook(Box::new(|panic_info| {
-        let backtrace = backtrace::Backtrace::new();
-        let msg = format!("{},  {}", panic_info.payload().downcast_ref::<String>().unwrap(), panic_info.location().unwrap());
-        let mut frames = vec![];
-        for frame in backtrace.frames() {
-            // filter out anything which doesn't have pof-tools in the path
-            // maybe not great? but filters out a huge amount of unrelated shit
-            let should_print = frame
-                .symbols()
-                .iter()
-                .any(|symbol| (|| symbol.filename()?.to_str()?.contains("pof-tools").then(|| ()))().is_some());
-            if should_print {
-                frames.push(frame.clone())
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        default_hook(panic_info);
+        LAST_PANIC.get_or_init(|| {
+            let backtrace = backtrace::Backtrace::new();
+            let msg = format!("{},  {}", panic_info.payload().downcast_ref::<String>().unwrap(), panic_info.location().unwrap());
+            let mut frames = vec![];
+            for frame in backtrace.frames() {
+                // filter out anything which doesn't have pof-tools in the path
+                // maybe not great? but filters out a huge amount of unrelated shit
+                let should_print = frame.symbols().iter().any(|symbol| match symbol.filename().and_then(|s| s.to_str()) {
+                    Some(file) => file.contains("pof-tools"),
+                    None => symbol.name().and_then(|name| name.as_str()).map_or(false, |name| name.contains("pof")),
+                });
+                if should_print {
+                    frames.push(frame.clone())
+                }
             }
-        }
-
-        LAST_PANIC.get_or_init(|| (msg, frames.into()));
+            (msg, if frames.is_empty() { backtrace } else { frames.into() })
+        });
     }));
 
     // set up the logger
@@ -511,7 +513,7 @@ fn main() {
                 if let Some(thread) = &pt_gui.loading_thread {
                     let response = thread.try_recv();
                     match response {
-                        Ok(Some(data)) => {
+                        Ok(Ok(Some(data))) => {
                             pt_gui.model = data;
                             pt_gui.finish_loading_model(&display);
 
@@ -520,7 +522,8 @@ fn main() {
                             egui.egui_ctx.output().cursor_icon = egui::CursorIcon::Default;
                         }
                         Err(TryRecvError::Disconnected) => pt_gui.loading_thread = None,
-                        Ok(None) => pt_gui.loading_thread = None,
+                        Ok(Ok(None)) => pt_gui.loading_thread = None,
+                        Ok(Err(panic_msg)) => std::panic::panic_any(panic_msg),
 
                         Err(TryRecvError::Empty) => {}
                     }
@@ -910,8 +913,13 @@ fn main() {
                 let (needs_repaint, shapes) = egui.run(&display, |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                            ui.heading(RichText::new(format!("Error! Please report this!\n\n{}", error_string)).color(Color32::RED));
-                            ui.add_sized(ui.available_size(), TextEdit::multiline(&mut &*format!("{:?}", backtrace)));
+                            ui.horizontal(|ui| {
+                                ui.heading(RichText::new("Error! Please report this!").color(Color32::RED));
+                                if ui.button("Copy").clicked() {
+                                    ui.output().copied_text = format!("{}\n\n{:?}", error_string, backtrace);
+                                }
+                            });
+                            ui.add_sized(ui.available_size(), TextEdit::multiline(&mut &*format!("{}\n\n{:?}", error_string, backtrace)));
                         });
                     });
                 });
@@ -969,7 +977,7 @@ fn main() {
 
 // based on the current selection which submodels should be displayed
 // TODO show destroyed models
-fn get_list_of_display_subobjects(model: &Model, tree_selection: &TreeSelection, last_selected_subobj: ObjectId) -> ObjVec<bool> {
+fn get_list_of_display_subobjects(model: &Model, tree_selection: &TreeSelection, last_selected_subobj: Option<ObjectId>) -> ObjVec<bool> {
     let mut out = ObjVec(vec![false; model.sub_objects.len()]);
 
     if model.sub_objects.is_empty() {
@@ -982,7 +990,7 @@ fn get_list_of_display_subobjects(model: &Model, tree_selection: &TreeSelection,
             out.0[i] = model.is_obj_id_ancestor(sub_object.obj_id, model.header.detail_levels[model.insignias[idx].detail_level as usize])
                 && !sub_object.is_destroyed_model();
         }
-    } else {
+    } else if let Some(last_selected_subobj) = last_selected_subobj {
         //find the top level parent of the currently subobject
         let mut top_level_parent = last_selected_subobj;
         while let Some(id) = model.sub_objects[top_level_parent].parent {

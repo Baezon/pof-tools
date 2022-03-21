@@ -1524,15 +1524,17 @@ impl Model {
 
     pub fn recalc_radius(&mut self) {
         self.header.max_radius = 0.00001;
-        for subobj in &self.sub_objects {
-            if !self.is_obj_id_ancestor(subobj.obj_id, self.header.detail_levels[0]) {
-                continue;
-            }
+        if let Some(&detail_0) = self.header.detail_levels.first() {
+            for subobj in &self.sub_objects {
+                if !self.is_obj_id_ancestor(subobj.obj_id, detail_0) {
+                    continue;
+                }
 
-            let offset = self.get_total_subobj_offset(subobj.obj_id);
-            for vert in &subobj.bsp_data.verts {
-                if (*vert + offset).magnitude() > self.header.max_radius {
-                    self.header.max_radius = (*vert + offset).magnitude();
+                let offset = self.get_total_subobj_offset(subobj.obj_id);
+                for vert in &subobj.bsp_data.verts {
+                    if (*vert + offset).magnitude() > self.header.max_radius {
+                        self.header.max_radius = (*vert + offset).magnitude();
+                    }
                 }
             }
         }
@@ -1543,25 +1545,27 @@ impl Model {
         new_bbox.min = Vec3d { x: -0.00001, y: -0.00001, z: -0.00001 };
         new_bbox.max = Vec3d { x: 0.00001, y: 0.00001, z: 0.00001 };
 
-        for subobj in &self.sub_objects {
-            if !self.is_obj_id_ancestor(subobj.obj_id, self.header.detail_levels[0]) {
-                continue;
+        if let Some(&detail_0) = self.header.detail_levels.first() {
+            for subobj in &self.sub_objects {
+                if !self.is_obj_id_ancestor(subobj.obj_id, detail_0) {
+                    continue;
+                }
+
+                let offset = self.get_total_subobj_offset(subobj.obj_id);
+                let min = offset + subobj.bbox.min;
+                let max = offset + subobj.bbox.max;
+                new_bbox.min = Vec3d {
+                    x: f32::min(new_bbox.min.x, min.x),
+                    y: f32::min(new_bbox.min.y, min.y),
+                    z: f32::min(new_bbox.min.z, min.z),
+                };
+
+                new_bbox.max = Vec3d {
+                    x: f32::max(new_bbox.max.x, max.x),
+                    y: f32::max(new_bbox.max.y, max.y),
+                    z: f32::max(new_bbox.max.z, max.z),
+                };
             }
-
-            let offset = self.get_total_subobj_offset(subobj.obj_id);
-            let min = offset + subobj.bbox.min;
-            let max = offset + subobj.bbox.max;
-            new_bbox.min = Vec3d {
-                x: f32::min(new_bbox.min.x, min.x),
-                y: f32::min(new_bbox.min.y, min.y),
-                z: f32::min(new_bbox.min.z, min.z),
-            };
-
-            new_bbox.max = Vec3d {
-                x: f32::max(new_bbox.max.x, max.x),
-                y: f32::max(new_bbox.max.y, max.y),
-                z: f32::max(new_bbox.max.z, max.z),
-            };
         }
 
         self.header.bbox = new_bbox;
@@ -1578,19 +1582,21 @@ impl Model {
             subobjects[id].bsp_data.verts.len() + subobjects[id].children.iter().map(|id| sum_verts_recurse(subobjects, *id)).sum::<usize>()
         }
 
-        let num_verts = sum_verts_recurse(&self.sub_objects, self.header.detail_levels[0]);
+        if let Some(&detail_0) = self.header.detail_levels.first() {
+            let num_verts = sum_verts_recurse(&self.sub_objects, detail_0);
 
-        let point_mass = self.header.mass / num_verts as f32;
+            let point_mass = self.header.mass / num_verts as f32;
 
-        fn accumulate_moi_recurse(subobjects: &ObjVec<SubObject>, id: ObjectId, moi: &mut Mat3d) {
-            subobjects[id].bsp_data.verts.iter().for_each(|vert| moi.add_point_mass_moi(*vert));
-            subobjects[id].children.iter().for_each(|id| accumulate_moi_recurse(subobjects, *id, moi));
+            fn accumulate_moi_recurse(subobjects: &ObjVec<SubObject>, id: ObjectId, moi: &mut Mat3d) {
+                subobjects[id].bsp_data.verts.iter().for_each(|vert| moi.add_point_mass_moi(*vert));
+                subobjects[id].children.iter().for_each(|id| accumulate_moi_recurse(subobjects, *id, moi));
+            }
+
+            accumulate_moi_recurse(&self.sub_objects, detail_0, &mut self.header.moment_of_inertia);
+
+            let mut glm_mat: Mat3x3 = self.header.moment_of_inertia.into();
+            glm_mat *= point_mass;
+            self.header.moment_of_inertia = glm_mat.try_inverse().unwrap().into();
         }
-
-        accumulate_moi_recurse(&self.sub_objects, self.header.detail_levels[0], &mut self.header.moment_of_inertia);
-
-        let mut glm_mat: Mat3x3 = self.header.moment_of_inertia.into();
-        glm_mat *= point_mass;
-        self.header.moment_of_inertia = glm_mat.try_inverse().unwrap().into();
     }
 }

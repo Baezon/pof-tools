@@ -1500,19 +1500,21 @@ impl Model {
             subobjects[id].bsp_data.verts.len() + subobjects[id].children.iter().map(|id| sum_verts_recurse(subobjects, *id)).sum::<usize>()
         }
 
-        let num_verts = sum_verts_recurse(&self.sub_objects, self.header.detail_levels[0]);
+        if let Some(&detail_0) = self.header.detail_levels.first() {
+            let num_verts = sum_verts_recurse(&self.sub_objects, detail_0);
 
-        let point_mass = self.header.mass / num_verts as f32;
+            let point_mass = self.header.mass / num_verts as f32;
 
-        fn accumulate_moi_recurse(subobjects: &ObjVec<SubObject>, id: ObjectId, moi: &mut Mat3d) {
-            subobjects[id].bsp_data.verts.iter().for_each(|vert| moi.add_point_mass_moi(*vert));
-            subobjects[id].children.iter().for_each(|id| accumulate_moi_recurse(subobjects, *id, moi));
+            fn accumulate_moi_recurse(subobjects: &ObjVec<SubObject>, id: ObjectId, moi: &mut Mat3d) {
+                subobjects[id].bsp_data.verts.iter().for_each(|vert| moi.add_point_mass_moi(*vert));
+                subobjects[id].children.iter().for_each(|id| accumulate_moi_recurse(subobjects, *id, moi));
+            }
+
+            accumulate_moi_recurse(&self.sub_objects, detail_0, &mut self.header.moment_of_inertia);
+
+            let mut glm_mat: Mat3x3 = self.header.moment_of_inertia.into();
+            glm_mat *= point_mass;
+            self.header.moment_of_inertia = glm_mat.try_inverse().unwrap().into();
         }
-
-        accumulate_moi_recurse(&self.sub_objects, self.header.detail_levels[0], &mut self.header.moment_of_inertia);
-
-        let mut glm_mat: Mat3x3 = self.header.moment_of_inertia.into();
-        glm_mat *= point_mass;
-        self.header.moment_of_inertia = glm_mat.try_inverse().unwrap().into();
     }
 }

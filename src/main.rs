@@ -404,22 +404,23 @@ static LAST_PANIC: OnceCell<(String, Backtrace)> = OnceCell::new();
 fn main() {
     // set up a panic handler to grab the backtrace
     std::panic::set_hook(Box::new(|panic_info| {
-        let backtrace = backtrace::Backtrace::new();
-        let msg = format!("{},  {}", panic_info.payload().downcast_ref::<String>().unwrap(), panic_info.location().unwrap());
-        let mut frames = vec![];
-        for frame in backtrace.frames() {
-            // filter out anything which doesn't have pof-tools in the path
-            // maybe not great? but filters out a huge amount of unrelated shit
-            let should_print = frame
-                .symbols()
-                .iter()
-                .any(|symbol| (|| symbol.filename()?.to_str()?.contains("pof-tools").then(|| ()))().is_some());
-            if should_print {
-                frames.push(frame.clone())
+        LAST_PANIC.get_or_init(|| {
+            let backtrace = backtrace::Backtrace::new();
+            let msg = format!("{},  {}", panic_info.payload().downcast_ref::<String>().unwrap(), panic_info.location().unwrap());
+            let mut frames = vec![];
+            for frame in backtrace.frames() {
+                // filter out anything which doesn't have pof-tools in the path
+                // maybe not great? but filters out a huge amount of unrelated shit
+                let should_print = frame.symbols().iter().any(|symbol| match symbol.filename().and_then(|s| s.to_str()) {
+                    Some(file) => file.contains("pof-tools"),
+                    None => symbol.name().and_then(|name| name.as_str()).map_or(false, |name| name.contains("pof")),
+                });
+                if should_print {
+                    frames.push(frame.clone())
+                }
             }
-        }
-
-        LAST_PANIC.get_or_init(|| (msg, frames.into()));
+            (msg, if frames.is_empty() { backtrace } else { frames.into() })
+        });
     }));
 
     // set up the logger

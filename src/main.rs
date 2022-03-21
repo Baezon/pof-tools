@@ -403,7 +403,9 @@ static LAST_PANIC: OnceCell<(String, Backtrace)> = OnceCell::new();
 
 fn main() {
     // set up a panic handler to grab the backtrace
-    std::panic::set_hook(Box::new(|panic_info| {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        default_hook(panic_info);
         LAST_PANIC.get_or_init(|| {
             let backtrace = backtrace::Backtrace::new();
             let msg = format!("{},  {}", panic_info.payload().downcast_ref::<String>().unwrap(), panic_info.location().unwrap());

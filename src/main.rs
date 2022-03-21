@@ -385,7 +385,7 @@ impl PofToolsGui {
         self.camera_pitch = -0.4;
         self.camera_offset = Vec3d::ZERO;
         self.camera_scale = self.model.header.max_radius * 2.0;
-        self.ui_state.last_selected_subobj = self.model.header.detail_levels[0];
+        self.ui_state.last_selected_subobj = self.model.header.detail_levels.first().copied();
         display
             .gl_window()
             .window()
@@ -977,7 +977,7 @@ fn main() {
 
 // based on the current selection which submodels should be displayed
 // TODO show destroyed models
-fn get_list_of_display_subobjects(model: &Model, tree_selection: &TreeSelection, last_selected_subobj: ObjectId) -> ObjVec<bool> {
+fn get_list_of_display_subobjects(model: &Model, tree_selection: &TreeSelection, last_selected_subobj: Option<ObjectId>) -> ObjVec<bool> {
     let mut out = ObjVec(vec![false; model.sub_objects.len()]);
 
     if model.sub_objects.is_empty() {
@@ -990,7 +990,7 @@ fn get_list_of_display_subobjects(model: &Model, tree_selection: &TreeSelection,
             out.0[i] = model.is_obj_id_ancestor(sub_object.obj_id, model.header.detail_levels[model.insignias[idx].detail_level as usize])
                 && !sub_object.is_destroyed_model();
         }
-    } else {
+    } else if let Some(last_selected_subobj) = last_selected_subobj {
         //find the top level parent of the currently subobject
         let mut top_level_parent = last_selected_subobj;
         while let Some(id) = model.sub_objects[top_level_parent].parent {

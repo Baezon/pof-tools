@@ -684,7 +684,7 @@ pub enum Warning {
 pub(crate) struct UiState {
     pub tree_view_selection: TreeSelection,
     pub viewport_3d_dirty: bool,
-    pub last_selected_subobj: ObjectId,
+    pub last_selected_subobj: Option<ObjectId>,
     properties_panel: PropertiesPanel,
     properties_panel_dirty: bool,
 }
@@ -773,9 +773,9 @@ impl UiState {
 
             // maybe update ast selected object
             if let TreeSelection::SubObjects(SubObjectSelection::SubObject(id)) = self.tree_view_selection {
-                self.last_selected_subobj = id;
+                self.last_selected_subobj = Some(id);
             } else if let TreeSelection::SubObjects(SubObjectSelection::Header) | TreeSelection::Header = self.tree_view_selection {
-                self.last_selected_subobj = model.header.detail_levels[0];
+                self.last_selected_subobj = model.header.detail_levels.first().copied();
             }
         }
     }
@@ -795,9 +795,9 @@ impl UiState {
 
             // maybe update last selected object
             if let TreeSelection::SubObjects(SubObjectSelection::SubObject(id)) = self.tree_view_selection {
-                self.last_selected_subobj = id;
+                self.last_selected_subobj = Some(id);
             } else if let TreeSelection::SubObjects(SubObjectSelection::Header) | TreeSelection::Header = self.tree_view_selection {
-                self.last_selected_subobj = model.header.detail_levels[0];
+                self.last_selected_subobj = model.header.detail_levels.first().copied();
             }
         }
     }
@@ -2904,16 +2904,18 @@ impl PofToolsGui {
             }
         } else {
             let radius_with_margin = (1.0 + f32::EPSILON) * model.header.max_radius;
-            for subobj in &model.sub_objects {
-                // we dont care about subobjects which aren't part of the detail0 hierarchy
-                if !model.header.detail_levels.is_empty() && !model.is_obj_id_ancestor(subobj.obj_id, model.header.detail_levels[0]) {
-                    continue;
-                }
+            if let Some(&detail_0) = self.header.detail_levels.first() {
+                for subobj in &model.sub_objects {
+                    // we dont care about subobjects which aren't part of the detail0 hierarchy
+                    if !model.is_obj_id_ancestor(subobj.obj_id, detail_0) {
+                        continue;
+                    }
 
-                let offset = model.get_total_subobj_offset(subobj.obj_id);
-                for vert in &subobj.bsp_data.verts {
-                    if (*vert + offset).magnitude() > radius_with_margin {
-                        return true;
+                    let offset = model.get_total_subobj_offset(subobj.obj_id);
+                    for vert in &subobj.bsp_data.verts {
+                        if (*vert + offset).magnitude() > radius_with_margin {
+                            return true;
+                        }
                     }
                 }
             }
@@ -2933,15 +2935,17 @@ impl PofToolsGui {
                 }
             }
         } else {
-            for subobj in &model.sub_objects {
-                // we dont care about subobjects which aren't part of the detail0 hierarchy
-                if !model.header.detail_levels.is_empty() && !model.is_obj_id_ancestor(subobj.obj_id, model.header.detail_levels[0]) {
-                    continue;
-                }
+            if let Some(&detail_0) = self.header.detail_levels.first() {
+                for subobj in &model.sub_objects {
+                    // we dont care about subobjects which aren't part of the detail0 hierarchy
+                    if !model.is_obj_id_ancestor(subobj.obj_id, detail_0) {
+                        continue;
+                    }
 
-                for vert in &subobj.bsp_data.verts {
-                    if !model.header.bbox.contains(*vert) {
-                        return true;
+                    for vert in &subobj.bsp_data.verts {
+                        if !model.header.bbox.contains(*vert) {
+                            return true;
+                        }
                     }
                 }
             }

@@ -271,7 +271,7 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, bsp_data: &BspData) -> io::Resul
     Ok(())
 }
 
-fn write_chunk_raw(w: &mut impl Write, chunk_name: &[u8], f: impl FnOnce(&mut Vec<u8>) -> io::Result<()>) -> io::Result<()> {
+fn write_chunk_raw(w: &mut impl Write, chunk_name: &[u8; 4], f: impl FnOnce(&mut Vec<u8>) -> io::Result<()>) -> io::Result<()> {
     w.write_all(chunk_name)?;
     //println!("writing chunk {}", std::str::from_utf8(chunk_name).unwrap());
 
@@ -284,14 +284,14 @@ fn write_chunk_raw(w: &mut impl Write, chunk_name: &[u8], f: impl FnOnce(&mut Ve
     w.write_all(&buf)
 }
 
-fn write_chunk<T: Serialize>(w: &mut impl Write, chunk_name: &[u8], data: Option<&T>) -> io::Result<()> {
+fn write_chunk<T: Serialize>(w: &mut impl Write, chunk_name: &[u8; 4], data: Option<&T>) -> io::Result<()> {
     if let Some(data) = data {
         write_chunk_raw(w, chunk_name, |w| data.write_to(w))?
     }
     Ok(())
 }
 
-fn write_chunk_vec<T: Serialize>(w: &mut impl Write, chunk_name: &[u8], data: &[T]) -> io::Result<()> {
+fn write_chunk_vec<T: Serialize>(w: &mut impl Write, chunk_name: &[u8; 4], data: &[T]) -> io::Result<()> {
     if !data.is_empty() {
         write_chunk_raw(w, chunk_name, |w| data.write_to(w))?
     }

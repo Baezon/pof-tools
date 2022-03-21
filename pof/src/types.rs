@@ -1446,15 +1446,17 @@ impl Model {
 
     pub fn recalc_radius(&mut self) {
         self.header.max_radius = 0.00001;
-        for subobj in &self.sub_objects {
-            if !self.is_obj_id_ancestor(subobj.obj_id, self.header.detail_levels[0]) {
-                continue;
-            }
+        if let Some(&detail_0) = self.header.detail_levels.first() {
+            for subobj in &self.sub_objects {
+                if !self.is_obj_id_ancestor(subobj.obj_id, detail_0) {
+                    continue;
+                }
 
-            let offset = self.get_total_subobj_offset(subobj.obj_id);
-            for vert in &subobj.bsp_data.verts {
-                if (*vert + offset).magnitude() > self.header.max_radius {
-                    self.header.max_radius = (*vert + offset).magnitude();
+                let offset = self.get_total_subobj_offset(subobj.obj_id);
+                for vert in &subobj.bsp_data.verts {
+                    if (*vert + offset).magnitude() > self.header.max_radius {
+                        self.header.max_radius = (*vert + offset).magnitude();
+                    }
                 }
             }
         }
@@ -1465,25 +1467,27 @@ impl Model {
         new_bbox.min = Vec3d { x: -0.00001, y: -0.00001, z: -0.00001 };
         new_bbox.max = Vec3d { x: 0.00001, y: 0.00001, z: 0.00001 };
 
-        for subobj in &self.sub_objects {
-            if !self.is_obj_id_ancestor(subobj.obj_id, self.header.detail_levels[0]) {
-                continue;
+        if let Some(&detail_0) = self.header.detail_levels.first() {
+            for subobj in &self.sub_objects {
+                if !self.is_obj_id_ancestor(subobj.obj_id, detail_0) {
+                    continue;
+                }
+
+                let offset = self.get_total_subobj_offset(subobj.obj_id);
+                let min = offset + subobj.bbox.min;
+                let max = offset + subobj.bbox.max;
+                new_bbox.min = Vec3d {
+                    x: f32::min(new_bbox.min.x, min.x),
+                    y: f32::min(new_bbox.min.y, min.y),
+                    z: f32::min(new_bbox.min.z, min.z),
+                };
+
+                new_bbox.max = Vec3d {
+                    x: f32::max(new_bbox.max.x, max.x),
+                    y: f32::max(new_bbox.max.y, max.y),
+                    z: f32::max(new_bbox.max.z, max.z),
+                };
             }
-
-            let offset = self.get_total_subobj_offset(subobj.obj_id);
-            let min = offset + subobj.bbox.min;
-            let max = offset + subobj.bbox.max;
-            new_bbox.min = Vec3d {
-                x: f32::min(new_bbox.min.x, min.x),
-                y: f32::min(new_bbox.min.y, min.y),
-                z: f32::min(new_bbox.min.z, min.z),
-            };
-
-            new_bbox.max = Vec3d {
-                x: f32::max(new_bbox.max.x, max.x),
-                y: f32::max(new_bbox.max.y, max.y),
-                z: f32::max(new_bbox.max.z, max.z),
-            };
         }
 
         self.header.bbox = new_bbox;

@@ -1,8 +1,8 @@
-use egui::{Align2, CollapsingHeader, Color32, Label, RichText};
+use egui::{text::LayoutJob, Align2, CollapsingHeader, Color32, DragValue, Label, RichText, TextFormat};
 use glium::Display;
 use nalgebra_glm::TMat4;
 use pof::{
-    DockingPoint, EyePoint, GlowPoint, GlowPointBank, Insignia, Model, PathId, PathPoint, SpecialPoint, SubObject, SubsysMovementAxis, TextureId,
+    Dock, EyePoint, GlowPoint, GlowPointBank, Insignia, Model, PathId, PathPoint, SpecialPoint, SubObject, SubsysMovementAxis, TextureId,
     ThrusterGlow, Vec3d, WeaponHardpoint,
 };
 use std::{collections::BTreeSet, str::FromStr, sync::mpsc::Receiver};
@@ -71,7 +71,8 @@ enum PropertiesPanel {
     },
     DockingBay {
         position_string: String,
-        normal_string: String,
+        fvec_string: String,
+        uvec_ang: f32,
         properties: String,
         path_num: usize,
     },
@@ -180,7 +181,8 @@ impl PropertiesPanel {
     fn default_docking_bay() -> Self {
         Self::DockingBay {
             position_string: Default::default(),
-            normal_string: Default::default(),
+            fvec_string: Default::default(),
+            uvec_ang: Default::default(),
             properties: Default::default(),
             path_num: Default::default(),
         }
@@ -486,25 +488,17 @@ impl GlowSelection {
 #[derive(PartialEq, Hash, Debug)]
 pub(crate) enum DockingSelection {
     Header,
-    Bay(usize),             // bank idx
-    BayPoint(usize, usize), // bank idx, point idx
+    Bay(usize), // bank idx
 }
 impl std::fmt::Display for DockingSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DockingSelection::Header => write!(f, "Header"),
             DockingSelection::Bay(idx) => write!(f, "Bay {}", idx),
-            DockingSelection::BayPoint(idx, idx2) => write!(f, "Bank {} Point {}", idx, idx2),
         }
     }
 }
 impl DockingSelection {
-    fn bay_point(bay: usize, point: Option<usize>) -> Self {
-        match point {
-            Some(point) => Self::BayPoint(bay, point),
-            None => Self::Bay(bay),
-        }
-    }
     fn bay(bay: Option<usize>) -> Self {
         match bay {
             Some(bay) => Self::Bay(bay),
@@ -1194,18 +1188,11 @@ impl UiState {
             TreeSelection::DockingBays(docking_select) => match *docking_select {
                 DockingSelection::Bay(bay) => {
                     self.properties_panel = PropertiesPanel::DockingBay {
-                        position_string: Default::default(),
-                        normal_string: Default::default(),
+                        position_string: format!("{}", model.docking_bays[bay].position),
+                        fvec_string: format!("{}", model.docking_bays[bay].fvec.0),
+                        uvec_ang: model.docking_bays[bay].get_uvec_angle().to_degrees() % 360.0,
                         properties: format!("{}", model.docking_bays[bay].properties),
                         path_num: model.docking_bays[bay].path.unwrap_or(PathId(model.paths.len() as u32)).0 as usize,
-                    }
-                }
-                DockingSelection::BayPoint(bay, point) => {
-                    self.properties_panel = PropertiesPanel::DockingBay {
-                        position_string: format!("{}", model.docking_bays[bay].points[point].position),
-                        normal_string: format!("{}", model.docking_bays[bay].points[point].normal),
-                        properties: format!("{}", model.docking_bays[bay].properties),
-                        path_num: model.docking_bays[bay].path.unwrap_or_default().0 as usize,
                     }
                 }
                 _ => self.properties_panel = PropertiesPanel::default_docking_bay(),
@@ -1582,21 +1569,11 @@ impl PofToolsGui {
                         TreeSelection::DockingBays(DockingSelection::Header),
                         |ui_state, ui| {
                             for (i, docking_bay) in self.model.docking_bays.iter().enumerate() {
-                                ui_state.tree_collapsing_item(
+                                ui_state.tree_selectable_item(
                                     &self.model,
                                     ui,
                                     docking_bay.get_name().unwrap_or(&format!("Bay {}", i + 1)),
                                     TreeSelection::DockingBays(DockingSelection::Bay(i)),
-                                    |ui_state, ui| {
-                                        for j in 0..docking_bay.points.len() {
-                                            ui_state.tree_selectable_item(
-                                                &self.model,
-                                                ui,
-                                                &format!("Point {}", j + 1),
-                                                TreeSelection::DockingBays(DockingSelection::BayPoint(i, j)),
-                                            );
-                                        }
-                                    },
                                 );
                             }
                         },
@@ -2253,14 +2230,13 @@ impl PofToolsGui {
                                 self.ui_state.viewport_3d_dirty = true;
                             }
                         }
-                        PropertiesPanel::DockingBay { position_string, normal_string, properties, path_num } => {
+                        PropertiesPanel::DockingBay { position_string, fvec_string, uvec_ang, properties, path_num } => {
                             ui.heading("Docking Bay");
                             ui.separator();
 
-                            let (bay_num, point_num) = match self.ui_state.tree_view_selection {
-                                TreeSelection::DockingBays(DockingSelection::Bay(bay)) => (Some(bay), None),
-                                TreeSelection::DockingBays(DockingSelection::BayPoint(bay, point)) => (Some(bay), Some(point)),
-                                _ => (None, None),
+                            let bay_num = match self.ui_state.tree_view_selection {
+                                TreeSelection::DockingBays(DockingSelection::Bay(bay)) => Some(bay),
+                                _ => None,
                             };
 
                             let bay_idx_response = UiState::list_manipulator_widget(ui, bay_num, Some(self.model.docking_bays.len()), "Bay");
@@ -2305,38 +2281,57 @@ impl PofToolsGui {
 
                             ui.separator();
 
-                            let point_idx_response = UiState::list_manipulator_widget(
-                                ui,
-                                point_num,
-                                bay_num.map(|bay| self.model.docking_bays[bay].points.len()),
-                                "Point",
-                            );
-
                             ui.add_space(10.0);
 
-                            let (pos, norm) =
-                                if let TreeSelection::DockingBays(DockingSelection::BayPoint(bay, point)) = self.ui_state.tree_view_selection {
-                                    let DockingPoint { position, normal } = &mut self.model.docking_bays[bay].points[point];
-                                    (Some(position), Some(normal))
-                                } else {
-                                    (None, None)
-                                };
                             ui.label("Position:");
+                            let pos = bay_num.map(|num| &mut self.model.docking_bays[num].position);
                             UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
-                            ui.label("Normal:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
+
+                            ui.label(RichText::new("Forward Vector:").color(Color32::from_rgb(140, 150, 210)));
+                            let norm = bay_num.map(|num| &mut self.model.docking_bays[num].fvec);
+                            if UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, fvec_string) {
+                                let bay = &mut self.model.docking_bays[bay_num.unwrap()];
+                                bay.uvec = Dock::orthonormalize(&bay.uvec.0.into(), &bay.fvec.0.into());
+                            }
+
+                            ui.label(RichText::new("Up Vector:").color(Color32::from_rgb(210, 140, 140)));
+                            ui.add_enabled_ui(bay_num.is_some(), |ui| {
+                                if ui.add(DragValue::new(uvec_ang).speed(0.5)).changed() {
+                                    self.ui_state.viewport_3d_dirty = true;
+                                    self.model.docking_bays[bay_num.unwrap()].set_uvec_angle(uvec_ang.to_radians());
+                                    *uvec_ang %= 360.0;
+                                }
+                            });
+
+                            // its annoyingly verbose to mix and match text styles/colors :/
+                            let mut job = LayoutJob::default();
+                            job.append("When ships dock, they will oppose their ", 0.0, TextFormat::default());
+                            job.append(
+                                "forward vectors ",
+                                0.0,
+                                TextFormat {
+                                    style: TextStyle::Button,
+                                    color: Color32::from_rgb(140, 150, 210),
+                                    ..Default::default()
+                                },
+                            );
+                            job.append("and match their ", 0.0, TextFormat::default());
+                            job.append(
+                                "up vectors",
+                                0.0,
+                                TextFormat {
+                                    style: TextStyle::Body,
+                                    color: Color32::from_rgb(210, 140, 140),
+                                    ..Default::default()
+                                },
+                            );
+                            job.append(".", 0.0, TextFormat::default());
+                            ui.label(job);
 
                             if let Some(response) = bay_idx_response {
                                 let new_idx = response.apply(&mut self.model.docking_bays);
 
                                 self.ui_state.tree_view_selection = TreeSelection::DockingBays(DockingSelection::bay(new_idx));
-                                self.ui_state.properties_panel_dirty = true;
-                                self.ui_state.viewport_3d_dirty = true;
-                            } else if let Some(response) = point_idx_response {
-                                let new_idx = response.apply(&mut self.model.docking_bays[bay_num.unwrap()].points);
-
-                                self.ui_state.tree_view_selection =
-                                    TreeSelection::DockingBays(DockingSelection::bay_point(bay_num.unwrap(), new_idx));
                                 self.ui_state.properties_panel_dirty = true;
                                 self.ui_state.viewport_3d_dirty = true;
                             }

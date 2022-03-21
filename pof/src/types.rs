@@ -1,11 +1,12 @@
 use std::convert::TryFrom;
+use std::f32::consts;
 use std::fmt::{Debug, Display};
 use std::io::{self, Write};
 use std::ops::{Add, AddAssign, Deref, DerefMut, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign};
 use std::str::FromStr;
 
 use byteorder::{WriteBytesExt, LE};
-use glm::{Mat3x3, TMat4};
+use glm::{Mat3x3, TMat4, Vec3};
 use nalgebra_glm::Mat4;
 extern crate nalgebra_glm as glm;
 
@@ -151,13 +152,13 @@ impl From<(f32, f32, f32)> for Vec3d {
         Vec3d { x, y, z }
     }
 }
-impl From<Vec3d> for nalgebra_glm::Vec3 {
+impl From<Vec3d> for Vec3 {
     fn from(Vec3d { x, y, z }: Vec3d) -> Self {
         glm::vec3(x, y, z)
     }
 }
-impl From<nalgebra_glm::Vec3> for Vec3d {
-    fn from(vec: nalgebra_glm::Vec3) -> Self {
+impl From<Vec3> for Vec3d {
+    fn from(vec: Vec3) -> Self {
         <[f32; 3]>::from(vec).into()
     }
 }
@@ -224,6 +225,11 @@ impl Vec3d {
 
         out /= n as f32;
         out
+    }
+
+    // intentional swizzle
+    pub fn flip_y_z(&self) -> Vec3d {
+        Vec3d { x: self.x, y: self.z, z: self.y }
     }
 }
 impl Add for Vec3d {
@@ -333,10 +339,42 @@ impl From<Mat3d> for glm::Mat3x3 {
 impl From<glm::Mat3x3> for Mat3d {
     fn from(mat: glm::Mat3x3) -> Self {
         Mat3d {
-            rvec: glm::Vec3::from(mat.column(0)).into(),
-            uvec: glm::Vec3::from(mat.column(1)).into(),
-            fvec: glm::Vec3::from(mat.column(2)).into(),
+            rvec: Vec3::from(mat.column(0)).into(),
+            uvec: Vec3::from(mat.column(1)).into(),
+            fvec: Vec3::from(mat.column(2)).into(),
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NormalVec3(pub Vec3d);
+
+impl Default for NormalVec3 {
+    fn default() -> Self {
+        Self(Vec3d { x: 0.0, y: 0.0, z: 1.0 })
+    }
+}
+
+impl TryFrom<Vec3d> for NormalVec3 {
+    type Error = ();
+
+    fn try_from(value: Vec3d) -> Result<Self, Self::Error> {
+        Ok(Self(Vec3::from(value).try_normalize(1e-6).ok_or(())?.into()))
+    }
+}
+
+impl TryFrom<Vec3> for NormalVec3 {
+    type Error = ();
+
+    fn try_from(value: Vec3) -> Result<Self, Self::Error> {
+        Vec3d::from(value).try_into()
+    }
+}
+
+impl FromStr for NormalVec3 {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse::<Vec3d>()?.try_into()
     }
 }
 
@@ -657,7 +695,7 @@ impl Default for ThrusterGlow {
 }
 
 mk_struct! {
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, PartialEq)]
     pub struct DockingPoint {
         pub position: Vec3d,
         pub normal: Vec3d,
@@ -921,7 +959,7 @@ impl BspData {
                 poly.center = Vec3d::average(vert_iter.clone());
 
                 // generate the normal by averaging the cross products of adjacent edges
-                let mut glm_verts = vert_iter.clone().map(glm::Vec3::from); // first convert to glm vectors
+                let mut glm_verts = vert_iter.clone().map(Vec3::from); // first convert to glm vectors
                 poly.normal = if poly.verts.len() == 3 {
                     // optimize a bit for for triangles, which we'll have a lot of
                     if let [Some(a), Some(b), Some(c)] = [glm_verts.next(), glm_verts.next(), glm_verts.next()] {
@@ -1157,7 +1195,9 @@ impl Serialize for SubObject {
 pub struct Dock {
     pub properties: String,
     pub path: Option<PathId>,
-    pub points: Vec<DockingPoint>,
+    pub position: Vec3d,
+    pub fvec: NormalVec3,
+    pub uvec: NormalVec3,
 }
 impl Serialize for Dock {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
@@ -1166,10 +1206,48 @@ impl Serialize for Dock {
             None => 0_u32.write_to(w)?,
             Some(x) => [x].write_to(w)?,
         }
-        self.points.write_to(w)
+        let points = (
+            DockingPoint { position: self.position - self.uvec.0, normal: self.fvec.0 },
+            DockingPoint { position: self.position + self.uvec.0, normal: self.fvec.0 },
+        );
+        points.write_to(w)
     }
 }
 impl Dock {
+    #[must_use]
+    pub fn orthonormalize(&(mut xvec): &Vec3, fvec: &Vec3) -> NormalVec3 {
+        xvec -= *fvec * xvec.dot(fvec);
+        match xvec.try_into() {
+            Ok(xvec) => xvec,
+            Err(()) => {
+                xvec = glm::vec3(0.0, 1.0, 0.0);
+                (xvec - fvec * xvec.dot(fvec)).try_into().unwrap_or_default()
+            }
+        }
+    }
+
+    pub fn get_uvec_angle(&self) -> f32 {
+        let mut fvec: Vec3 = self.fvec.0.into();
+        if fvec.try_normalize_mut(1e-6).is_none() {
+            fvec = glm::vec3(1.0, 0.0, 0.0);
+        }
+        let uvec = self.uvec.0.into();
+        let xvec = glm::vec3(0.0, 0.0, 1.0);
+        let xvec = Self::orthonormalize(&xvec, &fvec).0.into();
+        f32::atan2(fvec.cross(&xvec).dot(&uvec), xvec.dot(&uvec))
+    }
+
+    pub fn set_uvec_angle(&mut self, ang: f32) {
+        let mut fvec: Vec3 = self.fvec.0.into();
+        if fvec.try_normalize_mut(1e-6).is_none() {
+            fvec = glm::vec3(1.0, 0.0, 0.0);
+        }
+        let mut uvec = glm::vec3(0.0, 0.0, 1.0);
+        let uvec = Self::orthonormalize(&mut uvec, &fvec).0.into();
+
+        self.uvec = glm::rotate_vec3(&uvec, ang, &fvec).try_into().unwrap_or_default();
+    }
+
     pub fn get_name(&self) -> Option<&str> {
         for str in self.properties.split('\n') {
             if let Some(name) = str.strip_prefix("$name=") {

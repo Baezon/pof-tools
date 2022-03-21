@@ -5,6 +5,7 @@ use std::{
 
 use byteorder::{WriteBytesExt, LE};
 use dae_parser::Document;
+use glm::{Mat4x4, Vec3};
 extern crate nalgebra_glm as glm;
 
 use crate::{
@@ -486,16 +487,14 @@ fn make_docking_bays_node(docks: &[Dock]) -> Node {
     let mut node = Node::new(format!("#docking bays"), Some(format!("#docking bays")));
 
     for (i, dock) in docks.iter().enumerate() {
-        let mut bay_node = Node::new(format!("#d{}", i), Some(format!("#d{}", i)));
+        let mut bay_node = Node::new(format!("#bay{}", i), Some(format!("#bay{}", i)));
 
-        for (j, point) in dock.points.iter().enumerate() {
-            let mut point_node = Node::new(format!("#d{}-point{}", i, j), Some(format!("#d{}-point{}", i, j)));
-            let pos = point.position;
-            point_node.push_transform(Translate::new([pos.x, pos.z, pos.y])); // itentional swizzle
-            point_node.push_transform(vec_to_rotation(&point.normal));
-
-            bay_node.children.push(point_node);
-        }
+        let fvec: Vec3 = dock.fvec.0.flip_y_z().into();
+        let uvec = dock.uvec.0.flip_y_z().into();
+        let mat = nalgebra::Matrix::from_columns(&[fvec.cross(&uvec), fvec, uvec]);
+        let mut mat: Mat4x4 = glm::mat3_to_mat4(&mat);
+        mat.append_translation_mut(&dock.position.flip_y_z().into());
+        bay_node.push_transform(mat);
 
         if dock.path.is_some() {
             bay_node

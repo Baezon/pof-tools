@@ -1150,37 +1150,30 @@ impl PofToolsGui {
                 );
             }
             TreeSelection::DockingBays(docking_selection) => {
-                let mut selected_bank = None;
-                let mut selected_point = None;
-                match *docking_selection {
-                    DockingSelection::Bay(bank) => selected_bank = Some(bank),
-                    DockingSelection::BayPoint(bank, point) => {
-                        selected_bank = Some(bank);
-                        selected_point = Some(point);
-                    }
-                    _ => {}
-                }
+                let selected_bank = if let DockingSelection::Bay(num) = docking_selection {
+                    Some(*num)
+                } else {
+                    None
+                };
 
                 const COLORS: [[f32; 4]; 3] = [LOLLIPOP_UNSELECTED_COLOR, LOLLIPOP_SELECTED_POINT_COLOR, LOLLIPOP_SELECTED_BANK_COLOR];
                 self.lollipops = build_lollipops(
                     &COLORS,
                     display,
                     model.docking_bays.iter().enumerate().flat_map(|(bay_idx, docking_bay)| {
-                        docking_bay.points.iter().enumerate().map(move |(point_idx, docking_point)| {
-                            let position = docking_point.position;
-                            let radius = 1.0;
-                            let normal = docking_point.normal * radius * 2.0;
-                            let selection = if selected_bank == Some(bay_idx) {
-                                if selected_point == Some(point_idx) {
-                                    SELECTED_POINT
-                                } else {
-                                    SELECTED_BANK
-                                }
-                            } else {
-                                UNSELECTED
-                            };
-                            (position, normal, radius, selection)
-                        })
+                        let position = docking_bay.position;
+                        let radius = self.model.header.max_radius.powf(0.4) / 4.0;
+                        let fvec = docking_bay.fvec.0 * radius * 3.0;
+                        let uvec = docking_bay.uvec.0 * radius * 3.0;
+                        let (selection1, selection2) = if selected_bank == Some(bay_idx) {
+                            (SELECTED_BANK, SELECTED_POINT)
+                        } else {
+                            (UNSELECTED, UNSELECTED)
+                        };
+
+                        let lollipop1 = (position, fvec, radius, selection1);
+                        let lollipop2 = (position, uvec, 0.0, selection2);
+                        vec![lollipop1, lollipop2]
                     }),
                 );
             }

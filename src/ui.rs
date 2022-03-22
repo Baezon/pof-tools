@@ -1,4 +1,4 @@
-use egui::{Align2, CollapsingHeader, Color32, Label, RichText};
+use egui::{Align2, CollapsingHeader, Color32, Label, Response, RichText};
 use glium::Display;
 use nalgebra_glm::TMat4;
 use pof::{
@@ -687,6 +687,9 @@ pub(crate) struct UiState {
     pub last_selected_subobj: ObjectId,
     properties_panel: PropertiesPanel,
     properties_panel_dirty: bool,
+    pub display_radius: bool,
+    pub display_bbox: bool,
+    pub display_origin: bool,
 }
 
 pub(crate) struct PofToolsGui {
@@ -953,26 +956,25 @@ impl UiState {
 
     fn model_value_edit<T: FromStr>(
         viewport_3d_dirty: &mut bool, ui: &mut Ui, active_warning: bool, model_value: Option<&mut T>, parsable_string: &mut String,
-    ) -> bool {
-        let mut val_changed = false;
+    ) -> Response {
         if let Some(value) = model_value {
             if parsable_string.parse::<T>().is_err() {
                 ui.visuals_mut().override_text_color = Some(Color32::RED);
             } else if active_warning {
                 ui.visuals_mut().override_text_color = Some(Color32::YELLOW);
             }
-            if ui.text_edit_singleline(parsable_string).changed() {
+            let response = ui.text_edit_singleline(parsable_string);
+            if response.changed() {
                 if let Ok(parsed_string) = parsable_string.parse() {
                     *value = parsed_string;
                     *viewport_3d_dirty = true;
-                    val_changed = true;
                 }
             }
             ui.visuals_mut().override_text_color = None;
+            response
         } else {
-            ui.add_enabled(false, egui::widgets::TextEdit::singleline(parsable_string));
+            ui.add_enabled_ui(false, |ui| ui.text_edit_singleline(parsable_string)).inner
         }
-        val_changed
     }
 
     fn show_transform_window(ctx: &egui::CtxRef, transform_window: &mut TransformWindow) -> Option<TMat4<f32>> {
@@ -1749,6 +1751,11 @@ impl PofToolsGui {
         // manipulation of whatever it is they have selected in the tree view
         // ==============================================================================================================
 
+        // reset some stuff
+        self.display_bbox = false;
+        self.display_radius = false;
+        self.display_origin = false;
+
         egui::SidePanel::right("properties_panel")
             .resizable(true)
             .default_width(200.0)
@@ -1797,59 +1804,77 @@ impl PofToolsGui {
                             }
 
                             let mut bbox_changed = false;
+                            let mut display_bbox = false;
                             ui.horizontal(|ui| {
                                 ui.label("Bounding Box:");
-                                if ui.button("Recalculate").clicked() {
+                                let response = ui.button("Recalculate");
+
+                                if response.clicked() {
                                     self.model.recalc_bbox();
                                     self.ui_state.properties_panel_dirty = true;
                                     bbox_changed = true;
                                 }
+                                display_bbox = response.hovered() || response.has_focus() || display_bbox;
                             });
 
                             ui.horizontal(|ui| {
                                 ui.label("Min:");
-                                if UiState::model_value_edit(
+                                let response = UiState::model_value_edit(
                                     &mut self.ui_state.viewport_3d_dirty,
                                     ui,
                                     self.warnings.contains(&Warning::BBoxTooSmall(None)),
                                     Some(&mut self.model.header.bbox.min),
                                     bbox_min_string,
-                                ) {
+                                );
+
+                                if response.changed() {
                                     bbox_changed = true;
                                 }
+                                display_bbox = response.hovered() || response.has_focus() || display_bbox;
                             });
 
                             ui.horizontal(|ui| {
                                 ui.label("Max:");
-                                if UiState::model_value_edit(
+                                let response = UiState::model_value_edit(
                                     &mut self.ui_state.viewport_3d_dirty,
                                     ui,
                                     self.warnings.contains(&Warning::BBoxTooSmall(None)),
                                     Some(&mut self.model.header.bbox.max),
                                     bbox_max_string,
-                                ) {
+                                );
+
+                                if response.changed() {
                                     bbox_changed = true;
                                 }
+                                self.ui_state.display_bbox = response.hovered() || response.has_focus() || display_bbox;
                             });
 
                             let mut radius_changed = false;
+                            let mut display_radius = false;
                             ui.horizontal(|ui| {
                                 ui.add(egui::Label::new("Radius:"));
-                                if ui.button("Recalculate").clicked() {
+                                let response = ui.button("Recalculate");
+
+                                if response.clicked() {
                                     self.model.recalc_radius();
                                     radius_changed = true;
                                     self.ui_state.properties_panel_dirty = true;
                                 }
+                                display_radius = response.hovered() || response.has_focus() || display_radius;
                             });
-                            if UiState::model_value_edit(
+
+                            let response = UiState::model_value_edit(
                                 &mut self.ui_state.viewport_3d_dirty,
                                 ui,
                                 self.warnings.contains(&Warning::RadiusTooSmall(None)),
                                 Some(&mut self.model.header.max_radius),
                                 radius_string,
-                            ) {
+                            );
+
+                            if response.changed() {
                                 radius_changed = true;
                             }
+                            self.ui_state.display_radius = response.hovered() || response.has_focus() || display_radius;
 
                             ui.horizontal(|ui| {
                                 ui.add(egui::Label::new("Mass:"));
@@ -1978,47 +2003,59 @@ impl PofToolsGui {
                             ui.add_space(5.0);
 
                             let mut bbox_changed = false;
+                            let mut display_bbox = false;
                             ui.horizontal(|ui| {
                                 ui.label("Bounding Box:");
-                                if ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate")).clicked() {
+                                let response = ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate"));
+
+                                if response.clicked() {
                                     self.model.sub_objects[selected_id.unwrap()].recalc_bbox();
                                     self.ui_state.properties_panel_dirty = true;
                                     bbox_changed = true;
                                 }
+                                display_bbox = response.hovered() || response.has_focus() || display_bbox;
                             });
 
                             ui.horizontal(|ui| {
                                 ui.label("Min:");
-                                if UiState::model_value_edit(
+                                let response = UiState::model_value_edit(
                                     &mut self.ui_state.viewport_3d_dirty,
                                     ui,
                                     false,
                                     selected_id.map(|id| &mut self.model.sub_objects[id].bbox.min),
                                     bbox_min_string,
-                                ) {
+                                );
+
+                                if response.changed() {
                                     bbox_changed = true;
                                 }
+                                display_bbox = response.hovered() || response.has_focus() || display_bbox;
                             });
 
                             ui.horizontal(|ui| {
                                 ui.label("Max:");
-                                if UiState::model_value_edit(
+                                let response = UiState::model_value_edit(
                                     &mut self.ui_state.viewport_3d_dirty,
                                     ui,
                                     false,
                                     selected_id.map(|id| &mut self.model.sub_objects[id].bbox.max),
                                     bbox_max_string,
-                                ) {
+                                );
+
+                                if response.changed() {
                                     bbox_changed = true;
                                 }
+                                display_bbox = response.hovered() || response.has_focus() || display_bbox;
                             });
+
+                            self.ui_state.display_bbox = display_bbox;
 
                             if bbox_changed {
                                 PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::BBoxTooSmall(selected_id)));
                             }
 
                             ui.label("Offset:");
-                            UiState::model_value_edit(
+                            let response = UiState::model_value_edit(
                                 &mut self.ui_state.viewport_3d_dirty,
                                 ui,
                                 false,
@@ -2026,24 +2063,34 @@ impl PofToolsGui {
                                 offset_string,
                             );
 
+                            self.ui_state.display_origin = response.hovered() || response.has_focus();
+
                             let mut radius_changed = false;
+                            let mut display_radius = false;
                             ui.horizontal(|ui| {
                                 ui.label("Radius:");
-                                if ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate")).clicked() {
+                                let response = ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate"));
+
+                                if response.clicked() {
                                     self.model.sub_objects[selected_id.unwrap()].recalc_radius();
                                     self.ui_state.properties_panel_dirty = true;
                                     radius_changed = true;
                                 }
+                                display_radius = response.hovered() || response.has_focus() || display_radius;
                             });
-                            if UiState::model_value_edit(
+
+                            let response = UiState::model_value_edit(
                                 &mut self.ui_state.viewport_3d_dirty,
                                 ui,
                                 self.warnings.contains(&Warning::RadiusTooSmall(selected_id)),
                                 selected_id.map(|id| &mut self.model.sub_objects[id].radius),
                                 radius_string,
-                            ) {
+                            );
+
+                            if response.changed() {
                                 radius_changed = true;
                             }
+                            self.ui_state.display_radius = response.hovered() || response.has_focus() || display_radius;
 
                             if radius_changed {
                                 PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::RadiusTooSmall(selected_id)));

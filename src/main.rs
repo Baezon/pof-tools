@@ -24,7 +24,7 @@ use simplelog::*;
 use std::{collections::HashMap, fs::File, path::PathBuf, sync::mpsc::TryRecvError};
 use ui::{PofToolsGui, Set::*, TreeSelection};
 
-mod sphere;
+mod primitives;
 mod ui;
 
 fn create_display(event_loop: &glutin::event_loop::EventLoop<()>) -> glium::Display {
@@ -491,11 +491,14 @@ fn main() {
     let lollipop_stick_params = lollipop_stick_params();
     let lollipop_rev_depth_params = lollipop_rev_depth_params();
 
-    let box_verts = glium::VertexBuffer::new(&display, &sphere::BOX_VERTS).unwrap();
-    let box_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::LinesList, &sphere::BOX_INDICES).unwrap();
+    let circle_verts = glium::VertexBuffer::new(&display, primitives::CIRCLE_VERTS()).unwrap();
+    let circle_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::LineLoop, &primitives::CIRCLE_INDICES).unwrap();
 
-    let icosphere_verts = glium::VertexBuffer::new(&display, &sphere::SPHERE_VERTS).unwrap();
-    let icosphere_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::TrianglesList, &sphere::SPHERE_INDICES).unwrap();
+    let box_verts = glium::VertexBuffer::new(&display, &primitives::BOX_VERTS).unwrap();
+    let box_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::LinesList, &primitives::BOX_INDICES).unwrap();
+
+    let icosphere_verts = glium::VertexBuffer::new(&display, &primitives::SPHERE_VERTS).unwrap();
+    let icosphere_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::TrianglesList, &primitives::SPHERE_INDICES).unwrap();
 
     pt_gui.camera_heading = 2.7;
     pt_gui.camera_pitch = -0.4;
@@ -766,82 +769,154 @@ fn main() {
                         }
                     }
 
-                    // draw 'helpers'
-                    // bounding boxes, lollipops, etc
-                    match &pt_gui.ui_state.tree_view_selection {
-                        &TreeSelection::SubObjects(SubObjectSelection::SubObject(obj_id)) => {
-                            // draw wireframe bounding boxes
-                            let bbox = &pt_gui.model.sub_objects[obj_id].bbox;
+                    let mut obj_id = None; // None also indicates the header being possibly selected
+                    if let TreeSelection::SubObjects(SubObjectSelection::SubObject(id)) = pt_gui.tree_view_selection {
+                        obj_id = Some(id);
 
-                            let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
-                            mat.append_translation_mut(&(bbox.min + pt_gui.model.get_total_subobj_offset(obj_id)).into());
+                        //      DEBUG - Draw BSP node bounding boxes
+                        //      This is quite useful but incredibly ineffcient
+                        //      TODO make this more efficient
+                        //
+                        // let mut node_stack = vec![(&pt_gui.model.sub_objects[obj_id].bsp_data.collision_tree, 0u32)];
+                        // while let Some((node, depth)) = node_stack.pop() {
+                        //     let bbox = match node {
+                        //         BspNode::Split { bbox, front, back, .. } => {
+                        //             node_stack.push((front, depth + 1));
+                        //             node_stack.push((back, depth + 1));
+                        //             bbox
+                        //         }
+                        //         BspNode::Leaf { bbox, .. } => bbox,
+                        //     };
+
+                        //     let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
+                        //     mat.append_translation_mut(&(bbox.min + pt_gui.model.get_total_subobj_offset(obj_id)).into());
+                        //     let color = 2.0 / (1.5f32.powf(depth as f32));
+
+                        //     let uniforms = glium::uniform! {
+                        //         model: <[[f32; 4]; 4]>::from(mat),
+                        //         view: view_mat,
+                        //         perspective: perspective_matrix,
+                        //         lollipop_color: [color, color, color, 1.0f32],
+                        //     };
+
+                        //     target
+                        //         .draw(&box_verts, &box_indices, &lollipop_stick_shader, &uniforms, &lollipop_stick_params)
+                        //         .unwrap();
+                        // }
+                    }
+
+                    // draw wireframe bounding boxes
+                    if pt_gui.display_bbox {
+                        let bbox = if let Some(id) = obj_id {
+                            &pt_gui.model.sub_objects[id].bbox
+                        } else {
+                            &pt_gui.model.header.bbox
+                        };
+
+                        let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
+                        let offset = if let Some(id) = obj_id {
+                            pt_gui.model.get_total_subobj_offset(id)
+                        } else {
+                            Vec3d::ZERO
+                        };
+                        mat.append_translation_mut(&(bbox.min + offset).into());
+                        let uniforms = glium::uniform! {
+                            model: <[[f32; 4]; 4]>::from(mat),
+                            view: view_mat,
+                            perspective: perspective_matrix,
+                        };
+
+                        target
+                            .draw(&box_verts, &box_indices, &wireframe_shader, &uniforms, &wireframe_params)
+                            .unwrap();
+                    }
+
+                    // draw wireframe 'sphere'
+                    if pt_gui.display_radius {
+                        for i in 0..3 {
+                            let rad = if let Some(id) = obj_id {
+                                pt_gui.model.sub_objects[id].radius
+                            } else {
+                                pt_gui.model.header.max_radius
+                            };
+
+                            let mut mat = glm::scaling(&glm::vec3(rad, rad, rad));
+                            if i == 1 {
+                                mat *= glm::rotation(std::f32::consts::FRAC_PI_2, &glm::vec3(0.0, 1.0, 0.0));
+                            } else if i == 2 {
+                                mat *= glm::rotation(std::f32::consts::FRAC_PI_2, &glm::vec3(1.0, 0.0, 0.0));
+                            }
+
+                            let offset = if let Some(id) = obj_id {
+                                pt_gui.model.get_total_subobj_offset(id)
+                            } else {
+                                Vec3d::ZERO
+                            };
+                            mat.append_translation_mut(&offset.into());
+
                             let uniforms = glium::uniform! {
                                 model: <[[f32; 4]; 4]>::from(mat),
                                 view: view_mat,
                                 perspective: perspective_matrix,
                             };
 
-                            for buffer in &pt_gui.buffer_objects {
-                                if buffer.obj_id == obj_id {
-                                    target
-                                        .draw(&box_verts, &box_indices, &wireframe_shader, &uniforms, &wireframe_params)
-                                        .unwrap();
-                                }
+                            target
+                                .draw(&circle_verts, &circle_indices, &wireframe_shader, &uniforms, &wireframe_params)
+                                .unwrap();
+                        }
+                    }
+
+                    // don't display lollipops if you're in header or subobjects, unless display_origin is on, since that's the only lollipop they have
+                    let display_lollipops = (!matches!(pt_gui.ui_state.tree_view_selection, TreeSelection::Header)
+                        && !matches!(pt_gui.ui_state.tree_view_selection, TreeSelection::SubObjects(_)))
+                        || pt_gui.display_origin;
+
+                    if display_lollipops {
+                        for lollipop_group in &pt_gui.lollipops {
+                            if let TreeSelection::Paths(_) = &pt_gui.ui_state.tree_view_selection {
+                                lollipop_params.blend = glium::Blend::alpha_blending();
+                            } else {
+                                lollipop_params.blend = ADDITIVE_BLEND;
                             }
 
-                            //      DEBUG - Draw BSP node bounding boxes
-                            //      This is quite useful but incredibly ineffcient
-                            //      TODO make this more efficient
-                            //
-                            // let mut node_stack = vec![(&pt_gui.model.sub_objects[obj_id].bsp_data.collision_tree, 0u32)];
-                            // while let Some((node, depth)) = node_stack.pop() {
-                            //     let bbox = match node {
-                            //         BspNode::Split { bbox, front, back, .. } => {
-                            //             node_stack.push((front, depth + 1));
-                            //             node_stack.push((back, depth + 1));
-                            //             bbox
-                            //         }
-                            //         BspNode::Leaf { bbox, .. } => bbox,
-                            //     };
+                            let uniforms = glium::uniform! {
+                                model: <[[f32; 4]; 4]>::from(glm::identity::<f32, 4>()),
+                                view: view_mat,
+                                perspective: perspective_matrix,
+                                lollipop_color: lollipop_group.color,
+                            };
 
-                            //     let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
-                            //     mat.append_translation_mut(&(bbox.min + pt_gui.model.get_total_subobj_offset(obj_id)).into());
-                            //     let color = 2.0 / (1.5f32.powf(depth as f32));
+                            target
+                                .draw(
+                                    (&icosphere_verts, lollipop_group.lolly_vertices.per_instance().unwrap()),
+                                    &icosphere_indices,
+                                    &lollipop_shader,
+                                    &uniforms,
+                                    &lollipop_params,
+                                )
+                                .unwrap();
+                            target
+                                .draw(
+                                    &lollipop_group.stick_vertices,
+                                    &lollipop_group.stick_indices,
+                                    &lollipop_stick_shader,
+                                    &uniforms,
+                                    &lollipop_stick_params,
+                                )
+                                .unwrap();
 
-                            //     let uniforms = glium::uniform! {
-                            //         model: <[[f32; 4]; 4]>::from(mat),
-                            //         view: view_mat,
-                            //         perspective: perspective_matrix,
-                            //         lollipop_color: [color, color, color, 1.0f32],
-                            //     };
+                            if !matches!(pt_gui.ui_state.tree_view_selection, TreeSelection::Paths(_)) {
+                                // ...then draw the lollipops with reverse depth order, darker
+                                // this gives the impression that the lollipops are dimly visible through the model
+                                // (dont do it for path lollipops, they're busy enough)
 
-                            //     target
-                            //         .draw(&box_verts, &box_indices, &lollipop_stick_shader, &uniforms, &lollipop_stick_params)
-                            //         .unwrap();
-                            // }
-                        }
-                        TreeSelection::Thrusters(_)
-                        | TreeSelection::Weapons(_)
-                        | TreeSelection::DockingBays(_)
-                        | TreeSelection::Glows(_)
-                        | TreeSelection::SpecialPoints(_)
-                        | TreeSelection::Turrets(_)
-                        | TreeSelection::Paths(_)
-                        | TreeSelection::EyePoints(_)
-                        | TreeSelection::VisualCenter => {
-                            // draw lollipops!
-                            for lollipop_group in &pt_gui.lollipops {
-                                if let TreeSelection::Paths(_) = &pt_gui.ui_state.tree_view_selection {
-                                    lollipop_params.blend = glium::Blend::alpha_blending();
-                                } else {
-                                    lollipop_params.blend = ADDITIVE_BLEND;
-                                }
-
+                                // same uniforms as above, but darkened
+                                // i cant just modify the previous uniforms variable, the uniforms! macro is doing some crazy shit
                                 let uniforms = glium::uniform! {
                                     model: <[[f32; 4]; 4]>::from(glm::identity::<f32, 4>()),
                                     view: view_mat,
                                     perspective: perspective_matrix,
-                                    lollipop_color: lollipop_group.color,
+                                    lollipop_color: lollipop_group.color.map(|col| col * 0.15 ), // <<< THIS IS DIFFERENT FROM ABOVE
                                 };
 
                                 target
@@ -850,46 +925,11 @@ fn main() {
                                         &icosphere_indices,
                                         &lollipop_shader,
                                         &uniforms,
-                                        &lollipop_params,
+                                        &lollipop_rev_depth_params,
                                     )
                                     .unwrap();
-                                target
-                                    .draw(
-                                        &lollipop_group.stick_vertices,
-                                        &lollipop_group.stick_indices,
-                                        &lollipop_stick_shader,
-                                        &uniforms,
-                                        &lollipop_stick_params,
-                                    )
-                                    .unwrap();
-
-                                if !matches!(pt_gui.ui_state.tree_view_selection, TreeSelection::Paths(_)) {
-                                    // ...then draw the lollipops with reverse depth order, darker
-                                    // this gives the impression that the lollipops are dimly visible through the model
-                                    // (dont do it for path lollipops, they're busy enough)
-
-                                    // same uniforms as above, but darkened
-                                    // i cant just modify the previous uniforms variable, the uniforms! macro is doing some crazy shit
-                                    let uniforms = glium::uniform! {
-                                        model: <[[f32; 4]; 4]>::from(glm::identity::<f32, 4>()),
-                                        view: view_mat,
-                                        perspective: perspective_matrix,
-                                        lollipop_color: lollipop_group.color.map(|col| col * 0.15 ), // <<< THIS IS DIFFERENT FROM ABOVE
-                                    };
-
-                                    target
-                                        .draw(
-                                            (&icosphere_verts, lollipop_group.lolly_vertices.per_instance().unwrap()),
-                                            &icosphere_indices,
-                                            &lollipop_shader,
-                                            &uniforms,
-                                            &lollipop_rev_depth_params,
-                                        )
-                                        .unwrap();
-                                }
                             }
                         }
-                        _ => {}
                     }
 
                     egui.paint(&display, &mut target, shapes);
@@ -1044,6 +1084,14 @@ impl PofToolsGui {
                     if buffer.obj_id == *obj_id {
                         buffer.tint_val = 0.2;
                     }
+
+                    let size = 0.05 * model.sub_objects[*obj_id].radius;
+
+                    let mut lollipop_origin = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_POINT_COLOR);
+                    lollipop_origin.push(model.get_total_subobj_offset(*obj_id), Vec3d::ZERO, size);
+                    let lollipop_origin = lollipop_origin.finish(display);
+
+                    self.lollipops = vec![lollipop_origin];
                 }
             }
             TreeSelection::Textures(TextureSelection::Texture(tex)) => {

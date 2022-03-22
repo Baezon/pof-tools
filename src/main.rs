@@ -407,7 +407,8 @@ fn main() {
         default_hook(panic_info);
         LAST_PANIC.get_or_init(|| {
             let backtrace = backtrace::Backtrace::new();
-            let msg = format!("{},  {}", panic_info.payload().downcast_ref::<String>().unwrap(), panic_info.location().unwrap());
+            let msg = panic_info.payload().downcast_ref::<String>().map_or("unknown panic", |x| x);
+            let msg = format!("{},  {}", msg, panic_info.location().unwrap());
             let mut frames = vec![];
             for frame in backtrace.frames() {
                 // filter out anything which doesn't have pof-tools in the path

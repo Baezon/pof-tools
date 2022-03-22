@@ -1,8 +1,34 @@
+use once_cell::sync::OnceCell;
+
 use crate::Vertex;
 
 // yes, this is just the raw data for a (subdivided) icosphere
 // yes, there really is no better way to make just a plain sphere in opengl, can you believe that?
 // if you know a way let me know!!
+
+#[allow(non_snake_case)]
+pub(crate) fn CIRCLE_VERTS() -> &'static [Vertex; 128] {
+    static CIRCLE_VERTS: OnceCell<[Vertex; 128]> = OnceCell::new();
+    CIRCLE_VERTS.get_or_init(|| {
+        let mut verts = [Vertex { position: (0.0, 0.0, 0.0) }; 128];
+        let len = verts.len();
+        for (i, vert) in verts.iter_mut().enumerate() {
+            vert.position.0 = ((i as f32 / len as f32) * std::f32::consts::TAU).sin();
+            vert.position.1 = ((i as f32 / len as f32) * std::f32::consts::TAU).cos();
+        }
+        verts
+    })
+}
+
+pub(crate) const CIRCLE_INDICES: [u16; 128] = {
+    let mut i = 0;
+    let mut indices = [0; 128];
+    while i < 128 {
+        indices[i as usize] = i;
+        i += 1;
+    }
+    indices
+};
 
 pub(crate) const BOX_VERTS: [Vertex; 8] = [
     Vertex { position: (0.0, 1.0, 0.0) },

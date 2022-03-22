@@ -2336,7 +2336,7 @@ impl PofToolsGui {
 
                             ui.label(RichText::new("Forward Vector:").color(Color32::from_rgb(140, 150, 210)));
                             let norm = bay_num.map(|num| &mut self.model.docking_bays[num].fvec);
-                            if UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, fvec_string) {
+                            if UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, fvec_string).changed() {
                                 let bay = &mut self.model.docking_bays[bay_num.unwrap()];
                                 bay.uvec = Dock::orthonormalize(&bay.uvec.0.into(), &bay.fvec.0.into());
                             }

@@ -298,21 +298,18 @@ impl<R: Read + Seek> Parser<R> {
                 b"DOCK" => {
                     assert!(dock_points.is_none());
                     dock_points = Some(self.read_list(|this| {
-                        Ok(Dock {
-                            properties: this.read_string()?,
-                            path: {
-                                // spec allows for a list of paths but only the first will be used so dont bother
-                                let paths = this.read_list(|this| this.read_u32())?;
-                                paths.first().map(|&x| PathId(x))
-                            },
-                            points: {
-                                // same thing here, only first 2 are used
-                                let dockpoints =
-                                    this.read_list(|this| Ok(DockingPoint { position: this.read_vec3d()?, normal: this.read_vec3d()? }))?;
-                                assert!(dockpoints.len() < 3);
-                                dockpoints
-                            },
-                        })
+                        let properties = this.read_string()?;
+                        let paths = this.read_list(|this| this.read_u32())?; // spec allows for a list of paths but only the first will be used so dont bother
+                        let path = paths.first().map(|&x| PathId(x));
+                        // same thing here, only first 2 are used
+                        let mut dockpoints = this.read_list(|this| Ok(DockingPoint { position: this.read_vec3d()?, normal: this.read_vec3d()? }))?;
+                        let mut iter = dockpoints.drain(..2);
+                        let (p1, p2) = (iter.next().unwrap_or_default(), iter.next().unwrap_or_default());
+                        let position = (p1.position + p2.position) / 2.0;
+                        let fvec: NormalVec3 = p1.normal.try_into().unwrap_or_default();
+                        let uvec = Dock::orthonormalize(&(p2.position - p1.position).into(), &fvec.0.into());
+
+                        Ok(Dock { properties, path, position, fvec, uvec: uvec.into() })
                     })?);
                     //println!("{:#?}", dock_points);
                 }
@@ -1253,17 +1250,18 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                 for (node, _) in node_children_with_keyword(&node.children, "bay") {
                     let mut new_bay = Dock::default();
 
+                    let transform = node.transform_as_matrix();
+                    let zero = Vec3d::ZERO.into();
+                    new_bay.position = Vec3d::from(transform.transform_point(&zero) - zero).flip_y_z();
+                    new_bay.fvec = transform.transform_vector(&glm::vec3(0., 1., 0.)).try_into().unwrap_or_default();
+                    new_bay.fvec.0 = new_bay.fvec.0.flip_y_z();
+
+                    new_bay.uvec = transform.transform_vector(&glm::vec3(0., 0., 1.)).try_into().unwrap_or_default();
+                    new_bay.uvec.0 = new_bay.uvec.0.flip_y_z();
+
                     for (node, name) in node_children_with_keyword(&node.children, "") {
                         if name.contains("properties") {
                             dae_parse_properties(node, &mut new_bay.properties);
-                        } else if name.contains("point") {
-                            let mut new_point = DockingPoint::default();
-
-                            let (pos, norm, _) = dae_parse_point(node);
-                            new_point.position = pos;
-                            new_point.normal = norm;
-
-                            new_bay.points.push(new_point);
                         } else if name.contains("path") {
                             if let Some(idx) = name.find(":") {
                                 if let Ok(val) = &name[(idx + 1)..].parse() {
@@ -1383,7 +1381,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
         }
     }
 
-    if details.is_empty() {
+    if details.is_empty() && !sub_objects.is_empty() {
         details.push(ObjectId(0));
         // this is pretty bad, but not having any detail levels is worse
     }

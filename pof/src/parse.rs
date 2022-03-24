@@ -757,7 +757,7 @@ fn dae_parse_point(node: &Node, parent_transform: Mat4x4) -> (Vec3d, Vec3d, f32)
                 let transform = transform.append_translation(&(-offset));
                 pos = offset.into();
                 pos = pos.flip_y_z();
-                let vector: Vec3d = transform.transform_point(&Point3::new(0.0, 1.0, 0.0)).into();
+                let vector: Vec3d = transform.transform_point(&Point3::from_slice(&[0.0, 1.0, 0.0])).into();
                 radius = vector.magnitude();
                 norm = vector.normalize().flip_y_z();
             }

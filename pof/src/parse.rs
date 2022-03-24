@@ -36,9 +36,9 @@ impl<R: Read + Seek> Parser<R> {
     pub fn new(mut file: R) -> io::Result<Parser<R>> {
         assert!(&read_bytes(&mut file)? == b"PSPO", "Not a freespace 2 pof file!");
 
-        let version: Version = read_i32(&mut file)?.try_into().expect("nani kono baasion");
+        let version: Version = read_i32(&mut file)?.try_into().expect("Unrecognized pof version");
 
-        //println!("The verison is {:?}", version);
+        // println!("The verison is {:?}", version);
 
         Ok(Parser { file, version })
     }
@@ -219,7 +219,9 @@ impl<R: Read + Seek> Parser<R> {
                             Ok(WeaponHardpoint {
                                 position: this.read_vec3d()?,
                                 normal: this.read_vec3d()?,
-                                offset: (this.version >= Version::V22_01).then(|| this.read_f32().unwrap()).unwrap_or(0.0),
+                                offset: (this.version >= Version::V22_01 || this.version == Version::V21_18)
+                                    .then(|| this.read_f32().unwrap())
+                                    .unwrap_or(0.0),
                             })
                         })
                     })?);
@@ -231,7 +233,9 @@ impl<R: Read + Seek> Parser<R> {
                             Ok(WeaponHardpoint {
                                 position: this.read_vec3d()?,
                                 normal: this.read_vec3d()?,
-                                offset: (this.version >= Version::V22_01).then(|| this.read_f32().unwrap()).unwrap_or(0.0),
+                                offset: (this.version >= Version::V22_01 || this.version == Version::V21_18)
+                                    .then(|| this.read_f32().unwrap())
+                                    .unwrap_or(0.0),
                             })
                         })
                     })?);
@@ -362,7 +366,7 @@ impl<R: Read + Seek> Parser<R> {
                 }
                 b"SLC2" => {
                     assert!(shield_tree_chunk.is_none());
-                    assert!(self.version >= Version::V22_00);
+                    assert!(self.version >= Version::V22_00 || self.version == Version::V21_18);
                     // deal with this later, once we're sure to also have the shield data
                     shield_tree_chunk = Some(self.read_byte_buffer()?);
                 }
@@ -406,6 +410,7 @@ impl<R: Read + Seek> Parser<R> {
         }
 
         Ok(Model {
+            version: self.version,
             header: header.expect("No header chunk found???"),
             sub_objects,
             textures: textures.unwrap_or_default(),
@@ -1405,6 +1410,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
     }
 
     let mut model = Model {
+        version: Version::LATEST,
         header: ObjHeader {
             num_subobjects: sub_objects.len() as _,
             detail_levels: details,

@@ -592,7 +592,7 @@ fn main() {
                     let view_mat: [[f32; 4]; 4] = view_mat.into(); // the final matrix used by the graphics
 
                     let displayed_subobjects =
-                        get_list_of_display_subobjects(model, &pt_gui.ui_state.tree_view_selection, pt_gui.ui_state.last_selected_subobj);
+                        get_list_of_display_subobjects(model, pt_gui.ui_state.tree_view_selection, pt_gui.ui_state.last_selected_subobj);
 
                     // brighten up the dark bits so wireframe is easier to see
                     let mut dark_color;
@@ -678,8 +678,8 @@ fn main() {
                     }
 
                     // maybe draw the insignias
-                    if let TreeSelection::Insignia(insignia_select) = &pt_gui.tree_view_selection {
-                        let (current_detail_level, current_insignia_idx) = match *insignia_select {
+                    if let TreeSelection::Insignia(insignia_select) = pt_gui.tree_view_selection {
+                        let (current_detail_level, current_insignia_idx) = match insignia_select {
                             InsigniaSelection::Header => (0, None),
                             InsigniaSelection::Insignia(idx) => (pt_gui.model.insignias[idx].detail_level, Some(idx)),
                         };
@@ -877,7 +877,7 @@ fn main() {
 
                     if display_lollipops {
                         for lollipop_group in &pt_gui.lollipops {
-                            if let TreeSelection::Paths(_) = &pt_gui.ui_state.tree_view_selection {
+                            if let TreeSelection::Paths(_) = pt_gui.ui_state.tree_view_selection {
                                 lollipop_params.blend = glium::Blend::alpha_blending();
                             } else {
                                 lollipop_params.blend = ADDITIVE_BLEND;
@@ -1018,14 +1018,14 @@ fn main() {
 
 // based on the current selection which submodels should be displayed
 // TODO show destroyed models
-fn get_list_of_display_subobjects(model: &Model, tree_selection: &TreeSelection, last_selected_subobj: Option<ObjectId>) -> ObjVec<bool> {
+fn get_list_of_display_subobjects(model: &Model, tree_selection: TreeSelection, last_selected_subobj: Option<ObjectId>) -> ObjVec<bool> {
     let mut out = ObjVec(vec![false; model.sub_objects.len()]);
 
     if model.sub_objects.is_empty() {
         return out;
     }
 
-    if let TreeSelection::Insignia(InsigniaSelection::Insignia(idx)) = *tree_selection {
+    if let TreeSelection::Insignia(InsigniaSelection::Insignia(idx)) = tree_selection {
         // show the LOD objects according to the detail level of the currently selected insignia
         for (i, sub_object) in model.sub_objects.iter().enumerate() {
             out.0[i] = model.is_obj_id_ancestor(sub_object.obj_id, model.header.detail_levels[model.insignias[idx].detail_level as usize])
@@ -1087,17 +1087,17 @@ impl PofToolsGui {
         // determine what bank/point is selected, if any
         // push the according lollipop positions/normals based on the points positions/normals
         // push into 3 separate vectors, for 3 separate colors depending on selection state
-        match &self.ui_state.tree_view_selection {
+        match self.ui_state.tree_view_selection {
             TreeSelection::SubObjects(SubObjectSelection::SubObject(obj_id)) => {
                 for buffer in &mut self.buffer_objects {
-                    if buffer.obj_id == *obj_id {
+                    if buffer.obj_id == obj_id {
                         buffer.tint_val = 0.2;
                     }
 
-                    let size = 0.05 * model.sub_objects[*obj_id].radius;
+                    let size = 0.05 * model.sub_objects[obj_id].radius;
 
                     let mut lollipop_origin = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_POINT_COLOR);
-                    lollipop_origin.push(model.get_total_subobj_offset(*obj_id), Vec3d::ZERO, size);
+                    lollipop_origin.push(model.get_total_subobj_offset(obj_id), Vec3d::ZERO, size);
                     let lollipop_origin = lollipop_origin.finish(display);
 
                     self.lollipops = vec![lollipop_origin];
@@ -1105,7 +1105,7 @@ impl PofToolsGui {
             }
             TreeSelection::Textures(TextureSelection::Texture(tex)) => {
                 for buffer in &mut self.buffer_objects {
-                    if buffer.tmap == Some(*tex) {
+                    if buffer.tmap == Some(tex) {
                         buffer.tint_val = 0.3;
                     }
                 }
@@ -1113,7 +1113,7 @@ impl PofToolsGui {
             TreeSelection::Thrusters(thruster_selection) => {
                 let mut selected_bank = None;
                 let mut selected_point = None;
-                match *thruster_selection {
+                match thruster_selection {
                     ThrusterSelection::Bank(bank) => selected_bank = Some(bank),
                     ThrusterSelection::BankPoint(bank, point) => {
                         selected_bank = Some(bank);
@@ -1149,7 +1149,7 @@ impl PofToolsGui {
                 let mut selected_bank = None;
                 let mut selected_point = None;
                 let mut selected_weapon_system = None;
-                match *weapons_selection {
+                match weapons_selection {
                     WeaponSelection::PriBank(bank) => {
                         selected_bank = Some(bank);
                         selected_weapon_system = Some(&model.primary_weps);
@@ -1208,7 +1208,7 @@ impl PofToolsGui {
             }
             TreeSelection::DockingBays(docking_selection) => {
                 let selected_bank = if let DockingSelection::Bay(num) = docking_selection {
-                    Some(*num)
+                    Some(num)
                 } else {
                     None
                 };
@@ -1237,7 +1237,7 @@ impl PofToolsGui {
             TreeSelection::Glows(glow_selection) => {
                 let mut selected_bank = None;
                 let mut selected_point = None;
-                match *glow_selection {
+                match glow_selection {
                     GlowSelection::Bank(bank) => selected_bank = Some(bank),
                     GlowSelection::BankPoint(bank, point) => {
                         selected_bank = Some(bank);
@@ -1277,7 +1277,7 @@ impl PofToolsGui {
             TreeSelection::SpecialPoints(special_selection) => {
                 let mut selected_point = None;
                 if let SpecialPointSelection::Point(point) = special_selection {
-                    selected_point = Some(*point);
+                    selected_point = Some(point);
                 }
 
                 const COLORS: [[f32; 4]; 2] = [LOLLIPOP_SELECTED_BANK_COLOR, LOLLIPOP_SELECTED_POINT_COLOR];
@@ -1296,7 +1296,7 @@ impl PofToolsGui {
             TreeSelection::Turrets(turret_selection) => {
                 let mut selected_turret = None;
                 let mut selected_point = None;
-                match *turret_selection {
+                match turret_selection {
                     TurretSelection::Turret(turret) => selected_turret = Some(turret),
                     TurretSelection::TurretPoint(turret, point) => {
                         selected_turret = Some(turret);
@@ -1334,7 +1334,7 @@ impl PofToolsGui {
             TreeSelection::Paths(path_selection) => {
                 let mut selected_path = None;
                 let mut selected_point = None;
-                match *path_selection {
+                match path_selection {
                     PathSelection::Path(path) => selected_path = Some(path),
                     PathSelection::PathPoint(path, point) => {
                         selected_path = Some(path);
@@ -1378,7 +1378,7 @@ impl PofToolsGui {
             }
             TreeSelection::EyePoints(eye_selection) => {
                 let mut selected_eye = None;
-                if let EyeSelection::EyePoint(point) = *eye_selection {
+                if let EyeSelection::EyePoint(point) = eye_selection {
                     selected_eye = Some(point)
                 }
 

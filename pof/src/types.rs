@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display};
 use std::io::{self, Write};
@@ -40,11 +40,11 @@ id_type! {PathId, u32}
 // this is how the current version is kept track of while writing pof to disk
 // much easier than having to pass around a version to every Serialize implementation despite it mattering in like 1% of cases
 thread_local! {
-    pub(crate) static VERSION: RefCell<Version> = RefCell::new(Version::default());
+    pub(crate) static VERSION: Cell<Version> = Cell::new(Version::default());
 }
 macro_rules! get_version {
     () => {
-        VERSION.with(|f| *f.borrow())
+        VERSION.with(|f| f.get())
     };
 }
 

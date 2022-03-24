@@ -303,7 +303,7 @@ impl Model {
     pub fn write(&self, w: &mut impl Write) -> io::Result<()> {
         // set the version to be using be all the serializers
         crate::VERSION.with(|f| {
-            *f.borrow_mut() = self.version;
+            f.set(self.version);
         });
         w.write_all(b"PSPO")?;
 

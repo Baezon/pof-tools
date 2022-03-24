@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display};
 use std::io::{self, Write};

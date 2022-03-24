@@ -699,7 +699,7 @@ use byteorder::{ReadBytesExt, LE};
 use dae_parser::source::{SourceReader, ST, XYZ};
 use dae_parser::{Document, LocalMaps, Material, Node};
 use glm::{Mat4x4, Vec3};
-use nalgebra::{Normed, Point3};
+use nalgebra::Point3;
 extern crate nalgebra_glm as glm;
 
 struct VertexContext {

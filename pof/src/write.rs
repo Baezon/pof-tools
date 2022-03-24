@@ -301,9 +301,13 @@ fn write_chunk_vec<T: Serialize>(w: &mut impl Write, chunk_name: &[u8; 4], data:
 
 impl Model {
     pub fn write(&self, w: &mut impl Write) -> io::Result<()> {
+        // set the version to be using be all the serializers
+        crate::VERSION.with(|f| {
+            *f.borrow_mut() = self.version;
+        });
         w.write_all(b"PSPO")?;
 
-        w.write_i32::<LE>(Version::LATEST.into())?;
+        w.write_i32::<LE>(self.version.into())?;
 
         write_chunk_raw(w, b"HDR2", |w| {
             self.header.max_radius.write_to(w)?;
@@ -356,7 +360,9 @@ impl Model {
                 shield_data.polygons.write_to(w)
             })?;
 
-            write_chunk(w, b"SLC2", shield_data.collision_tree.as_ref())?;
+            if self.version >= Version::V21_18 {
+                write_chunk(w, b"SLC2", shield_data.collision_tree.as_ref())?;
+            }
         }
         if self.visual_center != Vec3d::default() {
             write_chunk(w, b"ACEN", Some(&self.visual_center))?;

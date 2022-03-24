@@ -1,5 +1,5 @@
+use std::cell::RefCell;
 use std::convert::TryFrom;
-use std::f32::consts;
 use std::fmt::{Debug, Display};
 use std::io::{self, Write};
 use std::ops::{Add, AddAssign, Deref, DerefMut, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -35,6 +35,18 @@ id_type! {VertexId, u16}
 id_type! {NormalId, u16}
 id_type! {PolygonId, u32}
 id_type! {PathId, u32}
+
+// what, a global?? in rust?????
+// this is how the current version is kept track of while writing pof to disk
+// much easier than having to pass around a version to every Serialize implementation despite it mattering in like 1% of cases
+thread_local! {
+    pub(crate) static VERSION: RefCell<Version> = RefCell::new(Version::default());
+}
+macro_rules! get_version {
+    () => {
+        VERSION.with(|f| *f.borrow())
+    };
+}
 
 // like a regular vector, but indexed with ObjectIds only, for some safety
 #[derive(Debug)]
@@ -658,12 +670,20 @@ impl Default for SpecialPoint {
     }
 }
 
-mk_struct! {
-    #[derive(Debug, Clone)]
-    pub struct WeaponHardpoint {
-        pub position: Vec3d,
-        pub normal: Vec3d,
-        pub offset: f32, //TODO version dependence
+#[derive(Debug, Clone)]
+pub struct WeaponHardpoint {
+    pub position: Vec3d,
+    pub normal: Vec3d,
+    pub offset: f32,
+}
+impl Serialize for WeaponHardpoint {
+    fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
+        self.position.write_to(w)?;
+        self.normal.write_to(w)?;
+        if get_version!() >= Version::V22_01 || get_version!() == Version::V21_18 {
+            self.offset.write_to(w)?;
+        }
+        Ok(())
     }
 }
 impl Default for WeaponHardpoint {
@@ -1032,7 +1052,9 @@ pub struct ThrusterBank {
 impl Serialize for ThrusterBank {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         (self.glows.len() as u32).write_to(w)?;
-        self.properties.write_to(w)?;
+        if get_version!() >= Version::V21_17 {
+            self.properties.write_to(w)?;
+        }
         for glow in &self.glows {
             glow.write_to(w)?;
         }
@@ -1206,10 +1228,10 @@ impl Serialize for Dock {
             None => 0_u32.write_to(w)?,
             Some(x) => [x].write_to(w)?,
         }
-        let points = (
+        let points = vec![
             DockingPoint { position: self.position - self.uvec.0, normal: self.fvec.0 },
             DockingPoint { position: self.position + self.uvec.0, normal: self.fvec.0 },
-        );
+        ];
         points.write_to(w)
     }
 }
@@ -1339,19 +1361,36 @@ impl GlowPointBank {
 mk_enumeration! {
     #[derive(PartialOrd, Ord, PartialEq, Eq, Debug, Clone, Copy)]
     pub enum Version(i32) {
-        V21_16 = 2116,
-        V21_17 = 2117,
-        V22_00 = 2200,
-        V22_01 = 2201,
+        V21_16 = 2116, // (retail)
+        V21_17 = 2117, // (retail) thruster properties
+        V21_18 = 2118, // weapon offset
+        V22_00 = 2200, // aligned and SLC2
+        V22_01 = 2201, // weapon offset (+aligned, SLC2)
     }
 }
-
+impl Default for Version {
+    fn default() -> Self {
+        Self::LATEST
+    }
+}
+impl Display for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Version::V21_16 => write!(f, "21.16"),
+            Version::V21_17 => write!(f, "21.17"),
+            Version::V21_18 => write!(f, "21.18"),
+            Version::V22_00 => write!(f, "22.00"),
+            Version::V22_01 => write!(f, "22.01"),
+        }
+    }
+}
 impl Version {
     pub const LATEST: Version = Self::V22_01;
 }
 
 #[derive(Debug, Default)]
 pub struct Model {
+    pub version: Version,
     pub header: ObjHeader,
     pub sub_objects: ObjVec<SubObject>,
     pub textures: Vec<String>,
@@ -1597,6 +1636,14 @@ impl Model {
             let mut glm_mat: Mat3x3 = self.header.moment_of_inertia.into();
             glm_mat *= point_mass;
             self.header.moment_of_inertia = glm_mat.try_inverse().unwrap().into();
+        }
+    }
+
+    pub fn clean_up(&mut self) {
+        if let Some(shield) = &mut self.shield_data {
+            if shield.collision_tree.is_none() {
+                shield.collision_tree = Some(ShieldData::recalculate_tree(&shield.verts, &shield.polygons));
+            }
         }
     }
 }

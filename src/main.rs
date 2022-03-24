@@ -11,14 +11,12 @@ use crate::ui::{
     DockingSelection, EyeSelection, GlowSelection, InsigniaSelection, PathSelection, SpecialPointSelection, SubObjectSelection, TextureSelection,
     ThrusterSelection, TurretSelection, WeaponSelection,
 };
-use backtrace::Backtrace;
 use egui::{Color32, RichText, TextEdit};
 use glium::{
     glutin::{self, event::WindowEvent, window::Icon},
     BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer,
 };
 use native_dialog::FileDialog;
-use once_cell::sync::OnceCell;
 use pof::{Insignia, Model, ObjVec, ObjectId, Parser, ShieldData, SubObject, TextureId, Texturing, Vec3d};
 use simplelog::*;
 use std::{collections::HashMap, fs::File, path::PathBuf, sync::mpsc::TryRecvError};
@@ -397,32 +395,28 @@ impl PofToolsGui {
 
 const POF_TOOLS_VERSION: &str = "1.0.0";
 
-// we need this weird type specifically for catching panic info
-static LAST_PANIC: OnceCell<(String, Backtrace)> = OnceCell::new();
-
 fn main() {
     // set up a panic handler to grab the backtrace
     let default_hook = std::panic::take_hook();
+    let (panic_data_send, panic_data_recv) = std::sync::mpsc::sync_channel(1);
     std::panic::set_hook(Box::new(move |panic_info| {
         default_hook(panic_info);
-        LAST_PANIC.get_or_init(|| {
-            let backtrace = backtrace::Backtrace::new();
-            let msg = panic_info.payload().downcast_ref::<String>().map_or("unknown panic", |x| x);
-            let msg = format!("{},  {}", msg, panic_info.location().unwrap());
-            let mut frames = vec![];
-            for frame in backtrace.frames() {
-                // filter out anything which doesn't have pof-tools in the path
-                // maybe not great? but filters out a huge amount of unrelated shit
-                let should_print = frame.symbols().iter().any(|symbol| match symbol.filename().and_then(|s| s.to_str()) {
-                    Some(file) => file.contains("pof-tools"),
-                    None => symbol.name().and_then(|name| name.as_str()).map_or(false, |name| name.contains("pof")),
-                });
-                if should_print {
-                    frames.push(frame.clone())
-                }
+        let backtrace = backtrace::Backtrace::new();
+        let msg = panic_info.payload().downcast_ref::<String>().map_or("unknown panic", |x| x);
+        let msg = format!("{},  {}", msg, panic_info.location().unwrap());
+        let mut frames = vec![];
+        for frame in backtrace.frames() {
+            // filter out anything which doesn't have pof-tools in the path
+            // maybe not great? but filters out a huge amount of unrelated shit
+            let should_print = frame.symbols().iter().any(|symbol| match symbol.filename().and_then(|s| s.to_str()) {
+                Some(file) => file.contains("pof-tools"),
+                None => symbol.name().and_then(|name| name.as_str()).map_or(false, |name| name.contains("pof")),
+            });
+            if should_print {
+                frames.push(frame.clone())
             }
-            (msg, if frames.is_empty() { backtrace } else { frames.into() })
-        });
+        }
+        let _ = panic_data_send.send((msg, if frames.is_empty() { backtrace } else { frames.into() }));
     }));
 
     // set up the logger
@@ -494,7 +488,7 @@ fn main() {
     let lollipop_stick_params = lollipop_stick_params();
     let lollipop_rev_depth_params = lollipop_rev_depth_params();
 
-    let circle_verts = glium::VertexBuffer::new(&display, primitives::CIRCLE_VERTS()).unwrap();
+    let circle_verts = glium::VertexBuffer::new(&display, &*primitives::CIRCLE_VERTS).unwrap();
     let circle_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::LineLoop, &primitives::CIRCLE_INDICES).unwrap();
 
     let box_verts = glium::VertexBuffer::new(&display, &primitives::BOX_VERTS).unwrap();
@@ -508,7 +502,7 @@ fn main() {
     pt_gui.camera_offset = Vec3d::ZERO;
     pt_gui.camera_scale = model.header.max_radius * 2.0;
 
-    let mut errored = false;
+    let mut errored = None;
 
     event_loop.run(move |event, _, control_flow| {
         let mut catch_redraw = || {
@@ -944,13 +938,16 @@ fn main() {
 
             // error handling (crude as it is)
             // do the whole frame, catch any panics
-            if !errored {
-                errored = std::panic::catch_unwind(std::panic::AssertUnwindSafe(redraw)).is_err();
+            if errored.is_none() && std::panic::catch_unwind(std::panic::AssertUnwindSafe(redraw)).is_err() {
+                errored = Some(
+                    panic_data_recv
+                        .recv()
+                        .unwrap_or_else(|_| ("double panic".into(), backtrace::Backtrace::new())),
+                );
             }
 
             // if there was an error, do this mini event loop and display the error message
-            if errored {
-                let (error_string, backtrace) = LAST_PANIC.get().unwrap();
+            if let Some((error_string, backtrace)) = &errored {
                 let (needs_repaint, shapes) = egui.run(&display, |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {

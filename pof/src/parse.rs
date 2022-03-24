@@ -693,7 +693,8 @@ use crate::*;
 use byteorder::{ReadBytesExt, LE};
 use dae_parser::source::{SourceReader, ST, XYZ};
 use dae_parser::{Document, LocalMaps, Material, Node};
-use glm::Mat4x4;
+use glm::{Mat4x4, Vec3};
+use nalgebra::{Normed, Point3};
 extern crate nalgebra_glm as glm;
 
 struct VertexContext {
@@ -726,7 +727,7 @@ fn flip_y_z(vec: Vec3d) -> Vec3d {
 
 // given a node, using its transforms return a position, normal and radius
 // things commonly needed by various pof points
-fn dae_parse_point(node: &Node) -> (Vec3d, Vec3d, f32) {
+fn dae_parse_point(node: &Node, parent_transform: Mat4x4) -> (Vec3d, Vec3d, f32) {
     let mut pos = Vec3d::ZERO;
     let mut norm = Vec3d::ZERO;
     let mut radius = 0.0;
@@ -735,15 +736,26 @@ fn dae_parse_point(node: &Node) -> (Vec3d, Vec3d, f32) {
             dae_parser::Transform::Translate(vec) => pos = flip_y_z(Vec3d::from(*vec.0)),
             dae_parser::Transform::Rotate(rot) => {
                 norm = {
-                    let vec = glm::Vec3::from([0.0, 1.0, 0.0]); // intentional swizzle
+                    let vec = Vec3::from([0.0, 1.0, 0.0]); // intentional swizzle
                     if rot.angle() == 180.0 {
                         Vec3d::new(0.0, 0.0, -1.0)
                     } else {
-                        flip_y_z(glm::rotate_vec3(&vec, rot.angle() / (180.0 / PI), &glm::Vec3::from(*rot.axis())).into())
+                        flip_y_z(glm::rotate_vec3(&vec, rot.angle() / (180.0 / PI), &Vec3::from(*rot.axis())).into())
                     }
                 }
             }
             dae_parser::Transform::Scale(scale) => radius = scale.0[0],
+            dae_parser::Transform::Matrix(_) => {
+                let transform = parent_transform * node.transform_as_matrix();
+                let zero = Vec3d::ZERO.into();
+                let offset = transform.transform_point(&zero) - zero;
+                let transform = transform.append_translation(&(-offset));
+                pos = offset.into();
+                pos = pos.flip_y_z();
+                let vector: Vec3d = transform.transform_point(&Point3::new(0.0, 1.0, 0.0)).into();
+                radius = vector.magnitude();
+                norm = vector.normalize().flip_y_z();
+            }
             _ => (),
         }
     }
@@ -959,7 +971,7 @@ fn dae_parse_subobject_recursive(
                     turret.gun_obj = obj_id;
                     turret.base_obj = if name.contains("gun") { parent } else { obj_id };
 
-                    let (pos, norm, _) = dae_parse_point(node);
+                    let (pos, norm, _) = dae_parse_point(node, parent_transform);
                     turret.fire_points.push(pos);
                     turret.normal = norm;
                     continue;
@@ -1181,7 +1193,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                         } else if name.contains("point") {
                             let mut new_point = ThrusterGlow::default();
 
-                            let (pos, norm, rad) = dae_parse_point(node);
+                            let (pos, norm, rad) = dae_parse_point(node, local_transform);
                             new_point.position = pos;
                             new_point.normal = norm;
                             new_point.radius = rad;
@@ -1208,7 +1220,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                         } else if name.contains("point") {
                             let mut new_point = PathPoint::default();
 
-                            let (pos, _, rad) = dae_parse_point(node);
+                            let (pos, _, rad) = dae_parse_point(node, local_transform);
                             new_point.position = pos;
                             new_point.radius = rad;
 
@@ -1225,7 +1237,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                     for (node, _) in node_children_with_keyword(&node.children, "point") {
                         let mut new_point = WeaponHardpoint::default();
 
-                        let (pos, norm, _) = dae_parse_point(node);
+                        let (pos, norm, _) = dae_parse_point(node, local_transform);
                         new_point.position = pos;
                         new_point.normal = norm;
 
@@ -1320,7 +1332,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                         } else if name.contains("point") {
                             let mut new_point = GlowPoint::default();
 
-                            let (pos, norm, rad) = dae_parse_point(node);
+                            let (pos, norm, rad) = dae_parse_point(node, local_transform);
                             new_point.position = pos;
                             new_point.normal = if name.contains("omni") { Vec3d::ZERO } else { norm };
                             new_point.radius = rad;
@@ -1339,7 +1351,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                         new_point.name = format!("{}", &name[(idx + 1)..]);
                     }
 
-                    let (pos, _, rad) = dae_parse_point(node);
+                    let (pos, _, rad) = dae_parse_point(node, local_transform);
                     new_point.position = pos;
                     new_point.radius = rad;
 
@@ -1353,7 +1365,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                 for (node, _) in node_children_with_keyword(&node.children, "point") {
                     let mut new_point = EyePoint::default();
 
-                    let (pos, norm, _) = dae_parse_point(node);
+                    let (pos, norm, _) = dae_parse_point(node, local_transform);
                     new_point.offset = pos;
                     new_point.normal = norm;
 
@@ -1369,7 +1381,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                     eye_points.push(new_point);
                 }
             } else if name == "#visual-center" {
-                let (pos, _, _) = dae_parse_point(node);
+                let (pos, _, _) = dae_parse_point(node, local_transform);
                 visual_center = pos;
             }
         }

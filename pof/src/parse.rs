@@ -693,6 +693,7 @@ use crate::*;
 use byteorder::{ReadBytesExt, LE};
 use dae_parser::source::{SourceReader, ST, XYZ};
 use dae_parser::{Document, LocalMaps, Material, Node};
+use glm::Mat4x4;
 extern crate nalgebra_glm as glm;
 
 struct VertexContext {
@@ -763,14 +764,11 @@ fn dae_parse_properties(node: &Node, properties: &mut String) {
     }
 }
 
+// 'transform` should contain only scaling and rotation!
+// all translation should be removed and put into a separate offset of some kind
 fn dae_parse_geometry(
-    node: &Node, local_maps: &LocalMaps, material_map: &HashMap<&String, TextureId>,
+    node: &Node, local_maps: &LocalMaps, material_map: &HashMap<&String, TextureId>, transform: Mat4x4,
 ) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(Texturing, Vec<PolyVertex>)>) {
-    let transform = node.transform_as_matrix();
-    let zero = Vec3d::ZERO.into();
-    let center = transform.transform_point(&zero) - zero;
-    let local_transform = transform.append_translation(&(-center));
-
     let mut vertices_out: Vec<Vec3d> = vec![];
     let mut normals_out: Vec<Vec3d> = vec![];
     let mut normals_map: HashMap<Vec3d, NormalId> = HashMap::new();
@@ -782,7 +780,7 @@ fn dae_parse_geometry(
         let mut vert_ctx = VertexContext { vertex_offset: vertices_out.len() as u16, normal_ids: vec![] };
 
         for position in Clone::clone(verts.position_importer().unwrap()) {
-            vertices_out.push(flip_y_z(&local_transform * Vec3d::from(position)));
+            vertices_out.push(flip_y_z(&transform * Vec3d::from(position)));
         }
 
         for prim_elem in &geo.elements {
@@ -801,7 +799,7 @@ fn dae_parse_geometry(
                         for normal in Clone::clone(normal_importer) {
                             vert_ctx.normal_ids.push(*normals_map.entry(normal.into()).or_insert_with(|| {
                                 let id = NormalId(normals_out.len().try_into().unwrap());
-                                normals_out.push(flip_y_z(&local_transform * Vec3d::from(normal)));
+                                normals_out.push(flip_y_z(&transform * Vec3d::from(normal)));
                                 id
                             }));
                         }
@@ -827,7 +825,7 @@ fn dae_parse_geometry(
                         for normal in Clone::clone(normal_importer) {
                             vert_ctx.normal_ids.push(*normals_map.entry(normal.into()).or_insert_with(|| {
                                 let id = NormalId(normals_out.len().try_into().unwrap());
-                                normals_out.push(flip_y_z(&local_transform * Vec3d::from(normal)));
+                                normals_out.push(flip_y_z(&transform * Vec3d::from(normal)));
                                 id
                             }));
                         }
@@ -852,7 +850,7 @@ fn dae_parse_geometry(
 
 fn dae_parse_subobject_recursive(
     node: &Node, sub_objects: &mut Vec<SubObject>, parent: ObjectId, insignias: &mut Vec<Insignia>, detail_level: Option<u32>,
-    turrets: &mut Vec<Turret>, local_maps: &LocalMaps, material_map: &HashMap<&String, TextureId>,
+    turrets: &mut Vec<Turret>, local_maps: &LocalMaps, material_map: &HashMap<&String, TextureId>, parent_transform: Mat4x4,
 ) {
     if node.instance_geometry.is_empty() {
         // ignore subobjects with no geo
@@ -868,11 +866,12 @@ fn dae_parse_subobject_recursive(
     }
     let name = name.unwrap();
 
-    let (vertices_out, normals_out, polygons_out) = dae_parse_geometry(node, local_maps, material_map);
-
-    let transform = node.transform_as_matrix();
+    let local_transform = parent_transform * node.transform_as_matrix();
     let zero = Vec3d::ZERO.into();
-    let center = transform.transform_point(&zero) - zero;
+    let center = local_transform.transform_point(&zero) - zero;
+    let local_transform = local_transform.append_translation(&(-center));
+
+    let (vertices_out, normals_out, polygons_out) = dae_parse_geometry(node, local_maps, material_map, local_transform);
 
     if name.to_lowercase().contains("insig") {
         let mut faces = vec![];
@@ -984,7 +983,7 @@ fn dae_parse_subobject_recursive(
                 }
             }
 
-            dae_parse_subobject_recursive(node, sub_objects, obj_id, insignias, detail_level, turrets, local_maps, material_map);
+            dae_parse_subobject_recursive(node, sub_objects, obj_id, insignias, detail_level, turrets, local_maps, material_map, local_transform);
         }
     }
 }
@@ -1029,14 +1028,15 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
     let mut visual_center = Vec3d::ZERO;
 
     for node in &scene.nodes {
-        let transform = node.transform_as_matrix();
+        let mut local_transform = node.transform_as_matrix();
         let zero = Vec3d::ZERO.into();
-        let center = transform.transform_point(&zero) - zero;
+        let center = local_transform.transform_point(&zero) - zero;
+        local_transform = local_transform.append_translation(&(-center));
 
         let name = node.name.as_ref().unwrap();
 
         if !node.instance_geometry.is_empty() {
-            let (vertices_out, normals_out, polygons_out) = dae_parse_geometry(node, &local_maps, &material_map);
+            let (vertices_out, normals_out, polygons_out) = dae_parse_geometry(node, &local_maps, &material_map, local_transform);
 
             if name.to_lowercase() == "shield" {
                 let mut polygons = vec![];
@@ -1166,6 +1166,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                         &mut turrets,
                         &local_maps,
                         &material_map,
+                        local_transform,
                     );
                 }
             }

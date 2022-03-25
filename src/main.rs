@@ -15,13 +15,14 @@ use backtrace::Backtrace;
 use egui::{Color32, RichText, TextEdit};
 use glium::{
     glutin::{self, event::WindowEvent, window::Icon},
+    texture::SrgbTexture2d,
     BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer,
 };
 use native_dialog::FileDialog;
 use once_cell::sync::OnceCell;
 use pof::{Insignia, Model, ObjVec, ObjectId, Parser, ShieldData, SubObject, TextureId, Texturing, Vec3d};
 use simplelog::*;
-use std::{collections::HashMap, fs::File, path::PathBuf, sync::mpsc::TryRecvError};
+use std::{collections::HashMap, fs::File, io::Cursor, path::PathBuf, sync::mpsc::TryRecvError};
 use ui::{PofToolsGui, Set::*, TreeSelection};
 
 mod sphere;
@@ -78,8 +79,9 @@ impl GlLollipopsBuilder {
         matrix = glm::scale(&matrix, &glm::vec3(radius, radius, radius));
         self.lolly_vertices.push(InstanceMatrix { world_matrix: matrix.into() });
 
-        self.stick_vertices.push(Vertex { position: vertex.to_tuple() });
-        self.stick_vertices.push(Vertex { position: (vertex + normal).to_tuple() });
+        self.stick_vertices.push(Vertex { position: vertex.to_tuple(), uv: (0.0, 0.0) });
+        self.stick_vertices
+            .push(Vertex { position: (vertex + normal).to_tuple(), uv: (0.0, 0.0) });
     }
 
     fn finish(&self, display: &Display) -> GlLollipops {
@@ -114,18 +116,21 @@ impl GlBufferedShield {
         for poly in &shield_data.polygons {
             vertices.push(Vertex {
                 position: shield_data.verts[poly.verts.0 .0 as usize].to_tuple(),
+                uv: (0.0, 0.0),
             });
             normals.push(Normal { normal: poly.normal.to_tuple() });
             indices.push(indices.len() as u32);
 
             vertices.push(Vertex {
                 position: shield_data.verts[poly.verts.1 .0 as usize].to_tuple(),
+                uv: (0.0, 0.0),
             });
             normals.push(Normal { normal: poly.normal.to_tuple() });
             indices.push(indices.len() as u32);
 
             vertices.push(Vertex {
                 position: shield_data.verts[poly.verts.2 .0 as usize].to_tuple(),
+                uv: (0.0, 0.0),
             });
             normals.push(Normal { normal: poly.normal.to_tuple() });
             indices.push(indices.len() as u32);
@@ -157,18 +162,21 @@ impl GlBufferedInsignia {
 
             vertices.push(Vertex {
                 position: insignia.vertices[vert1.vertex_id.0 as usize].to_tuple(),
+                uv: vert1.uv,
             });
             normals.push(Normal { normal: normal.to_tuple() });
             indices.push(indices.len() as u32);
 
             vertices.push(Vertex {
                 position: insignia.vertices[vert2.vertex_id.0 as usize].to_tuple(),
+                uv: vert2.uv,
             });
             normals.push(Normal { normal: normal.to_tuple() });
             indices.push(indices.len() as u32);
 
             vertices.push(Vertex {
                 position: insignia.vertices[vert3.vertex_id.0 as usize].to_tuple(),
+                uv: vert3.uv,
             });
             normals.push(Normal { normal: normal.to_tuple() });
             indices.push(indices.len() as u32);
@@ -184,7 +192,7 @@ impl GlBufferedInsignia {
 
 struct GlBufferedObject {
     obj_id: ObjectId,
-    tmap: Option<TextureId>,
+    texture_id: Option<TextureId>,
     vertices: VertexBuffer<Vertex>,
     normals: VertexBuffer<Normal>,
     indices: IndexBuffer<u32>,
@@ -215,29 +223,35 @@ impl GlBufferedObject {
                     // split the first vertex off from the rest of them
                     for vertpair in remainder.windows(2) {
                         // for each pair of verts in the remainder make a tri of them, [first, vertpair[0], vertpair[1]],
-                        let index = *map.entry((first.vertex_id, first.normal_id)).or_insert_with(|| {
-                            let n = vertices.len();
-                            vertices.push(Vertex {
-                                position: bsp_data.verts[first.vertex_id.0 as usize].to_tuple(),
-                            });
-                            normals.push(Normal {
-                                normal: bsp_data.norms[first.normal_id.0 as usize].to_tuple(),
-                            });
-                            n.try_into().unwrap()
-                        });
-                        indices.push(index);
-
-                        for polyvert in vertpair {
-                            let index = *map.entry((polyvert.vertex_id, polyvert.normal_id)).or_insert_with(|| {
+                        let index = *map
+                            .entry((first.vertex_id, first.normal_id, first.uv.0.to_bits(), first.uv.1.to_bits()))
+                            .or_insert_with(|| {
                                 let n = vertices.len();
                                 vertices.push(Vertex {
-                                    position: bsp_data.verts[polyvert.vertex_id.0 as usize].to_tuple(),
+                                    position: bsp_data.verts[first.vertex_id.0 as usize].to_tuple(),
+                                    uv: first.uv,
                                 });
                                 normals.push(Normal {
-                                    normal: bsp_data.norms[polyvert.normal_id.0 as usize].to_tuple(),
+                                    normal: bsp_data.norms[first.normal_id.0 as usize].to_tuple(),
                                 });
                                 n.try_into().unwrap()
                             });
+                        indices.push(index);
+
+                        for polyvert in vertpair {
+                            let index = *map
+                                .entry((polyvert.vertex_id, polyvert.normal_id, first.uv.0.to_bits(), first.uv.1.to_bits()))
+                                .or_insert_with(|| {
+                                    let n = vertices.len();
+                                    vertices.push(Vertex {
+                                        position: bsp_data.verts[polyvert.vertex_id.0 as usize].to_tuple(),
+                                        uv: polyvert.uv,
+                                    });
+                                    normals.push(Normal {
+                                        normal: bsp_data.norms[polyvert.normal_id.0 as usize].to_tuple(),
+                                    });
+                                    n.try_into().unwrap()
+                                });
                             indices.push(index);
                         }
                     }
@@ -251,7 +265,7 @@ impl GlBufferedObject {
             info!("Built buffer for subobj {}", object.name);
             Some(GlBufferedObject {
                 obj_id: object.obj_id,
-                tmap,
+                texture_id: tmap,
                 vertices: glium::VertexBuffer::new(display, &vertices).unwrap(),
                 normals: glium::VertexBuffer::new(display, &normals).unwrap(),
                 indices: glium::IndexBuffer::new(display, glium::index::PrimitiveType::TrianglesList, &indices).unwrap(),
@@ -271,9 +285,10 @@ glium::implement_vertex!(InstanceMatrix, world_matrix);
 #[derive(Copy, Clone, Debug)]
 pub struct Vertex {
     position: (f32, f32, f32),
+    uv: (f32, f32),
 }
 
-glium::implement_vertex!(Vertex, position);
+glium::implement_vertex!(Vertex, position, uv);
 
 #[derive(Copy, Clone)]
 pub struct Normal {
@@ -402,26 +417,6 @@ const POF_TOOLS_VERSION: &str = "0.9.1";
 static LAST_PANIC: OnceCell<(String, Backtrace)> = OnceCell::new();
 
 fn main() {
-    // set up a panic handler to grab the backtrace
-    std::panic::set_hook(Box::new(|panic_info| {
-        let backtrace = backtrace::Backtrace::new();
-        let msg = format!("{},  {}", panic_info.payload().downcast_ref::<String>().unwrap(), panic_info.location().unwrap());
-        let mut frames = vec![];
-        for frame in backtrace.frames() {
-            // filter out anything which doesn't have pof-tools in the path
-            // maybe not great? but filters out a huge amount of unrelated shit
-            let should_print = frame
-                .symbols()
-                .iter()
-                .any(|symbol| (|| symbol.filename()?.to_str()?.contains("pof-tools").then(|| ()))().is_some());
-            if should_print {
-                frames.push(frame.clone())
-            }
-        }
-
-        LAST_PANIC.get_or_init(|| (msg, frames.into()));
-    }));
-
     // set up the logger
     let mut logger_config = ConfigBuilder::new();
     logger_config.set_time_level(LevelFilter::Off);
@@ -452,7 +447,22 @@ fn main() {
     let model = &pt_gui.model;
 
     // lots of graphics stuff to initialize
+    let image = image::load(Cursor::new(std::fs::read("AeolusUV.dds").unwrap()), image::ImageFormat::Dds)
+        .unwrap()
+        .to_rgba8();
+    let image_dimensions = image.dimensions();
+    let image = glium::texture::RawImage2d::from_raw_rgba(image.into_raw(), image_dimensions);
+    let texture1 = SrgbTexture2d::new(&display, image).unwrap();
+
+    let image = image::load(Cursor::new(std::fs::read("AeolusDet.dds").unwrap()), image::ImageFormat::Dds)
+        .unwrap()
+        .to_rgba8();
+    let image_dimensions = image.dimensions();
+    let image = glium::texture::RawImage2d::from_raw_rgba(image.into_raw(), image_dimensions);
+    let texture2 = SrgbTexture2d::new(&display, image).unwrap();
+
     let default_material_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, DEFAULT_MAT_FRAGMENT_SHADER, None).unwrap();
+    let textured_material_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, TEXTURED_FRAGMENT_SHADER, None).unwrap();
     let shield_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, SHIELD_FRAGMENT_SHADER, None).unwrap();
     let wireframe_shader = glium::Program::from_source(&display, NO_NORMS_VERTEX_SHADER, WIRE_FRAGMENT_SHADER, None).unwrap();
     let lollipop_stick_shader = glium::Program::from_source(&display, NO_NORMS_VERTEX_SHADER, LOLLIPOP_STICK_FRAGMENT_SHADER, None).unwrap();
@@ -503,6 +513,26 @@ fn main() {
     pt_gui.camera_scale = model.header.max_radius * 2.0;
 
     let mut errored = false;
+
+    // set up a panic handler to grab the backtrace
+    std::panic::set_hook(Box::new(|panic_info| {
+        let backtrace = backtrace::Backtrace::new();
+        let msg = format!("{},  {}", panic_info.payload().downcast_ref::<String>().unwrap(), panic_info.location().unwrap());
+        let mut frames = vec![];
+        for frame in backtrace.frames() {
+            // filter out anything which doesn't have pof-tools in the path
+            // maybe not great? but filters out a huge amount of unrelated shit
+            let should_print = frame
+                .symbols()
+                .iter()
+                .any(|symbol| (|| symbol.filename()?.to_str()?.contains("pof-tools").then(|| ()))().is_some());
+            if should_print {
+                frames.push(frame.clone())
+            }
+        }
+
+        LAST_PANIC.get_or_init(|| (msg, frames.into()));
+    }));
 
     event_loop.run(move |event, _, control_flow| {
         let mut catch_redraw = || {
@@ -646,27 +676,54 @@ fn main() {
                         if displayed_subobjects[buffer_obj.obj_id] {
                             let mut mat = glm::identity::<f32, 4>();
                             mat.append_translation_mut(&pt_gui.model.get_total_subobj_offset(buffer_obj.obj_id).into());
+                            if let Some(tex_name) = buffer_obj.texture_id {
+                                let uniforms = glium::uniform! {
+                                    model: <[[f32; 4]; 4]>::from(mat),
+                                    view: view_mat,
+                                    perspective: perspective_matrix,
+                                    u_light: <[f32; 3]>::from(light_vec),
+                                    dark_color: dark_color,
+                                    light_color: light_color,
+                                    tint_color: [0.0, 0.0, 1.0f32],
+                                    tint_val: buffer_obj.tint_val,
+                                    tex: if model.textures[tex_name.0 as usize] == "AeolusUV" {
+                                        &texture1
+                                    } else {
+                                        &texture2
+                                    },
+                                };
 
-                            let uniforms = glium::uniform! {
-                                model: <[[f32; 4]; 4]>::from(mat),
-                                view: view_mat,
-                                perspective: perspective_matrix,
-                                u_light: <[f32; 3]>::from(light_vec),
-                                dark_color: dark_color,
-                                light_color: light_color,
-                                tint_color: [0.0, 0.0, 1.0f32],
-                                tint_val: buffer_obj.tint_val,
-                            };
+                                target
+                                    .draw(
+                                        (&buffer_obj.vertices, &buffer_obj.normals),
+                                        &buffer_obj.indices,
+                                        &textured_material_shader,
+                                        &uniforms,
+                                        &default_material_draw_params,
+                                    )
+                                    .unwrap();
+                            } else {
+                                let uniforms = glium::uniform! {
+                                    model: <[[f32; 4]; 4]>::from(mat),
+                                    view: view_mat,
+                                    perspective: perspective_matrix,
+                                    u_light: <[f32; 3]>::from(light_vec),
+                                    dark_color: dark_color,
+                                    light_color: light_color,
+                                    tint_color: [0.0, 0.0, 1.0f32],
+                                    tint_val: buffer_obj.tint_val,
+                                };
 
-                            target
-                                .draw(
-                                    (&buffer_obj.vertices, &buffer_obj.normals),
-                                    &buffer_obj.indices,
-                                    &default_material_shader,
-                                    &uniforms,
-                                    &default_material_draw_params,
-                                )
-                                .unwrap();
+                                target
+                                    .draw(
+                                        (&buffer_obj.vertices, &buffer_obj.normals),
+                                        &buffer_obj.indices,
+                                        &default_material_shader,
+                                        &uniforms,
+                                        &default_material_draw_params,
+                                    )
+                                    .unwrap();
+                            }
                         }
                     }
 
@@ -1048,7 +1105,7 @@ impl PofToolsGui {
             }
             TreeSelection::Textures(TextureSelection::Texture(tex)) => {
                 for buffer in &mut self.buffer_objects {
-                    if buffer.tmap == Some(*tex) {
+                    if buffer.texture_id == Some(*tex) {
                         buffer.tint_val = 0.3;
                     }
                 }
@@ -1416,7 +1473,9 @@ const DEFAULT_VERTEX_SHADER: &str = r#"
 
 in vec3 position;
 in vec3 normal;
+in vec2 uv;
 
+out vec2 v_uv;
 out vec3 v_normal;
 
 uniform mat4 perspective;
@@ -1424,6 +1483,7 @@ uniform mat4 view;
 uniform mat4 model;
 
 void main() {
+    v_uv = uv;
     mat4 modelview = view * model;
     v_normal = transpose(inverse(mat3(modelview))) * normal;
     gl_Position = perspective * modelview * vec4(position, 1.0);
@@ -1442,6 +1502,34 @@ uniform mat4 model;
 void main() {
     mat4 modelview = view * model;
     gl_Position = perspective * modelview * vec4(position, 1.0);
+}
+"#;
+
+const TEXTURED_FRAGMENT_SHADER: &str = r#"
+#version 140
+
+in vec3 v_normal;
+in vec2 v_uv;
+
+out vec4 color;
+
+uniform vec3 u_light;
+uniform vec3 dark_color;
+uniform vec3 light_color;
+uniform vec3 tint_color;
+uniform float tint_val;
+uniform sampler2D tex;
+
+void main() {
+    float brightness = dot(normalize(v_normal), normalize(u_light));
+    brightness = 0.3 + 0.7 * brightness;
+    brightness = clamp(brightness, 0.0, 1.0);
+    brightness = pow(brightness, 2.5);
+
+    vec4 tex_color = texture(tex, v_uv);
+    vec3 untinted_color = mix(dark_color * tex_color.xyz, light_color * tex_color.xyz, brightness);
+
+    color = vec4(mix(untinted_color, tint_color, tint_val), 0.5);
 }
 "#;
 

@@ -1,11 +1,15 @@
 use egui::{Align2, CollapsingHeader, Color32, Label, RichText};
-use glium::Display;
+use glium::{texture::SrgbTexture2d, Display};
 use nalgebra_glm::TMat4;
 use pof::{
     DockingPoint, EyePoint, GlowPoint, GlowPointBank, Insignia, Model, PathId, PathPoint, SpecialPoint, SubObject, SubsysMovementAxis, TextureId,
     ThrusterGlow, Vec3d, WeaponHardpoint,
 };
-use std::{collections::BTreeSet, str::FromStr, sync::mpsc::Receiver};
+use std::{
+    collections::{BTreeSet, HashMap},
+    str::FromStr,
+    sync::mpsc::Receiver,
+};
 
 use eframe::egui::{self, Button, TextStyle, Ui};
 use pof::ObjectId;
@@ -706,6 +710,7 @@ pub(crate) struct PofToolsGui {
     pub camera_offset: Vec3d,
 
     pub buffer_objects: Vec<GlBufferedObject>, // all the subobjects, conditionally rendered based on the current tree selection
+    pub buffer_textures: HashMap<TextureId, Option<SrgbTexture2d>>, // map of tex ids to actual textures (which may or may not exist/be available)
     pub buffer_shield: Option<GlBufferedShield>, // the shield, similar to the above
     pub buffer_insignias: Vec<GlBufferedInsignia>, // the insignias, similar to the above
     pub lollipops: Vec<GlLollipops>, // the current set of lollipops being being drawn, grouped by color, and recalculated with viewport_3d_dirty above
@@ -738,6 +743,7 @@ impl PofToolsGui {
             camera_scale: Default::default(),
             camera_offset: Default::default(),
             buffer_objects: Default::default(),
+            buffer_textures: Default::default(),
             buffer_shield: Default::default(),
             buffer_insignias: Default::default(),
             lollipops: Default::default(),
@@ -1783,7 +1789,7 @@ impl PofToolsGui {
 
                                         for buf in &mut self.buffer_objects {
                                             if buf.obj_id == ObjectId(i as u32) || self.model.is_obj_id_ancestor(buf.obj_id, ObjectId(i as u32)) {
-                                                let new_buf = GlBufferedObject::new(display, &self.model.sub_objects[buf.obj_id], buf.tmap);
+                                                let new_buf = GlBufferedObject::new(display, &self.model.sub_objects[buf.obj_id], buf.texture_id);
                                                 if let Some(new_buf) = new_buf {
                                                     *buf = new_buf;
                                                 }
@@ -1934,7 +1940,7 @@ impl PofToolsGui {
 
                                     for buf in &mut self.buffer_objects {
                                         if buf.obj_id == id || self.model.is_obj_id_ancestor(buf.obj_id, id) {
-                                            let new_buf = GlBufferedObject::new(display, &self.model.sub_objects[buf.obj_id], buf.tmap);
+                                            let new_buf = GlBufferedObject::new(display, &self.model.sub_objects[buf.obj_id], buf.texture_id);
                                             if let Some(new_buf) = new_buf {
                                                 *buf = new_buf;
                                             }

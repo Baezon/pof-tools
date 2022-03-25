@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display};
 use std::io::{self, Write};
@@ -1469,10 +1469,10 @@ impl Model {
 
     pub fn path_removal_fixup(&mut self, removed_idx: PathId) {
         for bay in &mut self.docking_bays {
-            if Some(removed_idx) == bay.path {
-                bay.path = None;
-            } else if let Some(path_num) = bay.path {
-                if path_num > removed_idx {
+            if let Some(path_num) = bay.path {
+                if removed_idx == path_num {
+                    bay.path = None;
+                } else if path_num > removed_idx {
                     bay.path = Some(PathId(path_num.0 - 1));
                 }
             }

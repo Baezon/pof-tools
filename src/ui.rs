@@ -1,9 +1,9 @@
-use egui::{Align2, CollapsingHeader, Color32, Label, RichText};
+use egui::{text::LayoutJob, Align2, CollapsingHeader, Color32, DragValue, Label, Response, RichText, TextFormat};
 use glium::{texture::SrgbTexture2d, Display};
 use nalgebra_glm::TMat4;
 use pof::{
-    DockingPoint, EyePoint, GlowPoint, GlowPointBank, Insignia, Model, PathId, PathPoint, SpecialPoint, SubObject, SubsysMovementAxis, TextureId,
-    ThrusterGlow, Vec3d, WeaponHardpoint,
+    Dock, EyePoint, GlowPoint, GlowPointBank, Insignia, Model, PathId, PathPoint, SpecialPoint, SubObject, SubsysMovementAxis, TextureId,
+    ThrusterGlow, Vec3d, Version, WeaponHardpoint,
 };
 use std::{
     collections::{BTreeSet, HashMap},
@@ -75,7 +75,8 @@ enum PropertiesPanel {
     },
     DockingBay {
         position_string: String,
-        normal_string: String,
+        fvec_string: String,
+        uvec_ang: f32,
         properties: String,
         path_num: usize,
     },
@@ -184,7 +185,8 @@ impl PropertiesPanel {
     fn default_docking_bay() -> Self {
         Self::DockingBay {
             position_string: Default::default(),
-            normal_string: Default::default(),
+            fvec_string: Default::default(),
+            uvec_ang: Default::default(),
             properties: Default::default(),
             path_num: Default::default(),
         }
@@ -241,7 +243,7 @@ impl PropertiesPanel {
     }
 }
 
-#[derive(PartialEq, Hash, Debug)]
+#[derive(PartialEq, Hash, Debug, Clone, Copy)]
 pub(crate) enum TreeSelection {
     Header,
     SubObjects(SubObjectSelection),
@@ -329,7 +331,7 @@ impl TreeSelection {
     //     }
     // }
 }
-#[derive(PartialEq, Hash, Debug)]
+#[derive(PartialEq, Hash, Debug, Clone, Copy)]
 pub(crate) enum InsigniaSelection {
     Header,
     Insignia(usize), // insignia idx
@@ -338,7 +340,7 @@ impl std::fmt::Display for InsigniaSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             InsigniaSelection::Header => write!(f, "Header"),
-            InsigniaSelection::Insignia(idx) => write!(f, "{}", idx),
+            InsigniaSelection::Insignia(idx) => write!(f, "{}", idx + 1),
         }
     }
 }
@@ -351,7 +353,7 @@ impl InsigniaSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug)]
+#[derive(PartialEq, Hash, Debug, Clone, Copy)]
 pub(crate) enum EyeSelection {
     Header,
     EyePoint(usize), // eye idx
@@ -360,7 +362,7 @@ impl std::fmt::Display for EyeSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EyeSelection::Header => write!(f, "Header"),
-            EyeSelection::EyePoint(idx) => write!(f, "{}", idx),
+            EyeSelection::EyePoint(idx) => write!(f, "{}", idx + 1),
         }
     }
 }
@@ -373,7 +375,7 @@ impl EyeSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug)]
+#[derive(PartialEq, Hash, Debug, Clone, Copy)]
 pub(crate) enum PathSelection {
     Header,
     Path(usize),             // path idx
@@ -383,8 +385,8 @@ impl std::fmt::Display for PathSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PathSelection::Header => write!(f, "Header"),
-            PathSelection::Path(idx) => write!(f, "Path {}", idx),
-            PathSelection::PathPoint(idx, idx2) => write!(f, "Path {} Point {}", idx, idx2),
+            PathSelection::Path(idx) => write!(f, "Path {}", idx + 1),
+            PathSelection::PathPoint(idx, idx2) => write!(f, "Path {} Point {}", idx + 1, idx2 + 1),
         }
     }
 }
@@ -403,7 +405,7 @@ impl PathSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug)]
+#[derive(PartialEq, Hash, Debug, Clone, Copy)]
 pub(crate) enum TurretSelection {
     Header,
     Turret(usize),             // turret idx
@@ -414,8 +416,8 @@ impl std::fmt::Display for TurretSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TurretSelection::Header => write!(f, "Header"),
-            TurretSelection::Turret(idx) => write!(f, "Turret {}", idx),
-            TurretSelection::TurretPoint(idx, idx2) => write!(f, "Turret {} Point {}", idx, idx2),
+            TurretSelection::Turret(idx) => write!(f, "Turret {}", idx + 1),
+            TurretSelection::TurretPoint(idx, idx2) => write!(f, "Turret {} Point {}", idx + 1, idx2 + 1),
         }
     }
 }
@@ -434,7 +436,7 @@ impl TurretSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug)]
+#[derive(PartialEq, Hash, Debug, Clone, Copy)]
 pub(crate) enum SpecialPointSelection {
     Header,
     Point(usize),
@@ -443,7 +445,7 @@ impl std::fmt::Display for SpecialPointSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SpecialPointSelection::Header => write!(f, "Header"),
-            SpecialPointSelection::Point(idx) => write!(f, "Point {}", idx),
+            SpecialPointSelection::Point(idx) => write!(f, "Point {}", idx + 1),
         }
     }
 }
@@ -456,7 +458,7 @@ impl SpecialPointSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug)]
+#[derive(PartialEq, Hash, Debug, Clone, Copy)]
 pub(crate) enum GlowSelection {
     Header,
     Bank(usize),             // bank idx
@@ -467,8 +469,8 @@ impl std::fmt::Display for GlowSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GlowSelection::Header => write!(f, "Header"),
-            GlowSelection::Bank(idx) => write!(f, "Bank {}", idx),
-            GlowSelection::BankPoint(idx, idx2) => write!(f, "Bank {} Point {}", idx, idx2),
+            GlowSelection::Bank(idx) => write!(f, "Bank {}", idx + 1),
+            GlowSelection::BankPoint(idx, idx2) => write!(f, "Bank {} Point {}", idx + 1, idx2 + 1),
         }
     }
 }
@@ -487,28 +489,20 @@ impl GlowSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug)]
+#[derive(PartialEq, Hash, Debug, Clone, Copy)]
 pub(crate) enum DockingSelection {
     Header,
-    Bay(usize),             // bank idx
-    BayPoint(usize, usize), // bank idx, point idx
+    Bay(usize), // bank idx
 }
 impl std::fmt::Display for DockingSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DockingSelection::Header => write!(f, "Header"),
-            DockingSelection::Bay(idx) => write!(f, "Bay {}", idx),
-            DockingSelection::BayPoint(idx, idx2) => write!(f, "Bank {} Point {}", idx, idx2),
+            DockingSelection::Bay(idx) => write!(f, "Bay {}", idx + 1),
         }
     }
 }
 impl DockingSelection {
-    fn bay_point(bay: usize, point: Option<usize>) -> Self {
-        match point {
-            Some(point) => Self::BayPoint(bay, point),
-            None => Self::Bay(bay),
-        }
-    }
     fn bay(bay: Option<usize>) -> Self {
         match bay {
             Some(bay) => Self::Bay(bay),
@@ -517,7 +511,7 @@ impl DockingSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug)]
+#[derive(PartialEq, Hash, Debug, Eq, PartialOrd, Ord, Clone, Copy)]
 pub(crate) enum WeaponSelection {
     Header,
     PriHeader,
@@ -532,11 +526,11 @@ impl std::fmt::Display for WeaponSelection {
         match self {
             WeaponSelection::Header => write!(f, "Header"),
             WeaponSelection::PriHeader => write!(f, "Primary Header"),
-            WeaponSelection::PriBank(idx) => write!(f, "Primary Bank {}", idx),
-            WeaponSelection::PriBankPoint(idx, idx2) => write!(f, "Primary Bank {} Point {}", idx, idx2),
+            WeaponSelection::PriBank(idx) => write!(f, "Primary Bank {}", idx + 1),
+            WeaponSelection::PriBankPoint(idx, idx2) => write!(f, "Primary Bank {} Point {}", idx + 1, idx2 + 1),
             WeaponSelection::SecHeader => write!(f, "Secondary Header"),
-            WeaponSelection::SecBank(idx) => write!(f, "Secondary Bank {}", idx),
-            WeaponSelection::SecBankPoint(idx, idx2) => write!(f, "Secondary Bank {} Point {}", idx, idx2),
+            WeaponSelection::SecBank(idx) => write!(f, "Secondary Bank {}", idx + 1),
+            WeaponSelection::SecBankPoint(idx, idx2) => write!(f, "Secondary Bank {} Point {}", idx + 1, idx2 + 1),
         }
     }
 }
@@ -559,7 +553,7 @@ impl WeaponSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug)]
+#[derive(PartialEq, Hash, Debug, Clone, Copy)]
 pub(crate) enum TextureSelection {
     Header,
     Texture(TextureId),
@@ -568,12 +562,12 @@ impl std::fmt::Display for TextureSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TextureSelection::Header => write!(f, "Header"),
-            TextureSelection::Texture(idx) => write!(f, "Texture {}", idx.0),
+            TextureSelection::Texture(idx) => write!(f, "Texture {}", idx.0 + 1),
         }
     }
 }
 
-#[derive(PartialEq, Hash, Debug)]
+#[derive(PartialEq, Hash, Debug, Clone, Copy)]
 pub(crate) enum ThrusterSelection {
     Header,
     Bank(usize),             // bank idx
@@ -583,8 +577,8 @@ impl std::fmt::Display for ThrusterSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ThrusterSelection::Header => write!(f, "Header"),
-            ThrusterSelection::Bank(idx) => write!(f, "Bank {}", idx),
-            ThrusterSelection::BankPoint(idx, idx2) => write!(f, "Bank {} Point {}", idx, idx2),
+            ThrusterSelection::Bank(idx) => write!(f, "Bank {}", idx + 1),
+            ThrusterSelection::BankPoint(idx, idx2) => write!(f, "Bank {} Point {}", idx + 1, idx2 + 1),
         }
     }
 }
@@ -603,7 +597,7 @@ impl ThrusterSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug)]
+#[derive(PartialEq, Hash, Debug, Clone, Copy)]
 pub(crate) enum SubObjectSelection {
     Header,
     SubObject(ObjectId),
@@ -613,7 +607,7 @@ impl std::fmt::Display for SubObjectSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SubObjectSelection::Header => write!(f, "Header"),
-            SubObjectSelection::SubObject(idx) => write!(f, "SubObject {}", idx.0),
+            SubObjectSelection::SubObject(idx) => write!(f, "SubObject {}", idx.0 + 1),
         }
     }
 }
@@ -671,11 +665,13 @@ pub enum Error {
     // all turret base/gun objects must be disjoint!
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-pub enum Warning {
+#[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
+pub(crate) enum Warning {
     RadiusTooSmall(Option<ObjectId>),
     BBoxTooSmall(Option<ObjectId>),
     DockingBayWithoutPath(usize),
+    ThrusterPropertiesInvalidVersion(usize),
+    WeaponOffsetInvalidVersion(WeaponSelection),
     // path with no parent
     // thruster with no engine subsys
     // turret uvec != turret normal
@@ -688,14 +684,18 @@ pub enum Warning {
 pub(crate) struct UiState {
     pub tree_view_selection: TreeSelection,
     pub viewport_3d_dirty: bool,
-    pub last_selected_subobj: ObjectId,
+    pub last_selected_subobj: Option<ObjectId>,
     properties_panel: PropertiesPanel,
     properties_panel_dirty: bool,
+    pub display_radius: bool,
+    pub display_bbox: bool,
+    pub display_origin: bool,
 }
 
 pub(crate) struct PofToolsGui {
     pub model: Box<Model>,
-    pub loading_thread: Option<Receiver<Option<Box<Model>>>>,
+    pub model_loading_thread: Option<Receiver<Result<Option<Box<Model>>, String>>>,
+    pub texture_loading_thread: Option<Receiver<Option<(Box<SrgbTexture2d>, TextureId)>>>,
     pub glow_point_sim_start: std::time::Instant,
 
     pub ui_state: UiState,
@@ -710,7 +710,7 @@ pub(crate) struct PofToolsGui {
     pub camera_offset: Vec3d,
 
     pub buffer_objects: Vec<GlBufferedObject>, // all the subobjects, conditionally rendered based on the current tree selection
-    pub buffer_textures: HashMap<TextureId, Option<SrgbTexture2d>>, // map of tex ids to actual textures (which may or may not exist/be available)
+    pub buffer_textures: HashMap<TextureId, &SrgbTexture2d>, // map of tex ids to actual textures
     pub buffer_shield: Option<GlBufferedShield>, // the shield, similar to the above
     pub buffer_insignias: Vec<GlBufferedInsignia>, // the insignias, similar to the above
     pub lollipops: Vec<GlLollipops>, // the current set of lollipops being being drawn, grouped by color, and recalculated with viewport_3d_dirty above
@@ -731,7 +731,8 @@ impl PofToolsGui {
     pub fn new() -> Self {
         Self {
             model: Default::default(),
-            loading_thread: Default::default(),
+            model_loading_thread: Default::default(),
+            texture_loading_thread: Default::default(),
             glow_point_sim_start: std::time::Instant::now(),
             ui_state: Default::default(),
             wireframe_enabled: Default::default(),
@@ -779,9 +780,9 @@ impl UiState {
 
             // maybe update ast selected object
             if let TreeSelection::SubObjects(SubObjectSelection::SubObject(id)) = self.tree_view_selection {
-                self.last_selected_subobj = id;
+                self.last_selected_subobj = Some(id);
             } else if let TreeSelection::SubObjects(SubObjectSelection::Header) | TreeSelection::Header = self.tree_view_selection {
-                self.last_selected_subobj = model.header.detail_levels[0];
+                self.last_selected_subobj = model.header.detail_levels.first().copied();
             }
         }
     }
@@ -801,9 +802,9 @@ impl UiState {
 
             // maybe update last selected object
             if let TreeSelection::SubObjects(SubObjectSelection::SubObject(id)) = self.tree_view_selection {
-                self.last_selected_subobj = id;
+                self.last_selected_subobj = Some(id);
             } else if let TreeSelection::SubObjects(SubObjectSelection::Header) | TreeSelection::Header = self.tree_view_selection {
-                self.last_selected_subobj = model.header.detail_levels[0];
+                self.last_selected_subobj = model.header.detail_levels.first().copied();
             }
         }
     }
@@ -959,26 +960,25 @@ impl UiState {
 
     fn model_value_edit<T: FromStr>(
         viewport_3d_dirty: &mut bool, ui: &mut Ui, active_warning: bool, model_value: Option<&mut T>, parsable_string: &mut String,
-    ) -> bool {
-        let mut val_changed = false;
+    ) -> Response {
         if let Some(value) = model_value {
             if parsable_string.parse::<T>().is_err() {
                 ui.visuals_mut().override_text_color = Some(Color32::RED);
             } else if active_warning {
                 ui.visuals_mut().override_text_color = Some(Color32::YELLOW);
             }
-            if ui.text_edit_singleline(parsable_string).changed() {
+            let response = ui.text_edit_singleline(parsable_string);
+            if response.changed() {
                 if let Ok(parsed_string) = parsable_string.parse() {
                     *value = parsed_string;
                     *viewport_3d_dirty = true;
-                    val_changed = true;
                 }
             }
             ui.visuals_mut().override_text_color = None;
+            response
         } else {
-            ui.add_enabled(false, egui::widgets::TextEdit::singleline(parsable_string));
+            ui.add_enabled_ui(false, |ui| ui.text_edit_singleline(parsable_string)).inner
         }
-        val_changed
     }
 
     fn show_transform_window(ctx: &egui::CtxRef, transform_window: &mut TransformWindow) -> Option<TMat4<f32>> {
@@ -1115,7 +1115,7 @@ impl UiState {
 
     // fills the properties panel based on the current tree selection, taking all the relevant data from the model
     pub(crate) fn refresh_properties_panel(&mut self, model: &Model) {
-        match &self.tree_view_selection {
+        match self.tree_view_selection {
             TreeSelection::Header => {
                 self.properties_panel = PropertiesPanel::Header {
                     bbox_min_string: format!("{}", model.header.bbox.min),
@@ -1137,7 +1137,7 @@ impl UiState {
                     transform_window: Default::default(),
                 }
             }
-            TreeSelection::SubObjects(subobj_tree_select) => match *subobj_tree_select {
+            TreeSelection::SubObjects(subobj_tree_select) => match subobj_tree_select {
                 SubObjectSelection::Header => self.properties_panel = PropertiesPanel::default_subobject(),
                 SubObjectSelection::SubObject(id) => {
                     self.properties_panel = PropertiesPanel::SubObject {
@@ -1161,7 +1161,7 @@ impl UiState {
                     }
                 }
             },
-            TreeSelection::Thrusters(thruster_tree_select) => match *thruster_tree_select {
+            TreeSelection::Thrusters(thruster_tree_select) => match thruster_tree_select {
                 ThrusterSelection::Header => self.properties_panel = PropertiesPanel::default_thruster(),
                 ThrusterSelection::Bank(bank) => {
                     self.properties_panel = PropertiesPanel::Thruster {
@@ -1180,7 +1180,7 @@ impl UiState {
                     }
                 }
             },
-            TreeSelection::Weapons(weapons_tree_select) => match *weapons_tree_select {
+            TreeSelection::Weapons(weapons_tree_select) => match weapons_tree_select {
                 WeaponSelection::PriBankPoint(bank_idx, point_idx) => {
                     self.properties_panel = PropertiesPanel::Weapon {
                         position_string: format!("{}", model.primary_weps[bank_idx][point_idx].position),
@@ -1197,26 +1197,19 @@ impl UiState {
                 }
                 _ => self.properties_panel = PropertiesPanel::default_weapon(),
             },
-            TreeSelection::DockingBays(docking_select) => match *docking_select {
+            TreeSelection::DockingBays(docking_select) => match docking_select {
                 DockingSelection::Bay(bay) => {
                     self.properties_panel = PropertiesPanel::DockingBay {
-                        position_string: Default::default(),
-                        normal_string: Default::default(),
+                        position_string: format!("{}", model.docking_bays[bay].position),
+                        fvec_string: format!("{}", model.docking_bays[bay].fvec.0),
+                        uvec_ang: model.docking_bays[bay].get_uvec_angle().to_degrees() % 360.0,
                         properties: format!("{}", model.docking_bays[bay].properties),
                         path_num: model.docking_bays[bay].path.unwrap_or(PathId(model.paths.len() as u32)).0 as usize,
                     }
                 }
-                DockingSelection::BayPoint(bay, point) => {
-                    self.properties_panel = PropertiesPanel::DockingBay {
-                        position_string: format!("{}", model.docking_bays[bay].points[point].position),
-                        normal_string: format!("{}", model.docking_bays[bay].points[point].normal),
-                        properties: format!("{}", model.docking_bays[bay].properties),
-                        path_num: model.docking_bays[bay].path.unwrap_or_default().0 as usize,
-                    }
-                }
                 _ => self.properties_panel = PropertiesPanel::default_docking_bay(),
             },
-            TreeSelection::Glows(glow_select) => match *glow_select {
+            TreeSelection::Glows(glow_select) => match glow_select {
                 GlowSelection::BankPoint(bank, point) => {
                     self.properties_panel = PropertiesPanel::GlowBank {
                         disp_time_string: format!("{}", model.glow_banks[bank].disp_time),
@@ -1247,7 +1240,7 @@ impl UiState {
                 }
                 _ => self.properties_panel = PropertiesPanel::default_glow(),
             },
-            TreeSelection::SpecialPoints(special_select) => match *special_select {
+            TreeSelection::SpecialPoints(special_select) => match special_select {
                 SpecialPointSelection::Point(point) => {
                     self.properties_panel = PropertiesPanel::SpecialPoint {
                         name_string: format!("{}", model.special_points[point].name),
@@ -1258,7 +1251,7 @@ impl UiState {
                 }
                 _ => self.properties_panel = PropertiesPanel::default_special_point(),
             },
-            TreeSelection::Turrets(turret_selection) => match *turret_selection {
+            TreeSelection::Turrets(turret_selection) => match turret_selection {
                 TurretSelection::TurretPoint(turret, point) => {
                     self.properties_panel = PropertiesPanel::Turret {
                         normal_string: format!("{}", model.turrets[turret].normal),
@@ -1275,7 +1268,7 @@ impl UiState {
                 }
                 _ => self.properties_panel = PropertiesPanel::default_turret(),
             },
-            TreeSelection::Paths(path_selection) => match *path_selection {
+            TreeSelection::Paths(path_selection) => match path_selection {
                 PathSelection::PathPoint(path, point) => {
                     self.properties_panel = PropertiesPanel::Path {
                         name: format!("{}", model.paths[path].name),
@@ -1294,7 +1287,7 @@ impl UiState {
                 }
                 _ => self.properties_panel = PropertiesPanel::default_path(),
             },
-            TreeSelection::Insignia(insig_selection) => match *insig_selection {
+            TreeSelection::Insignia(insig_selection) => match insig_selection {
                 InsigniaSelection::Insignia(idx) => {
                     self.properties_panel = PropertiesPanel::Insignia {
                         lod_string: format!("{}", model.insignias[idx].detail_level),
@@ -1306,9 +1299,9 @@ impl UiState {
             TreeSelection::EyePoints(eye_selection) => match eye_selection {
                 EyeSelection::EyePoint(idx) => {
                     self.properties_panel = PropertiesPanel::EyePoint {
-                        position_string: format!("{}", model.eye_points[*idx].offset),
-                        normal_string: format!("{}", model.eye_points[*idx].normal),
-                        attached_subobj_idx: model.eye_points[*idx].attached_subobj.0 as usize,
+                        position_string: format!("{}", model.eye_points[idx].offset),
+                        normal_string: format!("{}", model.eye_points[idx].normal),
+                        attached_subobj_idx: model.eye_points[idx].attached_subobj.0 as usize,
                     }
                 }
                 _ => self.properties_panel = PropertiesPanel::default_eye(),
@@ -1343,6 +1336,8 @@ impl PofToolsGui {
                     .on_disabled_hover_text("All errors must be corrected before saving.")
                     .clicked()
                 {
+                    self.model.clean_up();
+
                     let new_filename = PofToolsGui::save_model(&self.model);
                     if let Some(filename) = new_filename {
                         display
@@ -1352,6 +1347,36 @@ impl PofToolsGui {
                         self.model.filename = filename;
                     }
                 }
+
+                ui.separator();
+
+                ui.menu_button(RichText::new(format!("Version: {}", self.model.version)).text_style(TextStyle::Button), |ui| {
+                    let mut response = ui
+                        .radio_value(&mut self.model.version, Version::V21_16, "21.16")
+                        .on_hover_text("Retail - PCS2 Compatible");
+                    response = response.union(
+                        ui.radio_value(&mut self.model.version, Version::V21_17, "21.17")
+                            .on_hover_text("Retail - PCS2 Compatible - Thruster properties added"),
+                    );
+                    response = response.union(
+                        ui.radio_value(&mut self.model.version, Version::V21_18, "21.18")
+                            .on_hover_text("External weapon angle offset added"),
+                    );
+                    response = response.union(
+                        ui.radio_value(&mut self.model.version, Version::V22_00, "22.00")
+                            .on_hover_text("SLC2 replaces SLDC (no weapon offset compatibility)"),
+                    );
+                    response = response.union(
+                        ui.radio_value(&mut self.model.version, Version::V22_01, "22.01")
+                            .on_hover_text("External weapon angle offset compatible"),
+                    );
+
+                    // we only need to recheck verson-specific warnings, but since those are parameterized, there's no easy way to say
+                    // 'those specific warnings but for all their parameters' so just do them all i guess
+                    if response.changed() {
+                        PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All);
+                    }
+                });
 
                 ui.separator();
 
@@ -1422,6 +1447,18 @@ impl PofToolsGui {
                                 let str = format!(
                                     "⚠ Docking bay {} cannot be used by ships without a path",
                                     self.model.docking_bays[*bay_num].get_name().unwrap_or(&(bay_num + 1).to_string())
+                                );
+                                ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                            }
+                            Warning::ThrusterPropertiesInvalidVersion(idx) => {
+                                let str =
+                                    format!("⚠ Thruster bank {} has properties, which the currently selected version does not support", idx + 1);
+                                ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                            }
+                            Warning::WeaponOffsetInvalidVersion(weapon_selection) => {
+                                let str = format!(
+                                    "⚠ {} has an external angle offset, which the currently selected version does not support",
+                                    weapon_selection
                                 );
                                 ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
                             }
@@ -1588,21 +1625,11 @@ impl PofToolsGui {
                         TreeSelection::DockingBays(DockingSelection::Header),
                         |ui_state, ui| {
                             for (i, docking_bay) in self.model.docking_bays.iter().enumerate() {
-                                ui_state.tree_collapsing_item(
+                                ui_state.tree_selectable_item(
                                     &self.model,
                                     ui,
                                     docking_bay.get_name().unwrap_or(&format!("Bay {}", i + 1)),
                                     TreeSelection::DockingBays(DockingSelection::Bay(i)),
-                                    |ui_state, ui| {
-                                        for j in 0..docking_bay.points.len() {
-                                            ui_state.tree_selectable_item(
-                                                &self.model,
-                                                ui,
-                                                &format!("Point {}", j + 1),
-                                                TreeSelection::DockingBays(DockingSelection::BayPoint(i, j)),
-                                            );
-                                        }
-                                    },
                                 );
                             }
                         },
@@ -1755,6 +1782,11 @@ impl PofToolsGui {
         // manipulation of whatever it is they have selected in the tree view
         // ==============================================================================================================
 
+        // reset some stuff
+        self.display_bbox = false;
+        self.display_radius = false;
+        self.display_origin = false;
+
         egui::SidePanel::right("properties_panel")
             .resizable(true)
             .default_width(200.0)
@@ -1803,59 +1835,77 @@ impl PofToolsGui {
                             }
 
                             let mut bbox_changed = false;
+                            let mut display_bbox = false;
                             ui.horizontal(|ui| {
                                 ui.label("Bounding Box:");
-                                if ui.button("Recalculate").clicked() {
+                                let response = ui.button("Recalculate");
+
+                                if response.clicked() {
                                     self.model.recalc_bbox();
                                     self.ui_state.properties_panel_dirty = true;
                                     bbox_changed = true;
                                 }
+                                display_bbox = response.hovered() || response.has_focus() || display_bbox;
                             });
 
                             ui.horizontal(|ui| {
                                 ui.label("Min:");
-                                if UiState::model_value_edit(
+                                let response = UiState::model_value_edit(
                                     &mut self.ui_state.viewport_3d_dirty,
                                     ui,
                                     self.warnings.contains(&Warning::BBoxTooSmall(None)),
                                     Some(&mut self.model.header.bbox.min),
                                     bbox_min_string,
-                                ) {
+                                );
+
+                                if response.changed() {
                                     bbox_changed = true;
                                 }
+                                display_bbox = response.hovered() || response.has_focus() || display_bbox;
                             });
 
                             ui.horizontal(|ui| {
                                 ui.label("Max:");
-                                if UiState::model_value_edit(
+                                let response = UiState::model_value_edit(
                                     &mut self.ui_state.viewport_3d_dirty,
                                     ui,
                                     self.warnings.contains(&Warning::BBoxTooSmall(None)),
                                     Some(&mut self.model.header.bbox.max),
                                     bbox_max_string,
-                                ) {
+                                );
+
+                                if response.changed() {
                                     bbox_changed = true;
                                 }
+                                self.ui_state.display_bbox = response.hovered() || response.has_focus() || display_bbox;
                             });
 
                             let mut radius_changed = false;
+                            let mut display_radius = false;
                             ui.horizontal(|ui| {
                                 ui.add(egui::Label::new("Radius:"));
-                                if ui.button("Recalculate").clicked() {
+                                let response = ui.button("Recalculate");
+
+                                if response.clicked() {
                                     self.model.recalc_radius();
                                     radius_changed = true;
                                     self.ui_state.properties_panel_dirty = true;
                                 }
+                                display_radius = response.hovered() || response.has_focus() || display_radius;
                             });
-                            if UiState::model_value_edit(
+
+                            let response = UiState::model_value_edit(
                                 &mut self.ui_state.viewport_3d_dirty,
                                 ui,
                                 self.warnings.contains(&Warning::RadiusTooSmall(None)),
                                 Some(&mut self.model.header.max_radius),
                                 radius_string,
-                            ) {
+                            );
+
+                            if response.changed() {
                                 radius_changed = true;
                             }
+                            self.ui_state.display_radius = response.hovered() || response.has_focus() || display_radius;
 
                             ui.horizontal(|ui| {
                                 ui.add(egui::Label::new("Mass:"));
@@ -1984,47 +2034,59 @@ impl PofToolsGui {
                             ui.add_space(5.0);
 
                             let mut bbox_changed = false;
+                            let mut display_bbox = false;
                             ui.horizontal(|ui| {
                                 ui.label("Bounding Box:");
-                                if ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate")).clicked() {
+                                let response = ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate"));
+
+                                if response.clicked() {
                                     self.model.sub_objects[selected_id.unwrap()].recalc_bbox();
                                     self.ui_state.properties_panel_dirty = true;
                                     bbox_changed = true;
                                 }
+                                display_bbox = response.hovered() || response.has_focus() || display_bbox;
                             });
 
                             ui.horizontal(|ui| {
                                 ui.label("Min:");
-                                if UiState::model_value_edit(
+                                let response = UiState::model_value_edit(
                                     &mut self.ui_state.viewport_3d_dirty,
                                     ui,
                                     false,
                                     selected_id.map(|id| &mut self.model.sub_objects[id].bbox.min),
                                     bbox_min_string,
-                                ) {
+                                );
+
+                                if response.changed() {
                                     bbox_changed = true;
                                 }
+                                display_bbox = response.hovered() || response.has_focus() || display_bbox;
                             });
 
                             ui.horizontal(|ui| {
                                 ui.label("Max:");
-                                if UiState::model_value_edit(
+                                let response = UiState::model_value_edit(
                                     &mut self.ui_state.viewport_3d_dirty,
                                     ui,
                                     false,
                                     selected_id.map(|id| &mut self.model.sub_objects[id].bbox.max),
                                     bbox_max_string,
-                                ) {
+                                );
+
+                                if response.changed() {
                                     bbox_changed = true;
                                 }
+                                display_bbox = response.hovered() || response.has_focus() || display_bbox;
                             });
+
+                            self.ui_state.display_bbox = display_bbox;
 
                             if bbox_changed {
                                 PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::BBoxTooSmall(selected_id)));
                             }
 
                             ui.label("Offset:");
-                            UiState::model_value_edit(
+                            let response = UiState::model_value_edit(
                                 &mut self.ui_state.viewport_3d_dirty,
                                 ui,
                                 false,
@@ -2032,24 +2094,34 @@ impl PofToolsGui {
                                 offset_string,
                             );
 
+                            self.ui_state.display_origin = response.hovered() || response.has_focus();
+
                             let mut radius_changed = false;
+                            let mut display_radius = false;
                             ui.horizontal(|ui| {
                                 ui.label("Radius:");
-                                if ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate")).clicked() {
+                                let response = ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate"));
+
+                                if response.clicked() {
                                     self.model.sub_objects[selected_id.unwrap()].recalc_radius();
                                     self.ui_state.properties_panel_dirty = true;
                                     radius_changed = true;
                                 }
+                                display_radius = response.hovered() || response.has_focus() || display_radius;
                             });
-                            if UiState::model_value_edit(
+
+                            let response = UiState::model_value_edit(
                                 &mut self.ui_state.viewport_3d_dirty,
                                 ui,
                                 self.warnings.contains(&Warning::RadiusTooSmall(selected_id)),
                                 selected_id.map(|id| &mut self.model.sub_objects[id].radius),
                                 radius_string,
-                            ) {
+                            );
+
+                            if response.changed() {
                                 radius_changed = true;
                             }
+                            self.ui_state.display_radius = response.hovered() || response.has_focus() || display_radius;
 
                             if radius_changed {
                                 PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::RadiusTooSmall(selected_id)));
@@ -2128,7 +2200,20 @@ impl PofToolsGui {
 
                             ui.label("Properties:");
                             if let Some(bank) = bank_num {
-                                ui.add(egui::TextEdit::multiline(&mut self.model.thruster_banks[bank].properties).desired_rows(1));
+                                if self.warnings.contains(&Warning::ThrusterPropertiesInvalidVersion(bank)) {
+                                    UiState::set_widget_color(ui, Color32::YELLOW);
+                                }
+                                if ui
+                                    .add(egui::TextEdit::multiline(&mut self.model.thruster_banks[bank].properties).desired_rows(1))
+                                    .changed()
+                                {
+                                    PofToolsGui::recheck_warnings(
+                                        &mut self.warnings,
+                                        &self.model,
+                                        One(Warning::ThrusterPropertiesInvalidVersion(bank)),
+                                    );
+                                }
+                                UiState::reset_widget_color(ui);
                             } else {
                                 ui.add_enabled(false, egui::TextEdit::multiline(properties).desired_rows(1));
                             }
@@ -2207,6 +2292,12 @@ impl PofToolsGui {
                                     unreachable!();
                                 }
                             };
+                            let weapon_selection = if let TreeSelection::Weapons(selection) = self.ui_state.tree_view_selection {
+                                selection
+                            } else {
+                                unreachable!()
+                            };
+
                             ui.separator();
 
                             let bank_idx_response =
@@ -2240,7 +2331,14 @@ impl PofToolsGui {
                             ui.label("Normal:");
                             UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
                             ui.label("Offset:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, offset, offset_string);
+                            let offset_changed = UiState::model_value_edit(
+                                &mut self.ui_state.viewport_3d_dirty,
+                                ui,
+                                self.warnings.contains(&Warning::WeaponOffsetInvalidVersion(weapon_selection)),
+                                offset,
+                                offset_string,
+                            )
+                            .changed();
 
                             if let Some(response) = bank_idx_response {
                                 let (weapon_system, is_primary) = weapon_system.unwrap();
@@ -2258,15 +2356,22 @@ impl PofToolsGui {
                                 self.ui_state.properties_panel_dirty = true;
                                 self.ui_state.viewport_3d_dirty = true;
                             }
+
+                            if offset_changed {
+                                PofToolsGui::recheck_warnings(
+                                    &mut self.warnings,
+                                    &self.model,
+                                    One(Warning::WeaponOffsetInvalidVersion(weapon_selection)),
+                                );
+                            }
                         }
-                        PropertiesPanel::DockingBay { position_string, normal_string, properties, path_num } => {
+                        PropertiesPanel::DockingBay { position_string, fvec_string, uvec_ang, properties, path_num } => {
                             ui.heading("Docking Bay");
                             ui.separator();
 
-                            let (bay_num, point_num) = match self.ui_state.tree_view_selection {
-                                TreeSelection::DockingBays(DockingSelection::Bay(bay)) => (Some(bay), None),
-                                TreeSelection::DockingBays(DockingSelection::BayPoint(bay, point)) => (Some(bay), Some(point)),
-                                _ => (None, None),
+                            let bay_num = match self.ui_state.tree_view_selection {
+                                TreeSelection::DockingBays(DockingSelection::Bay(bay)) => Some(bay),
+                                _ => None,
                             };
 
                             let bay_idx_response = UiState::list_manipulator_widget(ui, bay_num, Some(self.model.docking_bays.len()), "Bay");
@@ -2311,38 +2416,57 @@ impl PofToolsGui {
 
                             ui.separator();
 
-                            let point_idx_response = UiState::list_manipulator_widget(
-                                ui,
-                                point_num,
-                                bay_num.map(|bay| self.model.docking_bays[bay].points.len()),
-                                "Point",
-                            );
-
                             ui.add_space(10.0);
 
-                            let (pos, norm) =
-                                if let TreeSelection::DockingBays(DockingSelection::BayPoint(bay, point)) = self.ui_state.tree_view_selection {
-                                    let DockingPoint { position, normal } = &mut self.model.docking_bays[bay].points[point];
-                                    (Some(position), Some(normal))
-                                } else {
-                                    (None, None)
-                                };
                             ui.label("Position:");
+                            let pos = bay_num.map(|num| &mut self.model.docking_bays[num].position);
                             UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
-                            ui.label("Normal:");
-                            UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
+
+                            ui.label(RichText::new("Forward Vector:").color(Color32::from_rgb(140, 150, 210)));
+                            let norm = bay_num.map(|num| &mut self.model.docking_bays[num].fvec);
+                            if UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, fvec_string).changed() {
+                                let bay = &mut self.model.docking_bays[bay_num.unwrap()];
+                                bay.uvec = Dock::orthonormalize(&bay.uvec.0.into(), &bay.fvec.0.into());
+                            }
+
+                            ui.label(RichText::new("Up Vector:").color(Color32::from_rgb(210, 140, 140)));
+                            ui.add_enabled_ui(bay_num.is_some(), |ui| {
+                                if ui.add(DragValue::new(uvec_ang).speed(0.5)).changed() {
+                                    self.ui_state.viewport_3d_dirty = true;
+                                    self.model.docking_bays[bay_num.unwrap()].set_uvec_angle(uvec_ang.to_radians());
+                                    *uvec_ang %= 360.0;
+                                }
+                            });
+
+                            // its annoyingly verbose to mix and match text styles/colors :/
+                            let mut job = LayoutJob::default();
+                            job.append("When ships dock, they will oppose their ", 0.0, TextFormat::default());
+                            job.append(
+                                "forward vectors ",
+                                0.0,
+                                TextFormat {
+                                    style: TextStyle::Button,
+                                    color: Color32::from_rgb(140, 150, 210),
+                                    ..Default::default()
+                                },
+                            );
+                            job.append("and match their ", 0.0, TextFormat::default());
+                            job.append(
+                                "up vectors",
+                                0.0,
+                                TextFormat {
+                                    style: TextStyle::Body,
+                                    color: Color32::from_rgb(210, 140, 140),
+                                    ..Default::default()
+                                },
+                            );
+                            job.append(".", 0.0, TextFormat::default());
+                            ui.label(job);
 
                             if let Some(response) = bay_idx_response {
                                 let new_idx = response.apply(&mut self.model.docking_bays);
 
                                 self.ui_state.tree_view_selection = TreeSelection::DockingBays(DockingSelection::bay(new_idx));
-                                self.ui_state.properties_panel_dirty = true;
-                                self.ui_state.viewport_3d_dirty = true;
-                            } else if let Some(response) = point_idx_response {
-                                let new_idx = response.apply(&mut self.model.docking_bays[bay_num.unwrap()].points);
-
-                                self.ui_state.tree_view_selection =
-                                    TreeSelection::DockingBays(DockingSelection::bay_point(bay_num.unwrap(), new_idx));
                                 self.ui_state.properties_panel_dirty = true;
                                 self.ui_state.viewport_3d_dirty = true;
                             }
@@ -2368,7 +2492,9 @@ impl PofToolsGui {
                                 _ => (None, None),
                             };
 
-                            let bank_idx_response = UiState::list_manipulator_widget(ui, bank_num, Some(self.model.glow_banks.len()), "Bank");
+                            // no subobjects = no glow banks allowed
+                            let glow_banks_len_opt = (!self.model.sub_objects.is_empty()).then(|| self.model.glow_banks.len());
+                            let bank_idx_response = UiState::list_manipulator_widget(ui, bank_num, glow_banks_len_opt, "Bank");
 
                             ui.add_space(10.0);
 
@@ -2534,7 +2660,9 @@ impl PofToolsGui {
                                 _ => (None, None),
                             };
 
-                            let turret_idx_response = UiState::list_manipulator_widget(ui, turret_num, Some(self.model.turrets.len()), "Turret");
+                            // no subobjects = no turrets allowed
+                            let turrets_len_opt = (!self.model.sub_objects.is_empty()).then(|| self.model.turrets.len());
+                            let turret_idx_response = UiState::list_manipulator_widget(ui, turret_num, turrets_len_opt, "Turret");
 
                             ui.add_space(10.0);
                             let subobj_names_list = self.model.get_subobj_names();
@@ -2736,7 +2864,9 @@ impl PofToolsGui {
                                 _ => None,
                             };
 
-                            let eye_idx_response = UiState::list_manipulator_widget(ui, eye_num, Some(self.model.eye_points.len()), "Eye Point");
+                            // no subobjects = no eye points allowed
+                            let eye_points_len_opt = (!self.model.sub_objects.is_empty()).then(|| self.model.eye_points.len());
+                            let eye_idx_response = UiState::list_manipulator_widget(ui, eye_num, eye_points_len_opt, "Eye Point");
 
                             ui.add_space(10.0);
 
@@ -2848,12 +2978,26 @@ impl PofToolsGui {
     }
 
     // rechecks just one or all of the warnings on the model
-    pub fn recheck_warnings(warnings: &mut BTreeSet<Warning>, model: &Model, warning_to_check: Set<Warning>) {
+    pub(crate) fn recheck_warnings(warnings: &mut BTreeSet<Warning>, model: &Model, warning_to_check: Set<Warning>) {
         if let One(warning) = warning_to_check {
             let failed_check = match warning {
                 Warning::RadiusTooSmall(subobj_opt) => PofToolsGui::radius_test_failed(model, subobj_opt),
                 Warning::BBoxTooSmall(subobj_opt) => PofToolsGui::bbox_test_failed(model, subobj_opt),
                 Warning::DockingBayWithoutPath(bay_num) => model.docking_bays[bay_num].path.is_none(),
+                Warning::ThrusterPropertiesInvalidVersion(bank_idx) => {
+                    model.version <= Version::V21_16 && !model.thruster_banks[bank_idx].properties.is_empty()
+                }
+                Warning::WeaponOffsetInvalidVersion(weapon_select) => {
+                    (model.version <= Version::V21_17 || model.version == Version::V22_00) && {
+                        if let WeaponSelection::PriBankPoint(bank, point) = weapon_select {
+                            model.primary_weps[bank][point].offset != 0.0
+                        } else if let WeaponSelection::SecBankPoint(bank, point) = weapon_select {
+                            model.secondary_weps[bank][point].offset != 0.0
+                        } else {
+                            false
+                        }
+                    }
+                }
             };
 
             let existing_warning = warnings.contains(&warning);
@@ -2888,6 +3032,31 @@ impl PofToolsGui {
                     warnings.insert(Warning::DockingBayWithoutPath(i));
                 }
             }
+
+            if model.version <= Version::V21_16 {
+                for (i, bank) in model.thruster_banks.iter().enumerate() {
+                    if !bank.properties.is_empty() {
+                        warnings.insert(Warning::ThrusterPropertiesInvalidVersion(i));
+                    }
+                }
+            }
+
+            if model.version <= Version::V21_17 || model.version == Version::V22_00 {
+                for (i, bank) in model.primary_weps.iter().enumerate() {
+                    for (j, point) in bank.iter().enumerate() {
+                        if point.offset != 0.0 {
+                            warnings.insert(Warning::WeaponOffsetInvalidVersion(WeaponSelection::PriBankPoint(i, j)));
+                        }
+                    }
+                }
+                for (i, bank) in model.secondary_weps.iter().enumerate() {
+                    for (j, point) in bank.iter().enumerate() {
+                        if point.offset != 0.0 {
+                            warnings.insert(Warning::WeaponOffsetInvalidVersion(WeaponSelection::SecBankPoint(i, j)));
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -2904,16 +3073,18 @@ impl PofToolsGui {
             }
         } else {
             let radius_with_margin = (1.0 + f32::EPSILON) * model.header.max_radius;
-            for subobj in &model.sub_objects {
-                // we dont care about subobjects which aren't part of the detail0 hierarchy
-                if !model.header.detail_levels.is_empty() && !model.is_obj_id_ancestor(subobj.obj_id, model.header.detail_levels[0]) {
-                    continue;
-                }
+            if let Some(&detail_0) = model.header.detail_levels.first() {
+                for subobj in &model.sub_objects {
+                    // we dont care about subobjects which aren't part of the detail0 hierarchy
+                    if !model.is_obj_id_ancestor(subobj.obj_id, detail_0) {
+                        continue;
+                    }
 
-                let offset = model.get_total_subobj_offset(subobj.obj_id);
-                for vert in &subobj.bsp_data.verts {
-                    if (*vert + offset).magnitude() > radius_with_margin {
-                        return true;
+                    let offset = model.get_total_subobj_offset(subobj.obj_id);
+                    for vert in &subobj.bsp_data.verts {
+                        if (*vert + offset).magnitude() > radius_with_margin {
+                            return true;
+                        }
                     }
                 }
             }
@@ -2932,10 +3103,10 @@ impl PofToolsGui {
                     return true;
                 }
             }
-        } else {
+        } else if let Some(&detail_0) = model.header.detail_levels.first() {
             for subobj in &model.sub_objects {
                 // we dont care about subobjects which aren't part of the detail0 hierarchy
-                if !model.header.detail_levels.is_empty() && !model.is_obj_id_ancestor(subobj.obj_id, model.header.detail_levels[0]) {
+                if !model.is_obj_id_ancestor(subobj.obj_id, detail_0) {
                     continue;
                 }
 

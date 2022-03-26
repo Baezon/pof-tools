@@ -11,7 +11,6 @@ use crate::ui::{
     DockingSelection, EyeSelection, GlowSelection, InsigniaSelection, PathSelection, SpecialPointSelection, SubObjectSelection, TextureSelection,
     ThrusterSelection, TurretSelection, WeaponSelection,
 };
-use backtrace::Backtrace;
 use egui::{Color32, RichText, TextEdit};
 use glium::{
     glutin::{self, event::WindowEvent, window::Icon},
@@ -19,13 +18,12 @@ use glium::{
     BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer,
 };
 use native_dialog::FileDialog;
-use once_cell::sync::OnceCell;
 use pof::{Insignia, Model, ObjVec, ObjectId, Parser, ShieldData, SubObject, TextureId, Texturing, Vec3d};
 use simplelog::*;
 use std::{collections::HashMap, fs::File, io::Cursor, path::PathBuf, sync::mpsc::TryRecvError};
 use ui::{PofToolsGui, Set::*, TreeSelection};
 
-mod sphere;
+mod primitives;
 mod ui;
 
 fn create_display(event_loop: &glutin::event_loop::EventLoop<()>) -> glium::Display {
@@ -327,37 +325,55 @@ impl PofToolsGui {
     // opens a thread which opens the dialog and starts parsing a model
     fn start_loading_model(&mut self, filepath: Option<PathBuf>) {
         let (sender, receiver) = std::sync::mpsc::channel();
-        self.loading_thread = Some(receiver);
+        self.model_loading_thread = Some(receiver);
 
         std::thread::spawn(move || {
-            let path = filepath.or_else(|| {
-                FileDialog::new()
-                    .add_filter("All supported files", &["pof", "dae"])
-                    .add_filter("COLLADA", &["dae"])
-                    .add_filter("Parallax Object File", &["pof"])
-                    .show_open_single_file()
-                    .unwrap()
-            });
+            let model = std::panic::catch_unwind(move || {
+                let path = filepath.or_else(|| {
+                    FileDialog::new()
+                        .add_filter("All supported files", &["pof", "dae"])
+                        .add_filter("COLLADA", &["dae"])
+                        .add_filter("Parallax Object File", &["pof"])
+                        .show_open_single_file()
+                        .unwrap()
+                });
 
-            if let Some(path) = path {
-                let ext = path.extension().map(|ext| ext.to_ascii_lowercase());
-                let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
-                info!("Attempting to load {}", filename);
-                let model = match ext.as_ref().and_then(|ext| ext.to_str()) {
-                    Some("dae") => pof::parse_dae(path, filename),
-                    Some("pof") => {
-                        let file = File::open(path).expect("TODO invalid file or smth i dunno");
-                        let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
-                        Box::new(parser.parse(filename).expect("TODO invalid pof file or smth i dunno"))
+                path.map(|path| {
+                    let ext = path.extension().map(|ext| ext.to_ascii_lowercase());
+                    let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
+                    info!("Attempting to load {}", filename);
+                    match ext.as_ref().and_then(|ext| ext.to_str()) {
+                        Some("dae") => pof::parse_dae(path, filename),
+                        Some("pof") => {
+                            let file = File::open(path).expect("TODO invalid file or smth i dunno");
+                            let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
+                            Box::new(parser.parse(filename).expect("TODO invalid pof file or smth i dunno"))
+                        }
+                        _ => todo!(),
                     }
-                    _ => todo!(),
-                };
-
-                let _ = sender.send(Some(model));
-            } else {
-                let _ = sender.send(None);
-            }
+                })
+            });
+            let _ = sender.send(model.map_err(|panic| *panic.downcast().unwrap()));
         });
+    }
+
+    fn handle_model_loading_thread(&mut self, display: &Display) {
+        if let Some(thread) = &self.model_loading_thread {
+            let response = thread.try_recv();
+            match response {
+                Ok(Ok(Some(data))) => {
+                    self.model = data;
+                    self.finish_loading_model(display);
+
+                    self.model_loading_thread = None;
+                }
+                Err(TryRecvError::Disconnected) => self.model_loading_thread = None,
+                Ok(Ok(None)) => self.model_loading_thread = None,
+                Ok(Err(panic_msg)) => std::panic::panic_any(panic_msg),
+
+                Err(TryRecvError::Empty) => {}
+            }
+        }
     }
 
     // after the above thread has returned, stuffs the new model in
@@ -365,6 +381,7 @@ impl PofToolsGui {
         self.buffer_objects.clear();
         self.buffer_shield = None;
         self.buffer_insignias.clear();
+        self.buffer_textures.clear();
 
         for subobject in &self.model.sub_objects {
             for i in 0..self.model.textures.len() {
@@ -390,6 +407,20 @@ impl PofToolsGui {
             self.buffer_shield = Some(GlBufferedShield::new(display, shield));
         }
 
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.texture_loading_thread = Some(receiver);
+
+        std::thread::spawn(move || {
+            let image = image::load(Cursor::new(std::fs::read("AeolusUV.dds").unwrap()), image::ImageFormat::Dds)
+                .unwrap()
+                .to_rgba8();
+            let image_dimensions = image.dimensions();
+            let image = glium::texture::RawImage2d::from_raw_rgba(image.into_raw(), image_dimensions);
+            let texture1 = SrgbTexture2d::new(&display, image).unwrap();
+
+            let _ = sender.send(texture1);
+        });
+
         self.maybe_recalculate_3d_helpers(display);
 
         self.warnings.clear();
@@ -401,7 +432,7 @@ impl PofToolsGui {
         self.camera_pitch = -0.4;
         self.camera_offset = Vec3d::ZERO;
         self.camera_scale = self.model.header.max_radius * 2.0;
-        self.ui_state.last_selected_subobj = self.model.header.detail_levels[0];
+        self.ui_state.last_selected_subobj = self.model.header.detail_levels.first().copied();
         display
             .gl_window()
             .window()
@@ -409,14 +440,45 @@ impl PofToolsGui {
 
         info!("Loaded {}", self.model.filename);
     }
+
+    fn handle_texture_loading_thread(&mut self) {
+        if let Some(thread) = &self.texture_loading_thread {
+            let response = thread.try_recv();
+            match response {
+                Ok(Some(data)) => self.buffer_textures.insert(data.1, data.0),
+                Err(TryRecvError::Disconnected) | Ok(None) => self.texture_loading_thread = None,
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+    }
 }
 
-const POF_TOOLS_VERSION: &str = "0.9.1";
-
-// we need this weird type specifically for catching panic info
-static LAST_PANIC: OnceCell<(String, Backtrace)> = OnceCell::new();
+const POF_TOOLS_VERSION: &str = "1.1.0";
 
 fn main() {
+    // set up a panic handler to grab the backtrace
+    let default_hook = std::panic::take_hook();
+    let (panic_data_send, panic_data_recv) = std::sync::mpsc::sync_channel(1);
+    std::panic::set_hook(Box::new(move |panic_info| {
+        default_hook(panic_info);
+        let backtrace = backtrace::Backtrace::new();
+        let msg = panic_info.payload().downcast_ref::<String>().map_or("unknown panic", |x| x);
+        let msg = format!("{},  {}", msg, panic_info.location().unwrap());
+        let mut frames = vec![];
+        for frame in backtrace.frames() {
+            // filter out anything which doesn't have pof-tools in the path
+            // maybe not great? but filters out a huge amount of unrelated shit
+            let should_print = frame.symbols().iter().any(|symbol| match symbol.filename().and_then(|s| s.to_str()) {
+                Some(file) => file.contains("pof-tools"),
+                None => symbol.name().and_then(|name| name.as_str()).map_or(false, |name| name.contains("pof")),
+            });
+            if should_print {
+                frames.push(frame.clone())
+            }
+        }
+        let _ = panic_data_send.send((msg, if frames.is_empty() { backtrace } else { frames.into() }));
+    }));
+
     // set up the logger
     let mut logger_config = ConfigBuilder::new();
     logger_config.set_time_level(LevelFilter::Off);
@@ -442,17 +504,10 @@ fn main() {
     let mut egui = egui_glium::EguiGlium::new(&display);
 
     pt_gui.start_loading_model(path);
-    egui.egui_ctx.output().cursor_icon = egui::CursorIcon::Wait;
 
     let model = &pt_gui.model;
 
     // lots of graphics stuff to initialize
-    let image = image::load(Cursor::new(std::fs::read("AeolusUV.dds").unwrap()), image::ImageFormat::Dds)
-        .unwrap()
-        .to_rgba8();
-    let image_dimensions = image.dimensions();
-    let image = glium::texture::RawImage2d::from_raw_rgba(image.into_raw(), image_dimensions);
-    let texture1 = SrgbTexture2d::new(&display, image).unwrap();
 
     let image = image::load(Cursor::new(std::fs::read("AeolusDet.dds").unwrap()), image::ImageFormat::Dds)
         .unwrap()
@@ -501,60 +556,27 @@ fn main() {
     let lollipop_stick_params = lollipop_stick_params();
     let lollipop_rev_depth_params = lollipop_rev_depth_params();
 
-    let box_verts = glium::VertexBuffer::new(&display, &sphere::BOX_VERTS).unwrap();
-    let box_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::LinesList, &sphere::BOX_INDICES).unwrap();
+    let circle_verts = glium::VertexBuffer::new(&display, &*primitives::CIRCLE_VERTS).unwrap();
+    let circle_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::LineLoop, &primitives::CIRCLE_INDICES).unwrap();
 
-    let icosphere_verts = glium::VertexBuffer::new(&display, &sphere::SPHERE_VERTS).unwrap();
-    let icosphere_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::TrianglesList, &sphere::SPHERE_INDICES).unwrap();
+    let box_verts = glium::VertexBuffer::new(&display, &primitives::BOX_VERTS).unwrap();
+    let box_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::LinesList, &primitives::BOX_INDICES).unwrap();
+
+    let icosphere_verts = glium::VertexBuffer::new(&display, &primitives::SPHERE_VERTS).unwrap();
+    let icosphere_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::TrianglesList, &primitives::SPHERE_INDICES).unwrap();
 
     pt_gui.camera_heading = 2.7;
     pt_gui.camera_pitch = -0.4;
     pt_gui.camera_offset = Vec3d::ZERO;
     pt_gui.camera_scale = model.header.max_radius * 2.0;
 
-    let mut errored = false;
-
-    // set up a panic handler to grab the backtrace
-    std::panic::set_hook(Box::new(|panic_info| {
-        let backtrace = backtrace::Backtrace::new();
-        let msg = format!("{},  {}", panic_info.payload().downcast_ref::<String>().unwrap(), panic_info.location().unwrap());
-        let mut frames = vec![];
-        for frame in backtrace.frames() {
-            // filter out anything which doesn't have pof-tools in the path
-            // maybe not great? but filters out a huge amount of unrelated shit
-            let should_print = frame
-                .symbols()
-                .iter()
-                .any(|symbol| (|| symbol.filename()?.to_str()?.contains("pof-tools").then(|| ()))().is_some());
-            if should_print {
-                frames.push(frame.clone())
-            }
-        }
-
-        LAST_PANIC.get_or_init(|| (msg, frames.into()));
-    }));
+    let mut errored = None;
 
     event_loop.run(move |event, _, control_flow| {
         let mut catch_redraw = || {
             let redraw = || {
                 // handle whether the thread which handles loading has responded (if it exists)
-                if let Some(thread) = &pt_gui.loading_thread {
-                    let response = thread.try_recv();
-                    match response {
-                        Ok(Some(data)) => {
-                            pt_gui.model = data;
-                            pt_gui.finish_loading_model(&display);
-
-                            pt_gui.loading_thread = None;
-
-                            egui.egui_ctx.output().cursor_icon = egui::CursorIcon::Default;
-                        }
-                        Err(TryRecvError::Disconnected) => pt_gui.loading_thread = None,
-                        Ok(None) => pt_gui.loading_thread = None,
-
-                        Err(TryRecvError::Empty) => {}
-                    }
-                }
+                pt_gui.handle_model_loading_thread(&display);
 
                 let (needs_repaint, shapes) = egui.run(&display, |ctx| pt_gui.show_ui(ctx, &display));
 
@@ -615,7 +637,7 @@ fn main() {
                     let view_mat: [[f32; 4]; 4] = view_mat.into(); // the final matrix used by the graphics
 
                     let displayed_subobjects =
-                        get_list_of_display_subobjects(model, &pt_gui.ui_state.tree_view_selection, pt_gui.ui_state.last_selected_subobj);
+                        get_list_of_display_subobjects(model, pt_gui.ui_state.tree_view_selection, pt_gui.ui_state.last_selected_subobj);
 
                     // brighten up the dark bits so wireframe is easier to see
                     let mut dark_color;
@@ -676,7 +698,8 @@ fn main() {
                         if displayed_subobjects[buffer_obj.obj_id] {
                             let mut mat = glm::identity::<f32, 4>();
                             mat.append_translation_mut(&pt_gui.model.get_total_subobj_offset(buffer_obj.obj_id).into());
-                            if let Some(tex_name) = buffer_obj.texture_id {
+                            if let Some(texture) = buffer_obj.texture_id.and_then(|tex_id| pt_gui.buffer_textures.get(&tex_id)) {
+                                // draw textured
                                 let uniforms = glium::uniform! {
                                     model: <[[f32; 4]; 4]>::from(mat),
                                     view: view_mat,
@@ -686,11 +709,7 @@ fn main() {
                                     light_color: light_color,
                                     tint_color: [0.0, 0.0, 1.0f32],
                                     tint_val: buffer_obj.tint_val,
-                                    tex: if model.textures[tex_name.0 as usize] == "AeolusUV" {
-                                        &texture1
-                                    } else {
-                                        &texture2
-                                    },
+                                    tex: texture,
                                 };
 
                                 target
@@ -703,6 +722,7 @@ fn main() {
                                     )
                                     .unwrap();
                             } else {
+                                // draw untextured
                                 let uniforms = glium::uniform! {
                                     model: <[[f32; 4]; 4]>::from(mat),
                                     view: view_mat,
@@ -728,8 +748,8 @@ fn main() {
                     }
 
                     // maybe draw the insignias
-                    if let TreeSelection::Insignia(insignia_select) = &pt_gui.tree_view_selection {
-                        let (current_detail_level, current_insignia_idx) = match *insignia_select {
+                    if let TreeSelection::Insignia(insignia_select) = pt_gui.tree_view_selection {
+                        let (current_detail_level, current_insignia_idx) = match insignia_select {
                             InsigniaSelection::Header => (0, None),
                             InsigniaSelection::Insignia(idx) => (pt_gui.model.insignias[idx].detail_level, Some(idx)),
                         };
@@ -823,82 +843,154 @@ fn main() {
                         }
                     }
 
-                    // draw 'helpers'
-                    // bounding boxes, lollipops, etc
-                    match &pt_gui.ui_state.tree_view_selection {
-                        &TreeSelection::SubObjects(SubObjectSelection::SubObject(obj_id)) => {
-                            // draw wireframe bounding boxes
-                            let bbox = &pt_gui.model.sub_objects[obj_id].bbox;
+                    let mut obj_id = None; // None also indicates the header being possibly selected
+                    if let TreeSelection::SubObjects(SubObjectSelection::SubObject(id)) = pt_gui.tree_view_selection {
+                        obj_id = Some(id);
 
-                            let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
-                            mat.append_translation_mut(&(bbox.min + pt_gui.model.get_total_subobj_offset(obj_id)).into());
+                        //      DEBUG - Draw BSP node bounding boxes
+                        //      This is quite useful but incredibly ineffcient
+                        //      TODO make this more efficient
+                        //
+                        // let mut node_stack = vec![(&pt_gui.model.sub_objects[obj_id].bsp_data.collision_tree, 0u32)];
+                        // while let Some((node, depth)) = node_stack.pop() {
+                        //     let bbox = match node {
+                        //         BspNode::Split { bbox, front, back, .. } => {
+                        //             node_stack.push((front, depth + 1));
+                        //             node_stack.push((back, depth + 1));
+                        //             bbox
+                        //         }
+                        //         BspNode::Leaf { bbox, .. } => bbox,
+                        //     };
+
+                        //     let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
+                        //     mat.append_translation_mut(&(bbox.min + pt_gui.model.get_total_subobj_offset(obj_id)).into());
+                        //     let color = 2.0 / (1.5f32.powf(depth as f32));
+
+                        //     let uniforms = glium::uniform! {
+                        //         model: <[[f32; 4]; 4]>::from(mat),
+                        //         view: view_mat,
+                        //         perspective: perspective_matrix,
+                        //         lollipop_color: [color, color, color, 1.0f32],
+                        //     };
+
+                        //     target
+                        //         .draw(&box_verts, &box_indices, &lollipop_stick_shader, &uniforms, &lollipop_stick_params)
+                        //         .unwrap();
+                        // }
+                    }
+
+                    // draw wireframe bounding boxes
+                    if pt_gui.display_bbox {
+                        let bbox = if let Some(id) = obj_id {
+                            &pt_gui.model.sub_objects[id].bbox
+                        } else {
+                            &pt_gui.model.header.bbox
+                        };
+
+                        let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
+                        let offset = if let Some(id) = obj_id {
+                            pt_gui.model.get_total_subobj_offset(id)
+                        } else {
+                            Vec3d::ZERO
+                        };
+                        mat.append_translation_mut(&(bbox.min + offset).into());
+                        let uniforms = glium::uniform! {
+                            model: <[[f32; 4]; 4]>::from(mat),
+                            view: view_mat,
+                            perspective: perspective_matrix,
+                        };
+
+                        target
+                            .draw(&box_verts, &box_indices, &wireframe_shader, &uniforms, &wireframe_params)
+                            .unwrap();
+                    }
+
+                    // draw wireframe 'sphere'
+                    if pt_gui.display_radius {
+                        for i in 0..3 {
+                            let rad = if let Some(id) = obj_id {
+                                pt_gui.model.sub_objects[id].radius
+                            } else {
+                                pt_gui.model.header.max_radius
+                            };
+
+                            let mut mat = glm::scaling(&glm::vec3(rad, rad, rad));
+                            if i == 1 {
+                                mat *= glm::rotation(std::f32::consts::FRAC_PI_2, &glm::vec3(0.0, 1.0, 0.0));
+                            } else if i == 2 {
+                                mat *= glm::rotation(std::f32::consts::FRAC_PI_2, &glm::vec3(1.0, 0.0, 0.0));
+                            }
+
+                            let offset = if let Some(id) = obj_id {
+                                pt_gui.model.get_total_subobj_offset(id)
+                            } else {
+                                Vec3d::ZERO
+                            };
+                            mat.append_translation_mut(&offset.into());
+
                             let uniforms = glium::uniform! {
                                 model: <[[f32; 4]; 4]>::from(mat),
                                 view: view_mat,
                                 perspective: perspective_matrix,
                             };
 
-                            for buffer in &pt_gui.buffer_objects {
-                                if buffer.obj_id == obj_id {
-                                    target
-                                        .draw(&box_verts, &box_indices, &wireframe_shader, &uniforms, &wireframe_params)
-                                        .unwrap();
-                                }
+                            target
+                                .draw(&circle_verts, &circle_indices, &wireframe_shader, &uniforms, &wireframe_params)
+                                .unwrap();
+                        }
+                    }
+
+                    // don't display lollipops if you're in header or subobjects, unless display_origin is on, since that's the only lollipop they have
+                    let display_lollipops = (!matches!(pt_gui.ui_state.tree_view_selection, TreeSelection::Header)
+                        && !matches!(pt_gui.ui_state.tree_view_selection, TreeSelection::SubObjects(_)))
+                        || pt_gui.display_origin;
+
+                    if display_lollipops {
+                        for lollipop_group in &pt_gui.lollipops {
+                            if let TreeSelection::Paths(_) = pt_gui.ui_state.tree_view_selection {
+                                lollipop_params.blend = glium::Blend::alpha_blending();
+                            } else {
+                                lollipop_params.blend = ADDITIVE_BLEND;
                             }
 
-                            //      DEBUG - Draw BSP node bounding boxes
-                            //      This is quite useful but incredibly ineffcient
-                            //      TODO make this more efficient
-                            //
-                            // let mut node_stack = vec![(&pt_gui.model.sub_objects[obj_id].bsp_data.collision_tree, 0u32)];
-                            // while let Some((node, depth)) = node_stack.pop() {
-                            //     let bbox = match node {
-                            //         BspNode::Split { bbox, front, back, .. } => {
-                            //             node_stack.push((front, depth + 1));
-                            //             node_stack.push((back, depth + 1));
-                            //             bbox
-                            //         }
-                            //         BspNode::Leaf { bbox, .. } => bbox,
-                            //     };
+                            let uniforms = glium::uniform! {
+                                model: <[[f32; 4]; 4]>::from(glm::identity::<f32, 4>()),
+                                view: view_mat,
+                                perspective: perspective_matrix,
+                                lollipop_color: lollipop_group.color,
+                            };
 
-                            //     let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
-                            //     mat.append_translation_mut(&(bbox.min + pt_gui.model.get_total_subobj_offset(obj_id)).into());
-                            //     let color = 2.0 / (1.5f32.powf(depth as f32));
+                            target
+                                .draw(
+                                    (&icosphere_verts, lollipop_group.lolly_vertices.per_instance().unwrap()),
+                                    &icosphere_indices,
+                                    &lollipop_shader,
+                                    &uniforms,
+                                    &lollipop_params,
+                                )
+                                .unwrap();
+                            target
+                                .draw(
+                                    &lollipop_group.stick_vertices,
+                                    &lollipop_group.stick_indices,
+                                    &lollipop_stick_shader,
+                                    &uniforms,
+                                    &lollipop_stick_params,
+                                )
+                                .unwrap();
 
-                            //     let uniforms = glium::uniform! {
-                            //         model: <[[f32; 4]; 4]>::from(mat),
-                            //         view: view_mat,
-                            //         perspective: perspective_matrix,
-                            //         lollipop_color: [color, color, color, 1.0f32],
-                            //     };
+                            if !matches!(pt_gui.ui_state.tree_view_selection, TreeSelection::Paths(_)) {
+                                // ...then draw the lollipops with reverse depth order, darker
+                                // this gives the impression that the lollipops are dimly visible through the model
+                                // (dont do it for path lollipops, they're busy enough)
 
-                            //     target
-                            //         .draw(&box_verts, &box_indices, &lollipop_stick_shader, &uniforms, &lollipop_stick_params)
-                            //         .unwrap();
-                            // }
-                        }
-                        TreeSelection::Thrusters(_)
-                        | TreeSelection::Weapons(_)
-                        | TreeSelection::DockingBays(_)
-                        | TreeSelection::Glows(_)
-                        | TreeSelection::SpecialPoints(_)
-                        | TreeSelection::Turrets(_)
-                        | TreeSelection::Paths(_)
-                        | TreeSelection::EyePoints(_)
-                        | TreeSelection::VisualCenter => {
-                            // draw lollipops!
-                            for lollipop_group in &pt_gui.lollipops {
-                                if let TreeSelection::Paths(_) = &pt_gui.ui_state.tree_view_selection {
-                                    lollipop_params.blend = glium::Blend::alpha_blending();
-                                } else {
-                                    lollipop_params.blend = ADDITIVE_BLEND;
-                                }
-
+                                // same uniforms as above, but darkened
+                                // i cant just modify the previous uniforms variable, the uniforms! macro is doing some crazy shit
                                 let uniforms = glium::uniform! {
                                     model: <[[f32; 4]; 4]>::from(glm::identity::<f32, 4>()),
                                     view: view_mat,
                                     perspective: perspective_matrix,
-                                    lollipop_color: lollipop_group.color,
+                                    lollipop_color: lollipop_group.color.map(|col| col * 0.15 ), // <<< THIS IS DIFFERENT FROM ABOVE
                                 };
 
                                 target
@@ -907,46 +999,11 @@ fn main() {
                                         &icosphere_indices,
                                         &lollipop_shader,
                                         &uniforms,
-                                        &lollipop_params,
+                                        &lollipop_rev_depth_params,
                                     )
                                     .unwrap();
-                                target
-                                    .draw(
-                                        &lollipop_group.stick_vertices,
-                                        &lollipop_group.stick_indices,
-                                        &lollipop_stick_shader,
-                                        &uniforms,
-                                        &lollipop_stick_params,
-                                    )
-                                    .unwrap();
-
-                                if !matches!(pt_gui.ui_state.tree_view_selection, TreeSelection::Paths(_)) {
-                                    // ...then draw the lollipops with reverse depth order, darker
-                                    // this gives the impression that the lollipops are dimly visible through the model
-                                    // (dont do it for path lollipops, they're busy enough)
-
-                                    // same uniforms as above, but darkened
-                                    // i cant just modify the previous uniforms variable, the uniforms! macro is doing some crazy shit
-                                    let uniforms = glium::uniform! {
-                                        model: <[[f32; 4]; 4]>::from(glm::identity::<f32, 4>()),
-                                        view: view_mat,
-                                        perspective: perspective_matrix,
-                                        lollipop_color: lollipop_group.color.map(|col| col * 0.15 ), // <<< THIS IS DIFFERENT FROM ABOVE
-                                    };
-
-                                    target
-                                        .draw(
-                                            (&icosphere_verts, lollipop_group.lolly_vertices.per_instance().unwrap()),
-                                            &icosphere_indices,
-                                            &lollipop_shader,
-                                            &uniforms,
-                                            &lollipop_rev_depth_params,
-                                        )
-                                        .unwrap();
-                                }
                             }
                         }
-                        _ => {}
                     }
 
                     egui.paint(&display, &mut target, shapes);
@@ -957,18 +1014,26 @@ fn main() {
 
             // error handling (crude as it is)
             // do the whole frame, catch any panics
-            if !errored {
-                errored = std::panic::catch_unwind(std::panic::AssertUnwindSafe(redraw)).is_err();
+            if errored.is_none() && std::panic::catch_unwind(std::panic::AssertUnwindSafe(redraw)).is_err() {
+                errored = Some(
+                    panic_data_recv
+                        .recv()
+                        .unwrap_or_else(|_| ("double panic".into(), backtrace::Backtrace::new())),
+                );
             }
 
             // if there was an error, do this mini event loop and display the error message
-            if errored {
-                let (error_string, backtrace) = LAST_PANIC.get().unwrap();
+            if let Some((error_string, backtrace)) = &errored {
                 let (needs_repaint, shapes) = egui.run(&display, |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                            ui.heading(RichText::new(format!("Error! Please report this!\n\n{}", error_string)).color(Color32::RED));
-                            ui.add_sized(ui.available_size(), TextEdit::multiline(&mut &*format!("{:?}", backtrace)));
+                            ui.horizontal(|ui| {
+                                ui.heading(RichText::new("Error! Please report this!").color(Color32::RED));
+                                if ui.button("Copy").clicked() {
+                                    ui.output().copied_text = format!("{}\n\n{:?}", error_string, backtrace);
+                                }
+                            });
+                            ui.add_sized(ui.available_size(), TextEdit::multiline(&mut &*format!("{}\n\n{:?}", error_string, backtrace)));
                         });
                     });
                 });
@@ -1026,20 +1091,20 @@ fn main() {
 
 // based on the current selection which submodels should be displayed
 // TODO show destroyed models
-fn get_list_of_display_subobjects(model: &Model, tree_selection: &TreeSelection, last_selected_subobj: ObjectId) -> ObjVec<bool> {
+fn get_list_of_display_subobjects(model: &Model, tree_selection: TreeSelection, last_selected_subobj: Option<ObjectId>) -> ObjVec<bool> {
     let mut out = ObjVec(vec![false; model.sub_objects.len()]);
 
     if model.sub_objects.is_empty() {
         return out;
     }
 
-    if let TreeSelection::Insignia(InsigniaSelection::Insignia(idx)) = *tree_selection {
+    if let TreeSelection::Insignia(InsigniaSelection::Insignia(idx)) = tree_selection {
         // show the LOD objects according to the detail level of the currently selected insignia
         for (i, sub_object) in model.sub_objects.iter().enumerate() {
             out.0[i] = model.is_obj_id_ancestor(sub_object.obj_id, model.header.detail_levels[model.insignias[idx].detail_level as usize])
                 && !sub_object.is_destroyed_model();
         }
-    } else {
+    } else if let Some(last_selected_subobj) = last_selected_subobj {
         //find the top level parent of the currently subobject
         let mut top_level_parent = last_selected_subobj;
         while let Some(id) = model.sub_objects[top_level_parent].parent {
@@ -1095,17 +1160,25 @@ impl PofToolsGui {
         // determine what bank/point is selected, if any
         // push the according lollipop positions/normals based on the points positions/normals
         // push into 3 separate vectors, for 3 separate colors depending on selection state
-        match &self.ui_state.tree_view_selection {
+        match self.ui_state.tree_view_selection {
             TreeSelection::SubObjects(SubObjectSelection::SubObject(obj_id)) => {
                 for buffer in &mut self.buffer_objects {
-                    if buffer.obj_id == *obj_id {
+                    if buffer.obj_id == obj_id {
                         buffer.tint_val = 0.2;
                     }
+
+                    let size = 0.05 * model.sub_objects[obj_id].radius;
+
+                    let mut lollipop_origin = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_POINT_COLOR);
+                    lollipop_origin.push(model.get_total_subobj_offset(obj_id), Vec3d::ZERO, size);
+                    let lollipop_origin = lollipop_origin.finish(display);
+
+                    self.lollipops = vec![lollipop_origin];
                 }
             }
             TreeSelection::Textures(TextureSelection::Texture(tex)) => {
                 for buffer in &mut self.buffer_objects {
-                    if buffer.texture_id == Some(*tex) {
+                    if buffer.texture_id == Some(tex) {
                         buffer.tint_val = 0.3;
                     }
                 }
@@ -1113,7 +1186,7 @@ impl PofToolsGui {
             TreeSelection::Thrusters(thruster_selection) => {
                 let mut selected_bank = None;
                 let mut selected_point = None;
-                match *thruster_selection {
+                match thruster_selection {
                     ThrusterSelection::Bank(bank) => selected_bank = Some(bank),
                     ThrusterSelection::BankPoint(bank, point) => {
                         selected_bank = Some(bank);
@@ -1149,7 +1222,7 @@ impl PofToolsGui {
                 let mut selected_bank = None;
                 let mut selected_point = None;
                 let mut selected_weapon_system = None;
-                match *weapons_selection {
+                match weapons_selection {
                     WeaponSelection::PriBank(bank) => {
                         selected_bank = Some(bank);
                         selected_weapon_system = Some(&model.primary_weps);
@@ -1207,44 +1280,37 @@ impl PofToolsGui {
                 );
             }
             TreeSelection::DockingBays(docking_selection) => {
-                let mut selected_bank = None;
-                let mut selected_point = None;
-                match *docking_selection {
-                    DockingSelection::Bay(bank) => selected_bank = Some(bank),
-                    DockingSelection::BayPoint(bank, point) => {
-                        selected_bank = Some(bank);
-                        selected_point = Some(point);
-                    }
-                    _ => {}
-                }
+                let selected_bank = if let DockingSelection::Bay(num) = docking_selection {
+                    Some(num)
+                } else {
+                    None
+                };
 
                 const COLORS: [[f32; 4]; 3] = [LOLLIPOP_UNSELECTED_COLOR, LOLLIPOP_SELECTED_POINT_COLOR, LOLLIPOP_SELECTED_BANK_COLOR];
                 self.lollipops = build_lollipops(
                     &COLORS,
                     display,
                     model.docking_bays.iter().enumerate().flat_map(|(bay_idx, docking_bay)| {
-                        docking_bay.points.iter().enumerate().map(move |(point_idx, docking_point)| {
-                            let position = docking_point.position;
-                            let radius = 1.0;
-                            let normal = docking_point.normal * radius * 2.0;
-                            let selection = if selected_bank == Some(bay_idx) {
-                                if selected_point == Some(point_idx) {
-                                    SELECTED_POINT
-                                } else {
-                                    SELECTED_BANK
-                                }
-                            } else {
-                                UNSELECTED
-                            };
-                            (position, normal, radius, selection)
-                        })
+                        let position = docking_bay.position;
+                        let radius = self.model.header.max_radius.powf(0.4) / 4.0;
+                        let fvec = docking_bay.fvec.0 * radius * 3.0;
+                        let uvec = docking_bay.uvec.0 * radius * 3.0;
+                        let (selection1, selection2) = if selected_bank == Some(bay_idx) {
+                            (SELECTED_BANK, SELECTED_POINT)
+                        } else {
+                            (UNSELECTED, UNSELECTED)
+                        };
+
+                        let lollipop1 = (position, fvec, radius, selection1);
+                        let lollipop2 = (position, uvec, 0.0, selection2);
+                        vec![lollipop1, lollipop2]
                     }),
                 );
             }
             TreeSelection::Glows(glow_selection) => {
                 let mut selected_bank = None;
                 let mut selected_point = None;
-                match *glow_selection {
+                match glow_selection {
                     GlowSelection::Bank(bank) => selected_bank = Some(bank),
                     GlowSelection::BankPoint(bank, point) => {
                         selected_bank = Some(bank);
@@ -1284,7 +1350,7 @@ impl PofToolsGui {
             TreeSelection::SpecialPoints(special_selection) => {
                 let mut selected_point = None;
                 if let SpecialPointSelection::Point(point) = special_selection {
-                    selected_point = Some(*point);
+                    selected_point = Some(point);
                 }
 
                 const COLORS: [[f32; 4]; 2] = [LOLLIPOP_SELECTED_BANK_COLOR, LOLLIPOP_SELECTED_POINT_COLOR];
@@ -1303,7 +1369,7 @@ impl PofToolsGui {
             TreeSelection::Turrets(turret_selection) => {
                 let mut selected_turret = None;
                 let mut selected_point = None;
-                match *turret_selection {
+                match turret_selection {
                     TurretSelection::Turret(turret) => selected_turret = Some(turret),
                     TurretSelection::TurretPoint(turret, point) => {
                         selected_turret = Some(turret);
@@ -1341,7 +1407,7 @@ impl PofToolsGui {
             TreeSelection::Paths(path_selection) => {
                 let mut selected_path = None;
                 let mut selected_point = None;
-                match *path_selection {
+                match path_selection {
                     PathSelection::Path(path) => selected_path = Some(path),
                     PathSelection::PathPoint(path, point) => {
                         selected_path = Some(path);
@@ -1385,7 +1451,7 @@ impl PofToolsGui {
             }
             TreeSelection::EyePoints(eye_selection) => {
                 let mut selected_eye = None;
-                if let EyeSelection::EyePoint(point) = *eye_selection {
+                if let EyeSelection::EyePoint(point) = eye_selection {
                     selected_eye = Some(point)
                 }
 

@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display};
 use std::io::{self, Write};
@@ -5,7 +6,7 @@ use std::ops::{Add, AddAssign, Deref, DerefMut, Div, DivAssign, Index, IndexMut,
 use std::str::FromStr;
 
 use byteorder::{WriteBytesExt, LE};
-use glm::{Mat3x3, TMat4};
+use glm::{Mat3x3, TMat4, Vec3};
 use nalgebra_glm::Mat4;
 extern crate nalgebra_glm as glm;
 
@@ -34,6 +35,18 @@ id_type! {VertexId, u16}
 id_type! {NormalId, u16}
 id_type! {PolygonId, u32}
 id_type! {PathId, u32}
+
+// what, a global?? in rust?????
+// this is how the current version is kept track of while writing pof to disk
+// much easier than having to pass around a version to every Serialize implementation despite it mattering in like 1% of cases
+thread_local! {
+    pub(crate) static VERSION: Cell<Version> = Cell::new(Version::default());
+}
+macro_rules! get_version {
+    () => {
+        VERSION.with(|f| f.get())
+    };
+}
 
 // like a regular vector, but indexed with ObjectIds only, for some safety
 #[derive(Debug)]
@@ -151,13 +164,13 @@ impl From<(f32, f32, f32)> for Vec3d {
         Vec3d { x, y, z }
     }
 }
-impl From<Vec3d> for nalgebra_glm::Vec3 {
+impl From<Vec3d> for Vec3 {
     fn from(Vec3d { x, y, z }: Vec3d) -> Self {
         glm::vec3(x, y, z)
     }
 }
-impl From<nalgebra_glm::Vec3> for Vec3d {
-    fn from(vec: nalgebra_glm::Vec3) -> Self {
+impl From<Vec3> for Vec3d {
+    fn from(vec: Vec3) -> Self {
         <[f32; 3]>::from(vec).into()
     }
 }
@@ -224,6 +237,11 @@ impl Vec3d {
 
         out /= n as f32;
         out
+    }
+
+    // intentional swizzle
+    pub fn flip_y_z(&self) -> Vec3d {
+        Vec3d { x: self.x, y: self.z, z: self.y }
     }
 }
 impl Add for Vec3d {
@@ -333,10 +351,42 @@ impl From<Mat3d> for glm::Mat3x3 {
 impl From<glm::Mat3x3> for Mat3d {
     fn from(mat: glm::Mat3x3) -> Self {
         Mat3d {
-            rvec: glm::Vec3::from(mat.column(0)).into(),
-            uvec: glm::Vec3::from(mat.column(1)).into(),
-            fvec: glm::Vec3::from(mat.column(2)).into(),
+            rvec: Vec3::from(mat.column(0)).into(),
+            uvec: Vec3::from(mat.column(1)).into(),
+            fvec: Vec3::from(mat.column(2)).into(),
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NormalVec3(pub Vec3d);
+
+impl Default for NormalVec3 {
+    fn default() -> Self {
+        Self(Vec3d { x: 0.0, y: 0.0, z: 1.0 })
+    }
+}
+
+impl TryFrom<Vec3d> for NormalVec3 {
+    type Error = ();
+
+    fn try_from(value: Vec3d) -> Result<Self, Self::Error> {
+        Ok(Self(Vec3::from(value).try_normalize(1e-6).ok_or(())?.into()))
+    }
+}
+
+impl TryFrom<Vec3> for NormalVec3 {
+    type Error = ();
+
+    fn try_from(value: Vec3) -> Result<Self, Self::Error> {
+        Vec3d::from(value).try_into()
+    }
+}
+
+impl FromStr for NormalVec3 {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse::<Vec3d>()?.try_into()
     }
 }
 
@@ -620,12 +670,20 @@ impl Default for SpecialPoint {
     }
 }
 
-mk_struct! {
-    #[derive(Debug, Clone)]
-    pub struct WeaponHardpoint {
-        pub position: Vec3d,
-        pub normal: Vec3d,
-        pub offset: f32, //TODO version dependence
+#[derive(Debug, Clone)]
+pub struct WeaponHardpoint {
+    pub position: Vec3d,
+    pub normal: Vec3d,
+    pub offset: f32,
+}
+impl Serialize for WeaponHardpoint {
+    fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
+        self.position.write_to(w)?;
+        self.normal.write_to(w)?;
+        if get_version!() >= Version::V22_01 || get_version!() == Version::V21_18 {
+            self.offset.write_to(w)?;
+        }
+        Ok(())
     }
 }
 impl Default for WeaponHardpoint {
@@ -657,7 +715,7 @@ impl Default for ThrusterGlow {
 }
 
 mk_struct! {
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, PartialEq)]
     pub struct DockingPoint {
         pub position: Vec3d,
         pub normal: Vec3d,
@@ -921,7 +979,7 @@ impl BspData {
                 poly.center = Vec3d::average(vert_iter.clone());
 
                 // generate the normal by averaging the cross products of adjacent edges
-                let mut glm_verts = vert_iter.clone().map(glm::Vec3::from); // first convert to glm vectors
+                let mut glm_verts = vert_iter.clone().map(Vec3::from); // first convert to glm vectors
                 poly.normal = if poly.verts.len() == 3 {
                     // optimize a bit for for triangles, which we'll have a lot of
                     if let [Some(a), Some(b), Some(c)] = [glm_verts.next(), glm_verts.next(), glm_verts.next()] {
@@ -994,7 +1052,9 @@ pub struct ThrusterBank {
 impl Serialize for ThrusterBank {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         (self.glows.len() as u32).write_to(w)?;
-        self.properties.write_to(w)?;
+        if get_version!() >= Version::V21_17 {
+            self.properties.write_to(w)?;
+        }
         for glow in &self.glows {
             glow.write_to(w)?;
         }
@@ -1157,7 +1217,9 @@ impl Serialize for SubObject {
 pub struct Dock {
     pub properties: String,
     pub path: Option<PathId>,
-    pub points: Vec<DockingPoint>,
+    pub position: Vec3d,
+    pub fvec: NormalVec3,
+    pub uvec: NormalVec3,
 }
 impl Serialize for Dock {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
@@ -1166,10 +1228,48 @@ impl Serialize for Dock {
             None => 0_u32.write_to(w)?,
             Some(x) => [x].write_to(w)?,
         }
-        self.points.write_to(w)
+        let points = vec![
+            DockingPoint { position: self.position - self.uvec.0, normal: self.fvec.0 },
+            DockingPoint { position: self.position + self.uvec.0, normal: self.fvec.0 },
+        ];
+        points.write_to(w)
     }
 }
 impl Dock {
+    #[must_use]
+    pub fn orthonormalize(&(mut xvec): &Vec3, fvec: &Vec3) -> NormalVec3 {
+        xvec -= *fvec * xvec.dot(fvec);
+        match xvec.try_into() {
+            Ok(xvec) => xvec,
+            Err(()) => {
+                xvec = glm::vec3(0.0, 1.0, 0.0);
+                (xvec - fvec * xvec.dot(fvec)).try_into().unwrap_or_default()
+            }
+        }
+    }
+
+    pub fn get_uvec_angle(&self) -> f32 {
+        let mut fvec: Vec3 = self.fvec.0.into();
+        if fvec.try_normalize_mut(1e-6).is_none() {
+            fvec = glm::vec3(1.0, 0.0, 0.0);
+        }
+        let uvec = self.uvec.0.into();
+        let xvec = glm::vec3(0.0, 0.0, 1.0);
+        let xvec = Self::orthonormalize(&xvec, &fvec).0.into();
+        f32::atan2(fvec.cross(&xvec).dot(&uvec), xvec.dot(&uvec))
+    }
+
+    pub fn set_uvec_angle(&mut self, ang: f32) {
+        let mut fvec: Vec3 = self.fvec.0.into();
+        if fvec.try_normalize_mut(1e-6).is_none() {
+            fvec = glm::vec3(1.0, 0.0, 0.0);
+        }
+        let mut uvec = glm::vec3(0.0, 0.0, 1.0);
+        let uvec = Self::orthonormalize(&mut uvec, &fvec).0.into();
+
+        self.uvec = glm::rotate_vec3(&uvec, ang, &fvec).try_into().unwrap_or_default();
+    }
+
     pub fn get_name(&self) -> Option<&str> {
         for str in self.properties.split('\n') {
             if let Some(name) = str.strip_prefix("$name=") {
@@ -1261,19 +1361,36 @@ impl GlowPointBank {
 mk_enumeration! {
     #[derive(PartialOrd, Ord, PartialEq, Eq, Debug, Clone, Copy)]
     pub enum Version(i32) {
-        V21_16 = 2116,
-        V21_17 = 2117,
-        V22_00 = 2200,
-        V22_01 = 2201,
+        V21_16 = 2116, // (retail)
+        V21_17 = 2117, // (retail) thruster properties
+        V21_18 = 2118, // weapon offset
+        V22_00 = 2200, // aligned and SLC2
+        V22_01 = 2201, // weapon offset (+aligned, SLC2)
     }
 }
-
+impl Default for Version {
+    fn default() -> Self {
+        Self::LATEST
+    }
+}
+impl Display for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Version::V21_16 => write!(f, "21.16"),
+            Version::V21_17 => write!(f, "21.17"),
+            Version::V21_18 => write!(f, "21.18"),
+            Version::V22_00 => write!(f, "22.00"),
+            Version::V22_01 => write!(f, "22.01"),
+        }
+    }
+}
 impl Version {
     pub const LATEST: Version = Self::V22_01;
 }
 
 #[derive(Debug, Default)]
 pub struct Model {
+    pub version: Version,
     pub header: ObjHeader,
     pub sub_objects: ObjVec<SubObject>,
     pub textures: Vec<String>,
@@ -1352,10 +1469,10 @@ impl Model {
 
     pub fn path_removal_fixup(&mut self, removed_idx: PathId) {
         for bay in &mut self.docking_bays {
-            if Some(removed_idx) == bay.path {
-                bay.path = None;
-            } else if let Some(path_num) = bay.path {
-                if path_num > removed_idx {
+            if let Some(path_num) = bay.path {
+                if removed_idx == path_num {
+                    bay.path = None;
+                } else if path_num > removed_idx {
                     bay.path = Some(PathId(path_num.0 - 1));
                 }
             }
@@ -1446,15 +1563,17 @@ impl Model {
 
     pub fn recalc_radius(&mut self) {
         self.header.max_radius = 0.00001;
-        for subobj in &self.sub_objects {
-            if !self.is_obj_id_ancestor(subobj.obj_id, self.header.detail_levels[0]) {
-                continue;
-            }
+        if let Some(&detail_0) = self.header.detail_levels.first() {
+            for subobj in &self.sub_objects {
+                if !self.is_obj_id_ancestor(subobj.obj_id, detail_0) {
+                    continue;
+                }
 
-            let offset = self.get_total_subobj_offset(subobj.obj_id);
-            for vert in &subobj.bsp_data.verts {
-                if (*vert + offset).magnitude() > self.header.max_radius {
-                    self.header.max_radius = (*vert + offset).magnitude();
+                let offset = self.get_total_subobj_offset(subobj.obj_id);
+                for vert in &subobj.bsp_data.verts {
+                    if (*vert + offset).magnitude() > self.header.max_radius {
+                        self.header.max_radius = (*vert + offset).magnitude();
+                    }
                 }
             }
         }
@@ -1465,25 +1584,27 @@ impl Model {
         new_bbox.min = Vec3d { x: -0.00001, y: -0.00001, z: -0.00001 };
         new_bbox.max = Vec3d { x: 0.00001, y: 0.00001, z: 0.00001 };
 
-        for subobj in &self.sub_objects {
-            if !self.is_obj_id_ancestor(subobj.obj_id, self.header.detail_levels[0]) {
-                continue;
+        if let Some(&detail_0) = self.header.detail_levels.first() {
+            for subobj in &self.sub_objects {
+                if !self.is_obj_id_ancestor(subobj.obj_id, detail_0) {
+                    continue;
+                }
+
+                let offset = self.get_total_subobj_offset(subobj.obj_id);
+                let min = offset + subobj.bbox.min;
+                let max = offset + subobj.bbox.max;
+                new_bbox.min = Vec3d {
+                    x: f32::min(new_bbox.min.x, min.x),
+                    y: f32::min(new_bbox.min.y, min.y),
+                    z: f32::min(new_bbox.min.z, min.z),
+                };
+
+                new_bbox.max = Vec3d {
+                    x: f32::max(new_bbox.max.x, max.x),
+                    y: f32::max(new_bbox.max.y, max.y),
+                    z: f32::max(new_bbox.max.z, max.z),
+                };
             }
-
-            let offset = self.get_total_subobj_offset(subobj.obj_id);
-            let min = offset + subobj.bbox.min;
-            let max = offset + subobj.bbox.max;
-            new_bbox.min = Vec3d {
-                x: f32::min(new_bbox.min.x, min.x),
-                y: f32::min(new_bbox.min.y, min.y),
-                z: f32::min(new_bbox.min.z, min.z),
-            };
-
-            new_bbox.max = Vec3d {
-                x: f32::max(new_bbox.max.x, max.x),
-                y: f32::max(new_bbox.max.y, max.y),
-                z: f32::max(new_bbox.max.z, max.z),
-            };
         }
 
         self.header.bbox = new_bbox;
@@ -1500,19 +1621,29 @@ impl Model {
             subobjects[id].bsp_data.verts.len() + subobjects[id].children.iter().map(|id| sum_verts_recurse(subobjects, *id)).sum::<usize>()
         }
 
-        let num_verts = sum_verts_recurse(&self.sub_objects, self.header.detail_levels[0]);
+        if let Some(&detail_0) = self.header.detail_levels.first() {
+            let num_verts = sum_verts_recurse(&self.sub_objects, detail_0);
 
-        let point_mass = self.header.mass / num_verts as f32;
+            let point_mass = self.header.mass / num_verts as f32;
 
-        fn accumulate_moi_recurse(subobjects: &ObjVec<SubObject>, id: ObjectId, moi: &mut Mat3d) {
-            subobjects[id].bsp_data.verts.iter().for_each(|vert| moi.add_point_mass_moi(*vert));
-            subobjects[id].children.iter().for_each(|id| accumulate_moi_recurse(subobjects, *id, moi));
+            fn accumulate_moi_recurse(subobjects: &ObjVec<SubObject>, id: ObjectId, moi: &mut Mat3d) {
+                subobjects[id].bsp_data.verts.iter().for_each(|vert| moi.add_point_mass_moi(*vert));
+                subobjects[id].children.iter().for_each(|id| accumulate_moi_recurse(subobjects, *id, moi));
+            }
+
+            accumulate_moi_recurse(&self.sub_objects, detail_0, &mut self.header.moment_of_inertia);
+
+            let mut glm_mat: Mat3x3 = self.header.moment_of_inertia.into();
+            glm_mat *= point_mass;
+            self.header.moment_of_inertia = glm_mat.try_inverse().unwrap().into();
         }
+    }
 
-        accumulate_moi_recurse(&self.sub_objects, self.header.detail_levels[0], &mut self.header.moment_of_inertia);
-
-        let mut glm_mat: Mat3x3 = self.header.moment_of_inertia.into();
-        glm_mat *= point_mass;
-        self.header.moment_of_inertia = glm_mat.try_inverse().unwrap().into();
+    pub fn clean_up(&mut self) {
+        if let Some(shield) = &mut self.shield_data {
+            if shield.collision_tree.is_none() {
+                shield.collision_tree = Some(ShieldData::recalculate_tree(&shield.verts, &shield.polygons));
+            }
+        }
     }
 }

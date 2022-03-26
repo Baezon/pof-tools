@@ -1,10 +1,10 @@
-# Pof Tools GUI
+# Pof Tools
 Still a work in progress!
 
-If you encounter any bugs or have any ideas for features or problems with PCS2 you'd like to see addressed please make an issue for it.
-# PCS3???
+Pof Tools is a program for Windows and Linux which let's you edit properties of Freespace's model format .pof as well as convert them to and from .dae that is meant as a successor to PCS2. If you're familiar with PCS2, this program will feel largely similar.
+I'm more than willing to accept any code contributions, and if you have any bugs or feature proposals don't hesitate to post an issue.
 
-This is sort-of PCS3. I don't feel quite comfortable calling it that, but it borrows a lot of the fundamental design PCS2 uses to ease the transition.
+One of the big goals of this project is to present an interface that is more intuitive and helps users in creating models. And to that end Pof Tools already has a few features over PCS2, such as displaying warnings and errors for problems in the model, realtime simulation of glow point 'blinking', and making sure that sub object fields are only populated with valid entries for that type.
 
 # 'pof' crate
 

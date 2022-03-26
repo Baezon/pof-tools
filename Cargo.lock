@@ -413,9 +413,9 @@ checksum = "b365fabc795046672053e29c954733ec3b05e4be654ab130fe8f1f94d7051f35"
 
 [[package]]
 name = "dae-parser"
-version = "0.8.4"
+version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8945b8026291bdba45ec35fc5da69d2bd7e5ef7fcbde31e00dddf57021eb8d61"
+checksum = "a33a21e9356c71f3fbbe47dc772dc1ba6484d0eab118d4aafe54e76ee9773c70"
 dependencies = [
  "chrono",
  "minidom",
@@ -1023,11 +1023,11 @@ dependencies = [
 
 [[package]]
 name = "minidom"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "332592c2149fc7dd40a64fc9ef6f0d65607284b474cef9817d1fc8c7e7b3608e"
+checksum = "30565dc73d2f452e92e07ba1bdc0222efe5d1594586d19292de8ad8e53fdd031"
 dependencies = [
- "quick-xml 0.20.0",
+ "quick-xml",
 ]
 
 [[package]]
@@ -1458,7 +1458,7 @@ dependencies = [
 
 [[package]]
 name = "pof"
-version = "0.9.1"
+version = "1.1.0"
 dependencies = [
  "byteorder",
  "dae-parser",
@@ -1469,7 +1469,7 @@ dependencies = [
 
 [[package]]
 name = "pof-tools"
-version = "0.9.1"
+version = "1.1.0"
 dependencies = [
  "backtrace",
  "chrono",
@@ -1505,15 +1505,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7342d5883fbccae1cc37a2353b09c87c9b0f3afd73f5fb9bba687a1f733b029"
 dependencies = [
  "unicode-xid",
-]
-
-[[package]]
-name = "quick-xml"
-version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26aab6b48e2590e4a64d1ed808749ba06257882b461d01ca71baeb747074a6dd"
-dependencies = [
- "memchr",
 ]
 
 [[package]]
@@ -2207,7 +2198,7 @@ checksum = "771e2b996df720cd1c6dd9ff90f62d91698fd3610cc078388d0564bdd6622a9c"
 dependencies = [
  "libc",
  "log",
- "quick-xml 0.22.0",
+ "quick-xml",
 ]
 
 [[package]]

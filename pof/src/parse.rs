@@ -36,9 +36,9 @@ impl<R: Read + Seek> Parser<R> {
     pub fn new(mut file: R) -> io::Result<Parser<R>> {
         assert!(&read_bytes(&mut file)? == b"PSPO", "Not a freespace 2 pof file!");
 
-        let version: Version = read_i32(&mut file)?.try_into().expect("nani kono baasion");
+        let version: Version = read_i32(&mut file)?.try_into().expect("Unrecognized pof version");
 
-        //println!("The verison is {:?}", version);
+        // println!("The verison is {:?}", version);
 
         Ok(Parser { file, version })
     }
@@ -219,7 +219,9 @@ impl<R: Read + Seek> Parser<R> {
                             Ok(WeaponHardpoint {
                                 position: this.read_vec3d()?,
                                 normal: this.read_vec3d()?,
-                                offset: (this.version >= Version::V22_01).then(|| this.read_f32().unwrap()).unwrap_or(0.0),
+                                offset: (this.version >= Version::V22_01 || this.version == Version::V21_18)
+                                    .then(|| this.read_f32().unwrap())
+                                    .unwrap_or(0.0),
                             })
                         })
                     })?);
@@ -231,7 +233,9 @@ impl<R: Read + Seek> Parser<R> {
                             Ok(WeaponHardpoint {
                                 position: this.read_vec3d()?,
                                 normal: this.read_vec3d()?,
-                                offset: (this.version >= Version::V22_01).then(|| this.read_f32().unwrap()).unwrap_or(0.0),
+                                offset: (this.version >= Version::V22_01 || this.version == Version::V21_18)
+                                    .then(|| this.read_f32().unwrap())
+                                    .unwrap_or(0.0),
                             })
                         })
                     })?);
@@ -298,21 +302,18 @@ impl<R: Read + Seek> Parser<R> {
                 b"DOCK" => {
                     assert!(dock_points.is_none());
                     dock_points = Some(self.read_list(|this| {
-                        Ok(Dock {
-                            properties: this.read_string()?,
-                            path: {
-                                // spec allows for a list of paths but only the first will be used so dont bother
-                                let paths = this.read_list(|this| this.read_u32())?;
-                                paths.first().map(|&x| PathId(x))
-                            },
-                            points: {
-                                // same thing here, only first 2 are used
-                                let dockpoints =
-                                    this.read_list(|this| Ok(DockingPoint { position: this.read_vec3d()?, normal: this.read_vec3d()? }))?;
-                                assert!(dockpoints.len() < 3);
-                                dockpoints
-                            },
-                        })
+                        let properties = this.read_string()?;
+                        let paths = this.read_list(|this| this.read_u32())?; // spec allows for a list of paths but only the first will be used so dont bother
+                        let path = paths.first().map(|&x| PathId(x));
+                        // same thing here, only first 2 are used
+                        let mut dockpoints = this.read_list(|this| Ok(DockingPoint { position: this.read_vec3d()?, normal: this.read_vec3d()? }))?;
+                        let mut iter = dockpoints.drain(..2);
+                        let (p1, p2) = (iter.next().unwrap_or_default(), iter.next().unwrap_or_default());
+                        let position = (p1.position + p2.position) / 2.0;
+                        let fvec: NormalVec3 = p1.normal.try_into().unwrap_or_default();
+                        let uvec = Dock::orthonormalize(&(p2.position - p1.position).into(), &fvec.0.into());
+
+                        Ok(Dock { properties, path, position, fvec, uvec: uvec.into() })
                     })?);
                     //println!("{:#?}", dock_points);
                 }
@@ -365,7 +366,7 @@ impl<R: Read + Seek> Parser<R> {
                 }
                 b"SLC2" => {
                     assert!(shield_tree_chunk.is_none());
-                    assert!(self.version >= Version::V22_00);
+                    assert!(self.version >= Version::V22_00 || self.version == Version::V21_18);
                     // deal with this later, once we're sure to also have the shield data
                     shield_tree_chunk = Some(self.read_byte_buffer()?);
                 }
@@ -409,6 +410,7 @@ impl<R: Read + Seek> Parser<R> {
         }
 
         Ok(Model {
+            version: self.version,
             header: header.expect("No header chunk found???"),
             sub_objects,
             textures: textures.unwrap_or_default(),
@@ -696,6 +698,8 @@ use crate::*;
 use byteorder::{ReadBytesExt, LE};
 use dae_parser::source::{SourceReader, ST, XYZ};
 use dae_parser::{Document, LocalMaps, Material, Node};
+use glm::{Mat4x4, Vec3};
+use nalgebra::Point3;
 extern crate nalgebra_glm as glm;
 
 struct VertexContext {
@@ -728,7 +732,7 @@ fn flip_y_z(vec: Vec3d) -> Vec3d {
 
 // given a node, using its transforms return a position, normal and radius
 // things commonly needed by various pof points
-fn dae_parse_point(node: &Node) -> (Vec3d, Vec3d, f32) {
+fn dae_parse_point(node: &Node, parent_transform: Mat4x4) -> (Vec3d, Vec3d, f32) {
     let mut pos = Vec3d::ZERO;
     let mut norm = Vec3d::ZERO;
     let mut radius = 0.0;
@@ -737,15 +741,26 @@ fn dae_parse_point(node: &Node) -> (Vec3d, Vec3d, f32) {
             dae_parser::Transform::Translate(vec) => pos = flip_y_z(Vec3d::from(*vec.0)),
             dae_parser::Transform::Rotate(rot) => {
                 norm = {
-                    let vec = glm::Vec3::from([0.0, 1.0, 0.0]); // intentional swizzle
+                    let vec = Vec3::from([0.0, 1.0, 0.0]); // intentional swizzle
                     if rot.angle() == 180.0 {
                         Vec3d::new(0.0, 0.0, -1.0)
                     } else {
-                        flip_y_z(glm::rotate_vec3(&vec, rot.angle() / (180.0 / PI), &glm::Vec3::from(*rot.axis())).into())
+                        flip_y_z(glm::rotate_vec3(&vec, rot.angle() / (180.0 / PI), &Vec3::from(*rot.axis())).into())
                     }
                 }
             }
             dae_parser::Transform::Scale(scale) => radius = scale.0[0],
+            dae_parser::Transform::Matrix(_) => {
+                let transform = parent_transform * node.transform_as_matrix();
+                let zero = Vec3d::ZERO.into();
+                let offset = transform.transform_point(&zero) - zero;
+                let transform = transform.append_translation(&(-offset));
+                pos = offset.into();
+                pos = pos.flip_y_z();
+                let vector: Vec3d = transform.transform_point(&Point3::from_slice(&[0.0, 1.0, 0.0])).into();
+                radius = vector.magnitude();
+                norm = vector.normalize().flip_y_z();
+            }
             _ => (),
         }
     }
@@ -766,14 +781,11 @@ fn dae_parse_properties(node: &Node, properties: &mut String) {
     }
 }
 
+// 'transform` should contain only scaling and rotation!
+// all translation should be removed and put into a separate offset of some kind
 fn dae_parse_geometry(
-    node: &Node, local_maps: &LocalMaps, material_map: &HashMap<&String, TextureId>,
+    node: &Node, local_maps: &LocalMaps, material_map: &HashMap<&String, TextureId>, transform: Mat4x4,
 ) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(Texturing, Vec<PolyVertex>)>) {
-    let transform = node.transform_as_matrix();
-    let zero = Vec3d::ZERO.into();
-    let center = transform.transform_point(&zero) - zero;
-    let local_transform = transform.append_translation(&(-center));
-
     let mut vertices_out: Vec<Vec3d> = vec![];
     let mut normals_out: Vec<Vec3d> = vec![];
     let mut normals_map: HashMap<Vec3d, NormalId> = HashMap::new();
@@ -785,7 +797,7 @@ fn dae_parse_geometry(
         let mut vert_ctx = VertexContext { vertex_offset: vertices_out.len() as u16, normal_ids: vec![] };
 
         for position in Clone::clone(verts.position_importer().unwrap()) {
-            vertices_out.push(flip_y_z(&local_transform * Vec3d::from(position)));
+            vertices_out.push(flip_y_z(&transform * Vec3d::from(position)));
         }
 
         for prim_elem in &geo.elements {
@@ -804,7 +816,7 @@ fn dae_parse_geometry(
                         for normal in Clone::clone(normal_importer) {
                             vert_ctx.normal_ids.push(*normals_map.entry(normal.into()).or_insert_with(|| {
                                 let id = NormalId(normals_out.len().try_into().unwrap());
-                                normals_out.push(flip_y_z(&local_transform * Vec3d::from(normal)));
+                                normals_out.push(flip_y_z(&transform * Vec3d::from(normal)));
                                 id
                             }));
                         }
@@ -830,7 +842,7 @@ fn dae_parse_geometry(
                         for normal in Clone::clone(normal_importer) {
                             vert_ctx.normal_ids.push(*normals_map.entry(normal.into()).or_insert_with(|| {
                                 let id = NormalId(normals_out.len().try_into().unwrap());
-                                normals_out.push(flip_y_z(&local_transform * Vec3d::from(normal)));
+                                normals_out.push(flip_y_z(&transform * Vec3d::from(normal)));
                                 id
                             }));
                         }
@@ -855,7 +867,7 @@ fn dae_parse_geometry(
 
 fn dae_parse_subobject_recursive(
     node: &Node, sub_objects: &mut Vec<SubObject>, parent: ObjectId, insignias: &mut Vec<Insignia>, detail_level: Option<u32>,
-    turrets: &mut Vec<Turret>, local_maps: &LocalMaps, material_map: &HashMap<&String, TextureId>,
+    turrets: &mut Vec<Turret>, local_maps: &LocalMaps, material_map: &HashMap<&String, TextureId>, parent_transform: Mat4x4,
 ) {
     if node.instance_geometry.is_empty() {
         // ignore subobjects with no geo
@@ -871,11 +883,12 @@ fn dae_parse_subobject_recursive(
     }
     let name = name.unwrap();
 
-    let (vertices_out, normals_out, polygons_out) = dae_parse_geometry(node, local_maps, material_map);
-
-    let transform = node.transform_as_matrix();
+    let local_transform = parent_transform * node.transform_as_matrix();
     let zero = Vec3d::ZERO.into();
-    let center = transform.transform_point(&zero) - zero;
+    let center = local_transform.transform_point(&zero) - zero;
+    let local_transform = local_transform.append_translation(&(-center));
+
+    let (vertices_out, normals_out, polygons_out) = dae_parse_geometry(node, local_maps, material_map, local_transform);
 
     if name.to_lowercase().contains("insig") {
         let mut faces = vec![];
@@ -963,7 +976,7 @@ fn dae_parse_subobject_recursive(
                     turret.gun_obj = obj_id;
                     turret.base_obj = if name.contains("gun") { parent } else { obj_id };
 
-                    let (pos, norm, _) = dae_parse_point(node);
+                    let (pos, norm, _) = dae_parse_point(node, parent_transform);
                     turret.fire_points.push(pos);
                     turret.normal = norm;
                     continue;
@@ -987,7 +1000,7 @@ fn dae_parse_subobject_recursive(
                 }
             }
 
-            dae_parse_subobject_recursive(node, sub_objects, obj_id, insignias, detail_level, turrets, local_maps, material_map);
+            dae_parse_subobject_recursive(node, sub_objects, obj_id, insignias, detail_level, turrets, local_maps, material_map, local_transform);
         }
     }
 }
@@ -1032,14 +1045,15 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
     let mut visual_center = Vec3d::ZERO;
 
     for node in &scene.nodes {
-        let transform = node.transform_as_matrix();
+        let mut local_transform = node.transform_as_matrix();
         let zero = Vec3d::ZERO.into();
-        let center = transform.transform_point(&zero) - zero;
+        let center = local_transform.transform_point(&zero) - zero;
+        local_transform = local_transform.append_translation(&(-center));
 
         let name = node.name.as_ref().unwrap();
 
         if !node.instance_geometry.is_empty() {
-            let (vertices_out, normals_out, polygons_out) = dae_parse_geometry(node, &local_maps, &material_map);
+            let (vertices_out, normals_out, polygons_out) = dae_parse_geometry(node, &local_maps, &material_map, local_transform);
 
             if name.to_lowercase() == "shield" {
                 let mut polygons = vec![];
@@ -1169,6 +1183,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                         &mut turrets,
                         &local_maps,
                         &material_map,
+                        local_transform,
                     );
                 }
             }
@@ -1183,7 +1198,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                         } else if name.contains("point") {
                             let mut new_point = ThrusterGlow::default();
 
-                            let (pos, norm, rad) = dae_parse_point(node);
+                            let (pos, norm, rad) = dae_parse_point(node, local_transform);
                             new_point.position = pos;
                             new_point.normal = norm;
                             new_point.radius = rad;
@@ -1210,7 +1225,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                         } else if name.contains("point") {
                             let mut new_point = PathPoint::default();
 
-                            let (pos, _, rad) = dae_parse_point(node);
+                            let (pos, _, rad) = dae_parse_point(node, local_transform);
                             new_point.position = pos;
                             new_point.radius = rad;
 
@@ -1227,7 +1242,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                     for (node, _) in node_children_with_keyword(&node.children, "point") {
                         let mut new_point = WeaponHardpoint::default();
 
-                        let (pos, norm, _) = dae_parse_point(node);
+                        let (pos, norm, _) = dae_parse_point(node, local_transform);
                         new_point.position = pos;
                         new_point.normal = norm;
 
@@ -1253,17 +1268,18 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                 for (node, _) in node_children_with_keyword(&node.children, "bay") {
                     let mut new_bay = Dock::default();
 
+                    let transform = node.transform_as_matrix();
+                    let zero = Vec3d::ZERO.into();
+                    new_bay.position = Vec3d::from(transform.transform_point(&zero) - zero).flip_y_z();
+                    new_bay.fvec = transform.transform_vector(&glm::vec3(0., 1., 0.)).try_into().unwrap_or_default();
+                    new_bay.fvec.0 = new_bay.fvec.0.flip_y_z();
+
+                    new_bay.uvec = transform.transform_vector(&glm::vec3(0., 0., 1.)).try_into().unwrap_or_default();
+                    new_bay.uvec.0 = new_bay.uvec.0.flip_y_z();
+
                     for (node, name) in node_children_with_keyword(&node.children, "") {
                         if name.contains("properties") {
                             dae_parse_properties(node, &mut new_bay.properties);
-                        } else if name.contains("point") {
-                            let mut new_point = DockingPoint::default();
-
-                            let (pos, norm, _) = dae_parse_point(node);
-                            new_point.position = pos;
-                            new_point.normal = norm;
-
-                            new_bay.points.push(new_point);
                         } else if name.contains("path") {
                             if let Some(idx) = name.find(":") {
                                 if let Ok(val) = &name[(idx + 1)..].parse() {
@@ -1321,7 +1337,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                         } else if name.contains("point") {
                             let mut new_point = GlowPoint::default();
 
-                            let (pos, norm, rad) = dae_parse_point(node);
+                            let (pos, norm, rad) = dae_parse_point(node, local_transform);
                             new_point.position = pos;
                             new_point.normal = if name.contains("omni") { Vec3d::ZERO } else { norm };
                             new_point.radius = rad;
@@ -1340,7 +1356,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                         new_point.name = format!("{}", &name[(idx + 1)..]);
                     }
 
-                    let (pos, _, rad) = dae_parse_point(node);
+                    let (pos, _, rad) = dae_parse_point(node, local_transform);
                     new_point.position = pos;
                     new_point.radius = rad;
 
@@ -1354,7 +1370,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                 for (node, _) in node_children_with_keyword(&node.children, "point") {
                     let mut new_point = EyePoint::default();
 
-                    let (pos, norm, _) = dae_parse_point(node);
+                    let (pos, norm, _) = dae_parse_point(node, local_transform);
                     new_point.offset = pos;
                     new_point.normal = norm;
 
@@ -1370,7 +1386,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
                     eye_points.push(new_point);
                 }
             } else if name == "#visual-center" {
-                let (pos, _, _) = dae_parse_point(node);
+                let (pos, _, _) = dae_parse_point(node, local_transform);
                 visual_center = pos;
             }
         }
@@ -1383,7 +1399,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
         }
     }
 
-    if details.is_empty() {
+    if details.is_empty() && !sub_objects.is_empty() {
         details.push(ObjectId(0));
         // this is pretty bad, but not having any detail levels is worse
     }
@@ -1394,6 +1410,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
     }
 
     let mut model = Model {
+        version: Version::LATEST,
         header: ObjHeader {
             num_subobjects: sub_objects.len() as _,
             detail_levels: details,

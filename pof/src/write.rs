@@ -5,6 +5,7 @@ use std::{
 
 use byteorder::{WriteBytesExt, LE};
 use dae_parser::Document;
+use glm::{Mat4x4, Vec3};
 extern crate nalgebra_glm as glm;
 
 use crate::{
@@ -271,7 +272,7 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, bsp_data: &BspData) -> io::Resul
     Ok(())
 }
 
-fn write_chunk_raw(w: &mut impl Write, chunk_name: &[u8], f: impl FnOnce(&mut Vec<u8>) -> io::Result<()>) -> io::Result<()> {
+fn write_chunk_raw(w: &mut impl Write, chunk_name: &[u8; 4], f: impl FnOnce(&mut Vec<u8>) -> io::Result<()>) -> io::Result<()> {
     w.write_all(chunk_name)?;
     //println!("writing chunk {}", std::str::from_utf8(chunk_name).unwrap());
 
@@ -284,14 +285,14 @@ fn write_chunk_raw(w: &mut impl Write, chunk_name: &[u8], f: impl FnOnce(&mut Ve
     w.write_all(&buf)
 }
 
-fn write_chunk<T: Serialize>(w: &mut impl Write, chunk_name: &[u8], data: Option<&T>) -> io::Result<()> {
+fn write_chunk<T: Serialize>(w: &mut impl Write, chunk_name: &[u8; 4], data: Option<&T>) -> io::Result<()> {
     if let Some(data) = data {
         write_chunk_raw(w, chunk_name, |w| data.write_to(w))?
     }
     Ok(())
 }
 
-fn write_chunk_vec<T: Serialize>(w: &mut impl Write, chunk_name: &[u8], data: &[T]) -> io::Result<()> {
+fn write_chunk_vec<T: Serialize>(w: &mut impl Write, chunk_name: &[u8; 4], data: &[T]) -> io::Result<()> {
     if !data.is_empty() {
         write_chunk_raw(w, chunk_name, |w| data.write_to(w))?
     }
@@ -300,9 +301,13 @@ fn write_chunk_vec<T: Serialize>(w: &mut impl Write, chunk_name: &[u8], data: &[
 
 impl Model {
     pub fn write(&self, w: &mut impl Write) -> io::Result<()> {
+        // set the version to be using be all the serializers
+        crate::VERSION.with(|f| {
+            f.set(self.version);
+        });
         w.write_all(b"PSPO")?;
 
-        w.write_i32::<LE>(Version::LATEST.into())?;
+        w.write_i32::<LE>(self.version.into())?;
 
         write_chunk_raw(w, b"HDR2", |w| {
             self.header.max_radius.write_to(w)?;
@@ -355,7 +360,9 @@ impl Model {
                 shield_data.polygons.write_to(w)
             })?;
 
-            write_chunk(w, b"SLC2", shield_data.collision_tree.as_ref())?;
+            if self.version >= Version::V21_18 {
+                write_chunk(w, b"SLC2", shield_data.collision_tree.as_ref())?;
+            }
         }
         if self.visual_center != Vec3d::default() {
             write_chunk(w, b"ACEN", Some(&self.visual_center))?;
@@ -486,16 +493,14 @@ fn make_docking_bays_node(docks: &[Dock]) -> Node {
     let mut node = Node::new(format!("#docking bays"), Some(format!("#docking bays")));
 
     for (i, dock) in docks.iter().enumerate() {
-        let mut bay_node = Node::new(format!("#d{}", i), Some(format!("#d{}", i)));
+        let mut bay_node = Node::new(format!("#bay{}", i), Some(format!("#bay{}", i)));
 
-        for (j, point) in dock.points.iter().enumerate() {
-            let mut point_node = Node::new(format!("#d{}-point{}", i, j), Some(format!("#d{}-point{}", i, j)));
-            let pos = point.position;
-            point_node.push_transform(Translate::new([pos.x, pos.z, pos.y])); // itentional swizzle
-            point_node.push_transform(vec_to_rotation(&point.normal));
-
-            bay_node.children.push(point_node);
-        }
+        let fvec: Vec3 = dock.fvec.0.flip_y_z().into();
+        let uvec = dock.uvec.0.flip_y_z().into();
+        let mat = nalgebra::Matrix::from_columns(&[fvec.cross(&uvec), fvec, uvec]);
+        let mut mat: Mat4x4 = glm::mat3_to_mat4(&mat);
+        mat.append_translation_mut(&dock.position.flip_y_z().into());
+        bay_node.push_transform(mat);
 
         if dock.path.is_some() {
             bay_node

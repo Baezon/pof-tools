@@ -7,7 +7,7 @@ use crate::Vertex;
 // if you know a way let me know!!
 
 pub(crate) static CIRCLE_VERTS: Lazy<[Vertex; 128]> = Lazy::new(|| {
-    let mut verts = [Vertex { position: (0.0, 0.0, 0.0) }; 128];
+    let mut verts = [Vertex { position: (0.0, 0.0, 0.0), uv: (0.0, 0.0) }; 128];
     let len = verts.len();
     for (i, vert) in verts.iter_mut().enumerate() {
         vert.position.0 = ((i as f32 / len as f32) * std::f32::consts::TAU).sin();

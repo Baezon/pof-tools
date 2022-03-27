@@ -20,7 +20,13 @@ use glium::{
 use native_dialog::FileDialog;
 use pof::{Insignia, Model, ObjVec, ObjectId, Parser, ShieldData, SubObject, TextureId, Texturing, Vec3d};
 use simplelog::*;
-use std::{collections::HashMap, fs::File, io::Cursor, path::PathBuf, sync::mpsc::TryRecvError};
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{Cursor, Read},
+    path::PathBuf,
+    sync::mpsc::TryRecvError,
+};
 use ui::{PofToolsGui, Set::*, TreeSelection};
 
 mod primitives;
@@ -327,6 +333,7 @@ impl PofToolsGui {
         let (sender, receiver) = std::sync::mpsc::channel();
         self.model_loading_thread = Some(receiver);
 
+        // the model loading thread
         std::thread::spawn(move || {
             let model = std::panic::catch_unwind(move || {
                 let path = filepath.or_else(|| {
@@ -391,8 +398,6 @@ impl PofToolsGui {
                 }
             }
 
-            //println!("{}", subobject.bsp_data.verts.len());
-
             let buf = GlBufferedObject::new(display, subobject, None);
             if let Some(buf) = buf {
                 self.buffer_objects.push(buf);
@@ -409,16 +414,30 @@ impl PofToolsGui {
 
         let (sender, receiver) = std::sync::mpsc::channel();
         self.texture_loading_thread = Some(receiver);
+        let textures = self.model.textures.clone();
 
+        // the texture loading thread
         std::thread::spawn(move || {
-            let image = image::load(Cursor::new(std::fs::read("AeolusUV.dds").unwrap()), image::ImageFormat::Dds)
-                .unwrap()
-                .to_rgba8();
-            let image_dimensions = image.dimensions();
-            let image = glium::texture::RawImage2d::from_raw_rgba(image.into_raw(), image_dimensions);
-            let texture1 = SrgbTexture2d::new(&display, image).unwrap();
+            for (i, tex_name) in textures.iter().enumerate() {
+                if let Some((mut file, format)) = ["png", "dds"].iter().find_map(|ext| {
+                    let file = std::fs::File::open(format!("{}.{}", tex_name, ext));
+                    if file.is_ok() {
+                        Some((std::fs::File::open(format!("{}.{}", tex_name, ext)).unwrap(), image::ImageFormat::from_extension(ext).unwrap()))
+                    } else {
+                        Some((std::fs::File::open(format!("../maps/{}.{}", tex_name, ext)).ok()?, image::ImageFormat::from_extension(ext).unwrap()))
+                    }
+                }) {
+                    let mut buf = vec![];
+                    file.read_to_end(&mut buf).expect("failed to read image");
+                    let image = image::load(Cursor::new(buf), format).unwrap().to_rgba8();
+                    let image_dimensions = image.dimensions();
+                    let image = glium::texture::RawImage2d::from_raw_rgba(image.into_raw(), image_dimensions);
 
-            let _ = sender.send(texture1);
+                    let _ = sender.send(Some((image, TextureId(i as u32))));
+                }
+            }
+
+            let _ = sender.send(None);
         });
 
         self.maybe_recalculate_3d_helpers(display);
@@ -441,11 +460,14 @@ impl PofToolsGui {
         info!("Loaded {}", self.model.filename);
     }
 
-    fn handle_texture_loading_thread(&mut self) {
+    fn handle_texture_loading_thread(&mut self, display: &Display) {
         if let Some(thread) = &self.texture_loading_thread {
             let response = thread.try_recv();
             match response {
-                Ok(Some(data)) => self.buffer_textures.insert(data.1, data.0),
+                Ok(Some(data)) => {
+                    let texture = SrgbTexture2d::new(display, data.0).unwrap();
+                    self.buffer_textures.insert(data.1, texture);
+                }
                 Err(TryRecvError::Disconnected) | Ok(None) => self.texture_loading_thread = None,
                 Err(TryRecvError::Empty) => {}
             }
@@ -508,14 +530,6 @@ fn main() {
     let model = &pt_gui.model;
 
     // lots of graphics stuff to initialize
-
-    let image = image::load(Cursor::new(std::fs::read("AeolusDet.dds").unwrap()), image::ImageFormat::Dds)
-        .unwrap()
-        .to_rgba8();
-    let image_dimensions = image.dimensions();
-    let image = glium::texture::RawImage2d::from_raw_rgba(image.into_raw(), image_dimensions);
-    let texture2 = SrgbTexture2d::new(&display, image).unwrap();
-
     let default_material_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, DEFAULT_MAT_FRAGMENT_SHADER, None).unwrap();
     let textured_material_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, TEXTURED_FRAGMENT_SHADER, None).unwrap();
     let shield_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, SHIELD_FRAGMENT_SHADER, None).unwrap();
@@ -578,7 +592,9 @@ fn main() {
                 // handle whether the thread which handles loading has responded (if it exists)
                 pt_gui.handle_model_loading_thread(&display);
 
-                let (needs_repaint, shapes) = egui.run(&display, |ctx| pt_gui.show_ui(ctx, &display));
+                pt_gui.handle_texture_loading_thread(&display);
+
+                let needs_repaint = egui.run(&display, |ctx| pt_gui.show_ui(ctx, &display));
 
                 *control_flow = if needs_repaint {
                     display.gl_window().window().request_redraw();
@@ -604,8 +620,8 @@ fn main() {
 
                     // handle user interactions like rotating the camera
                     let rect = egui.egui_ctx.available_rect(); // the rectangle not covered by egui UI, i.e. the 3d viewport
-                    let input = egui.egui_ctx.input();
                     if rect.is_positive() {
+                        let input = egui.egui_ctx.input();
                         let mouse_pos = input.pointer.hover_pos();
                         let last_click_pos = input.pointer.press_origin();
                         let in_3d_viewport = mouse_pos.map_or(false, |hover_pos| rect.contains(hover_pos));
@@ -668,7 +684,7 @@ fn main() {
                                 dark_color = [0.05, 0.05, 0.05f32];
                             }
                         }
-                        _ => light_color = [0.9, 0.9, 0.9f32],
+                        _ => light_color = [1.0, 1.0, 1.0f32],
                     }
 
                     // set up the camera matrix
@@ -1006,7 +1022,7 @@ fn main() {
                         }
                     }
 
-                    egui.paint(&display, &mut target, shapes);
+                    egui.paint(&display, &mut target);
 
                     target.finish().unwrap();
                 }
@@ -1024,7 +1040,7 @@ fn main() {
 
             // if there was an error, do this mini event loop and display the error message
             if let Some((error_string, backtrace)) = &errored {
-                let (needs_repaint, shapes) = egui.run(&display, |ctx| {
+                let needs_repaint = egui.run(&display, |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                             ui.horizontal(|ui| {
@@ -1049,7 +1065,7 @@ fn main() {
                 use glium::Surface as _;
                 target.clear_color_and_depth((0.0, 0.0, 0.0, 1.0), 1.0);
 
-                egui.paint(&display, &mut target, shapes);
+                egui.paint(&display, &mut target);
 
                 target.finish().unwrap();
             }

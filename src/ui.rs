@@ -1,5 +1,8 @@
 use egui::{text::LayoutJob, Align2, CollapsingHeader, Color32, DragValue, Label, Response, RichText, TextFormat};
-use glium::{texture::SrgbTexture2d, Display};
+use glium::{
+    texture::{RawImage2d, SrgbTexture2d},
+    Display,
+};
 use nalgebra_glm::TMat4;
 use pof::{
     Dock, EyePoint, GlowPoint, GlowPointBank, Insignia, Model, PathId, PathPoint, SpecialPoint, SubObject, SubsysMovementAxis, TextureId,
@@ -695,7 +698,7 @@ pub(crate) struct UiState {
 pub(crate) struct PofToolsGui {
     pub model: Box<Model>,
     pub model_loading_thread: Option<Receiver<Result<Option<Box<Model>>, String>>>,
-    pub texture_loading_thread: Option<Receiver<Option<(Box<SrgbTexture2d>, TextureId)>>>,
+    pub texture_loading_thread: Option<Receiver<Option<(RawImage2d<'static, u8>, TextureId)>>>,
     pub glow_point_sim_start: std::time::Instant,
 
     pub ui_state: UiState,
@@ -710,7 +713,7 @@ pub(crate) struct PofToolsGui {
     pub camera_offset: Vec3d,
 
     pub buffer_objects: Vec<GlBufferedObject>, // all the subobjects, conditionally rendered based on the current tree selection
-    pub buffer_textures: HashMap<TextureId, &SrgbTexture2d>, // map of tex ids to actual textures
+    pub buffer_textures: HashMap<TextureId, SrgbTexture2d>, // map of tex ids to actual textures
     pub buffer_shield: Option<GlBufferedShield>, // the shield, similar to the above
     pub buffer_insignias: Vec<GlBufferedInsignia>, // the insignias, similar to the above
     pub lollipops: Vec<GlLollipops>, // the current set of lollipops being being drawn, grouped by color, and recalculated with viewport_3d_dirty above
@@ -981,7 +984,7 @@ impl UiState {
         }
     }
 
-    fn show_transform_window(ctx: &egui::CtxRef, transform_window: &mut TransformWindow) -> Option<TMat4<f32>> {
+    fn show_transform_window(ctx: &egui::Context, transform_window: &mut TransformWindow) -> Option<TMat4<f32>> {
         let mut ret = None;
         let window = egui::Window::new("Transform")
             .collapsible(false)
@@ -1317,7 +1320,7 @@ impl PofToolsGui {
     // =====================================================
     // The big top-level function for drawing and interacting with all of the UI
     // ====================================================
-    pub fn show_ui(&mut self, ctx: &egui::CtxRef, display: &Display) {
+    pub fn show_ui(&mut self, ctx: &egui::Context, display: &Display) {
         egui::TopBottomPanel::top("menu").default_height(33.0).min_height(33.0).show(ctx, |ui| {
             Ui::add_space(ui, 6.0);
             ui.horizontal(|ui| {
@@ -1385,6 +1388,12 @@ impl PofToolsGui {
                     .clicked()
                 {
                     self.wireframe_enabled = !self.wireframe_enabled;
+                }
+
+                ui.add_space(ui.available_width() - ui.spacing().interact_size.x / 2.0);
+
+                if self.model_loading_thread.is_some() || self.texture_loading_thread.is_some() {
+                    ui.add(egui::widgets::Spinner::new());
                 }
             });
         });
@@ -2445,7 +2454,6 @@ impl PofToolsGui {
                                 "forward vectors ",
                                 0.0,
                                 TextFormat {
-                                    style: TextStyle::Button,
                                     color: Color32::from_rgb(140, 150, 210),
                                     ..Default::default()
                                 },
@@ -2455,7 +2463,6 @@ impl PofToolsGui {
                                 "up vectors",
                                 0.0,
                                 TextFormat {
-                                    style: TextStyle::Body,
                                     color: Color32::from_rgb(210, 140, 140),
                                     ..Default::default()
                                 },

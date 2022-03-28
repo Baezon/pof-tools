@@ -3,6 +3,7 @@ use std::convert::TryFrom;
 use std::fmt::{Debug, Display};
 use std::io::{self, Write};
 use std::ops::{Add, AddAssign, Deref, DerefMut, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign};
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use byteorder::{WriteBytesExt, LE};
@@ -1408,7 +1409,7 @@ pub struct Model {
     pub insignias: Vec<Insignia>,
     pub shield_data: Option<ShieldData>,
 
-    pub filename: String,
+    pub path_to_file: PathBuf,
 }
 impl Model {
     pub fn get_total_subobj_offset(&self, mut id: ObjectId) -> Vec3d {

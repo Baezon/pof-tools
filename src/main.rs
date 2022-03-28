@@ -8,8 +8,8 @@ extern crate nalgebra_glm as glm;
 extern crate simplelog;
 
 use crate::ui::{
-    DockingSelection, EyeSelection, GlowSelection, InsigniaSelection, PathSelection, SpecialPointSelection, SubObjectSelection, TextureSelection,
-    ThrusterSelection, TurretSelection, WeaponSelection,
+    DisplayMode, DockingSelection, EyeSelection, GlowSelection, InsigniaSelection, PathSelection, SpecialPointSelection, SubObjectSelection,
+    TextureSelection, ThrusterSelection, TurretSelection, WeaponSelection,
 };
 use egui::{Color32, RichText, TextEdit};
 use glium::{
@@ -308,7 +308,7 @@ impl PofToolsGui {
         crossbeam::thread::scope(|s| {
             s.spawn(|_| {
                 let path = FileDialog::new()
-                    .set_filename(&model.filename)
+                    .set_filename(&model.path_to_file.file_name().unwrap_or_default().to_string_lossy())
                     .add_filter("All Supported Files", &["pof", "dae"])
                     .add_filter("Parallax Object File", &["pof"])
                     .add_filter("Digital Asset Exchange file", &["dae"])
@@ -350,11 +350,11 @@ impl PofToolsGui {
                     let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
                     info!("Attempting to load {}", filename);
                     match ext.as_ref().and_then(|ext| ext.to_str()) {
-                        Some("dae") => pof::parse_dae(path, filename),
+                        Some("dae") => pof::parse_dae(path),
                         Some("pof") => {
-                            let file = File::open(path).expect("TODO invalid file or smth i dunno");
+                            let file = File::open(&path).expect("TODO invalid file or smth i dunno");
                             let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
-                            Box::new(parser.parse(filename).expect("TODO invalid pof file or smth i dunno"))
+                            Box::new(parser.parse(path).expect("TODO invalid pof file or smth i dunno"))
                         }
                         _ => todo!(),
                     }
@@ -388,7 +388,6 @@ impl PofToolsGui {
         self.buffer_objects.clear();
         self.buffer_shield = None;
         self.buffer_insignias.clear();
-        self.buffer_textures.clear();
 
         for subobject in &self.model.sub_objects {
             for i in 0..self.model.textures.len() {
@@ -412,34 +411,6 @@ impl PofToolsGui {
             self.buffer_shield = Some(GlBufferedShield::new(display, shield));
         }
 
-        let (sender, receiver) = std::sync::mpsc::channel();
-        self.texture_loading_thread = Some(receiver);
-        let textures = self.model.textures.clone();
-
-        // the texture loading thread
-        std::thread::spawn(move || {
-            for (i, tex_name) in textures.iter().enumerate() {
-                if let Some((mut file, format)) = ["png", "dds"].iter().find_map(|ext| {
-                    let file = std::fs::File::open(format!("{}.{}", tex_name, ext));
-                    if file.is_ok() {
-                        Some((std::fs::File::open(format!("{}.{}", tex_name, ext)).unwrap(), image::ImageFormat::from_extension(ext).unwrap()))
-                    } else {
-                        Some((std::fs::File::open(format!("../maps/{}.{}", tex_name, ext)).ok()?, image::ImageFormat::from_extension(ext).unwrap()))
-                    }
-                }) {
-                    let mut buf = vec![];
-                    file.read_to_end(&mut buf).expect("failed to read image");
-                    let image = image::load(Cursor::new(buf), format).unwrap().to_rgba8();
-                    let image_dimensions = image.dimensions();
-                    let image = glium::texture::RawImage2d::from_raw_rgba(image.into_raw(), image_dimensions);
-
-                    let _ = sender.send(Some((image, TextureId(i as u32))));
-                }
-            }
-
-            let _ = sender.send(None);
-        });
-
         self.maybe_recalculate_3d_helpers(display);
 
         self.warnings.clear();
@@ -452,12 +423,16 @@ impl PofToolsGui {
         self.camera_offset = Vec3d::ZERO;
         self.camera_scale = self.model.header.max_radius * 2.0;
         self.ui_state.last_selected_subobj = self.model.header.detail_levels.first().copied();
+
+        self.load_textures();
+
+        let filename = self.model.path_to_file.file_name().unwrap_or_default().to_string_lossy();
         display
             .gl_window()
             .window()
-            .set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, &self.model.filename));
+            .set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, filename));
 
-        info!("Loaded {}", self.model.filename);
+        info!("Loaded {}", filename);
     }
 
     fn handle_texture_loading_thread(&mut self, display: &Display) {
@@ -472,6 +447,42 @@ impl PofToolsGui {
                 Err(TryRecvError::Empty) => {}
             }
         }
+    }
+
+    fn load_textures(&mut self) {
+        self.buffer_textures.clear();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.texture_loading_thread = Some(receiver);
+        let textures = self.model.textures.clone();
+        let path = self.model.path_to_file.clone();
+
+        // the texture loading thread
+        std::thread::spawn(move || {
+            for (i, tex_name) in textures.iter().enumerate() {
+                if let Some((mut file, format)) = ["png", "dds"].iter().find_map(|ext| {
+                    if let Ok(file) = std::fs::File::open(path.with_file_name(format!("{}.{}", tex_name, ext))) {
+                        Some((file, image::ImageFormat::from_extension(ext).unwrap()))
+                    } else {
+                        Some((
+                            std::fs::File::open(path.with_file_name(format!("../maps/{}.{}", tex_name, ext))).ok()?,
+                            image::ImageFormat::from_extension(ext).unwrap(),
+                        ))
+                    }
+                }) {
+                    let mut buf = vec![];
+                    file.read_to_end(&mut buf).expect("failed to read image");
+                    let image = image::load(Cursor::new(buf), format).unwrap().to_rgba8();
+                    let image_dimensions = image.dimensions();
+                    let image = glium::texture::RawImage2d::from_raw_rgba(image.into_raw(), image_dimensions);
+
+                    info!("Loaded texture {}.{}", tex_name, format.extensions_str()[0]);
+
+                    let _ = sender.send(Some((image, TextureId(i as u32))));
+                }
+            }
+
+            let _ = sender.send(None);
+        });
     }
 }
 
@@ -657,7 +668,7 @@ fn main() {
 
                     // brighten up the dark bits so wireframe is easier to see
                     let mut dark_color;
-                    if pt_gui.wireframe_enabled {
+                    if pt_gui.display_mode == DisplayMode::Wireframe {
                         default_material_draw_params.polygon_mode = glium::draw_parameters::PolygonMode::Line;
                         default_material_draw_params.backface_culling = glium::draw_parameters::BackfaceCullingMode::CullingDisabled;
                         dark_color = [0.2, 0.2, 0.2f32];
@@ -680,7 +691,7 @@ fn main() {
                         | TreeSelection::EyePoints(_)
                         | TreeSelection::VisualCenter => {
                             light_color = [0.3, 0.3, 0.3f32];
-                            if pt_gui.wireframe_enabled {
+                            if pt_gui.display_mode == DisplayMode::Wireframe {
                                 dark_color = [0.05, 0.05, 0.05f32];
                             }
                         }
@@ -714,7 +725,14 @@ fn main() {
                         if displayed_subobjects[buffer_obj.obj_id] {
                             let mut mat = glm::identity::<f32, 4>();
                             mat.append_translation_mut(&pt_gui.model.get_total_subobj_offset(buffer_obj.obj_id).into());
-                            if let Some(texture) = buffer_obj.texture_id.and_then(|tex_id| pt_gui.buffer_textures.get(&tex_id)) {
+                            if let Some(texture) = buffer_obj
+                                .texture_id
+                                // if the buffer has a tex id assigned...
+                                .filter(|_| pt_gui.display_mode == DisplayMode::Textured)
+                                // if we're displaying textures...
+                                .and_then(|tex_id| pt_gui.buffer_textures.get(&tex_id))
+                            // and we have a texture loaded, then display
+                            {
                                 // draw textured
                                 let uniforms = glium::uniform! {
                                     model: <[[f32; 4]; 4]>::from(mat),

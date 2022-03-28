@@ -683,13 +683,19 @@ pub(crate) enum Warning {
     // untextured polygons
 }
 
+#[derive(PartialEq, Eq)]
+pub(crate) enum DisplayMode {
+    Wireframe,
+    Untextured,
+    Textured,
+}
+
 #[derive(Default)]
 pub(crate) struct UiState {
     pub tree_view_selection: TreeSelection,
     pub viewport_3d_dirty: bool,
     pub last_selected_subobj: Option<ObjectId>,
     properties_panel: PropertiesPanel,
-    properties_panel_dirty: bool,
     pub display_radius: bool,
     pub display_bbox: bool,
     pub display_origin: bool,
@@ -702,7 +708,7 @@ pub(crate) struct PofToolsGui {
     pub glow_point_sim_start: std::time::Instant,
 
     pub ui_state: UiState,
-    pub wireframe_enabled: bool,
+    pub display_mode: DisplayMode,
     pub glow_point_simulation: bool,
     pub warnings: BTreeSet<Warning>,
     pub errors: BTreeSet<Error>,
@@ -738,7 +744,7 @@ impl PofToolsGui {
             texture_loading_thread: Default::default(),
             glow_point_sim_start: std::time::Instant::now(),
             ui_state: Default::default(),
-            wireframe_enabled: Default::default(),
+            display_mode: DisplayMode::Textured,
             glow_point_simulation: Default::default(),
             warnings: Default::default(),
             errors: Default::default(),
@@ -1347,7 +1353,6 @@ impl PofToolsGui {
                             .gl_window()
                             .window()
                             .set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, filename));
-                        self.model.filename = filename;
                     }
                 }
 
@@ -1383,12 +1388,32 @@ impl PofToolsGui {
 
                 ui.separator();
 
-                if ui
-                    .add(Button::new(RichText::new(if self.wireframe_enabled { "⏹" } else { "⛶" }).text_style(TextStyle::Heading)))
-                    .clicked()
-                {
-                    self.wireframe_enabled = !self.wireframe_enabled;
-                }
+                ui.scope(|ui| {
+                    if self.display_mode == DisplayMode::Textured {
+                        ui.visuals_mut().widgets.inactive.bg_stroke = ui.visuals().widgets.hovered.bg_stroke;
+                    }
+                    if ui.add(Button::new(RichText::new("\u{2593}").text_style(TextStyle::Heading))).clicked() {
+                        self.display_mode = DisplayMode::Textured;
+                    }
+                });
+
+                ui.scope(|ui| {
+                    if self.display_mode == DisplayMode::Untextured {
+                        ui.visuals_mut().widgets.inactive.bg_stroke = ui.visuals().widgets.hovered.bg_stroke;
+                    }
+                    if ui.add(Button::new(RichText::new("⏹").text_style(TextStyle::Heading))).clicked() {
+                        self.display_mode = DisplayMode::Untextured;
+                    }
+                });
+
+                ui.scope(|ui| {
+                    if self.display_mode == DisplayMode::Wireframe {
+                        ui.visuals_mut().widgets.inactive.bg_stroke = ui.visuals().widgets.hovered.bg_stroke;
+                    }
+                    if ui.add(Button::new(RichText::new("⛶").text_style(TextStyle::Heading))).clicked() {
+                        self.display_mode = DisplayMode::Wireframe;
+                    }
+                });
 
                 ui.add_space(ui.available_width() - ui.spacing().interact_size.x / 2.0);
 
@@ -1402,78 +1427,85 @@ impl PofToolsGui {
             .default_height(16.0)
             .height_range(16.0..=500.0)
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    for error in &self.errors {
-                        match *error {
-                            Error::InvalidTurretGunSubobject(turret_num) => {
-                                let turret_name = if self.model.sub_objects[self.model.turrets[turret_num].base_obj]
-                                    .name
-                                    .to_lowercase()
-                                    .starts_with("turret")
-                                {
-                                    ""
-                                } else {
-                                    "turret "
-                                };
-                                let str = format!(
-                                    "⊗ {}{} has an invalid gun object",
-                                    turret_name, self.model.sub_objects[self.model.turrets[turret_num].base_obj].name
-                                );
-                                ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::RED)));
-                            }
-                            Error::TooManyDebrisObjects => {
-                                let mut num_debris = 0;
-                                for sobj in &self.model.sub_objects {
-                                    if sobj.is_debris_model {
-                                        num_debris += 1;
-                                    }
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .min_scrolled_height(10.0)
+                    .show(ui, |ui| {
+                        for error in &self.errors {
+                            match *error {
+                                Error::InvalidTurretGunSubobject(turret_num) => {
+                                    let turret_name = if self.model.sub_objects[self.model.turrets[turret_num].base_obj]
+                                        .name
+                                        .to_lowercase()
+                                        .starts_with("turret")
+                                    {
+                                        ""
+                                    } else {
+                                        "turret "
+                                    };
+                                    let str = format!(
+                                        "⊗ {}{} has an invalid gun object",
+                                        turret_name, self.model.sub_objects[self.model.turrets[turret_num].base_obj].name
+                                    );
+                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::RED)));
                                 }
-                                ui.add(Label::new(
-                                    RichText::new(format!("⊗ This model has too many debris objects ({}/{})", num_debris, pof::MAX_DEBRIS_OBJECTS))
+                                Error::TooManyDebrisObjects => {
+                                    let mut num_debris = 0;
+                                    for sobj in &self.model.sub_objects {
+                                        if sobj.is_debris_model {
+                                            num_debris += 1;
+                                        }
+                                    }
+                                    ui.add(Label::new(
+                                        RichText::new(format!(
+                                            "⊗ This model has too many debris objects ({}/{})",
+                                            num_debris,
+                                            pof::MAX_DEBRIS_OBJECTS
+                                        ))
                                         .text_style(TextStyle::Button)
                                         .color(Color32::RED),
-                                ));
+                                    ));
+                                }
                             }
                         }
-                    }
-                    for warning in &self.warnings {
-                        match warning {
-                            Warning::RadiusTooSmall(id_opt) => {
-                                let str = format!(
-                                    "⚠ {}'s radius does not encompass all of its geometry",
-                                    id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
-                                );
-                                ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
-                            }
-                            Warning::BBoxTooSmall(id_opt) => {
-                                let str = format!(
-                                    "⚠ {}'s bounding box does not encompass all of its geometry",
-                                    id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
-                                );
-                                ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
-                            }
-                            Warning::DockingBayWithoutPath(bay_num) => {
-                                let str = format!(
-                                    "⚠ Docking bay {} cannot be used by ships without a path",
-                                    self.model.docking_bays[*bay_num].get_name().unwrap_or(&(bay_num + 1).to_string())
-                                );
-                                ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
-                            }
-                            Warning::ThrusterPropertiesInvalidVersion(idx) => {
-                                let str =
-                                    format!("⚠ Thruster bank {} has properties, which the currently selected version does not support", idx + 1);
-                                ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
-                            }
-                            Warning::WeaponOffsetInvalidVersion(weapon_selection) => {
-                                let str = format!(
-                                    "⚠ {} has an external angle offset, which the currently selected version does not support",
-                                    weapon_selection
-                                );
-                                ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                        for warning in &self.warnings {
+                            match warning {
+                                Warning::RadiusTooSmall(id_opt) => {
+                                    let str = format!(
+                                        "⚠ {}'s radius does not encompass all of its geometry",
+                                        id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
+                                    );
+                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                                }
+                                Warning::BBoxTooSmall(id_opt) => {
+                                    let str = format!(
+                                        "⚠ {}'s bounding box does not encompass all of its geometry",
+                                        id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
+                                    );
+                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                                }
+                                Warning::DockingBayWithoutPath(bay_num) => {
+                                    let str = format!(
+                                        "⚠ Docking bay {} cannot be used by ships without a path",
+                                        self.model.docking_bays[*bay_num].get_name().unwrap_or(&(bay_num + 1).to_string())
+                                    );
+                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                                }
+                                Warning::ThrusterPropertiesInvalidVersion(idx) => {
+                                    let str =
+                                        format!("⚠ Thruster bank {} has properties, which the currently selected version does not support", idx + 1);
+                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                                }
+                                Warning::WeaponOffsetInvalidVersion(weapon_selection) => {
+                                    let str = format!(
+                                        "⚠ {} has an external angle offset, which the currently selected version does not support",
+                                        weapon_selection
+                                    );
+                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                                }
                             }
                         }
-                    }
-                });
+                    });
             });
         warnings.response.sense.click = true;
         if warnings.response.clicked() {
@@ -1802,6 +1834,11 @@ impl PofToolsGui {
             .width_range(200.0..=500.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    let mut reload_textures = false;
+                    let mut properties_panel_dirty = false;
+
+                    ui.add_space(3.0);
+
                     match &mut self.ui_state.properties_panel {
                         PropertiesPanel::Header {
                             bbox_min_string,
@@ -1826,7 +1863,7 @@ impl PofToolsGui {
                                     if self.model.sub_objects[ObjectId(i as u32)].parent == None {
                                         self.model.apply_transform(ObjectId(i as u32), &matrix, true);
                                         self.ui_state.viewport_3d_dirty = true;
-                                        self.ui_state.properties_panel_dirty = true;
+                                        properties_panel_dirty = true;
 
                                         for buf in &mut self.buffer_objects {
                                             if buf.obj_id == ObjectId(i as u32) || self.model.is_obj_id_ancestor(buf.obj_id, ObjectId(i as u32)) {
@@ -1851,7 +1888,7 @@ impl PofToolsGui {
 
                                 if response.clicked() {
                                     self.model.recalc_bbox();
-                                    self.ui_state.properties_panel_dirty = true;
+                                    properties_panel_dirty = true;
                                     bbox_changed = true;
                                 }
                                 display_bbox = response.hovered() || response.has_focus() || display_bbox;
@@ -1898,7 +1935,7 @@ impl PofToolsGui {
                                 if response.clicked() {
                                     self.model.recalc_radius();
                                     radius_changed = true;
-                                    self.ui_state.properties_panel_dirty = true;
+                                    properties_panel_dirty = true;
                                 }
                                 display_radius = response.hovered() || response.has_focus() || display_radius;
                             });
@@ -1920,7 +1957,7 @@ impl PofToolsGui {
                                 ui.add(egui::Label::new("Mass:"));
                                 if ui.button("Recalculate").clicked() {
                                     self.model.recalc_mass();
-                                    self.ui_state.properties_panel_dirty = true;
+                                    properties_panel_dirty = true;
                                 }
                             });
                             UiState::model_value_edit(
@@ -1935,7 +1972,7 @@ impl PofToolsGui {
                                 ui.add(egui::Label::new("Moment of Inertia:"));
                                 if ui.button("Recalculate").clicked() {
                                     self.model.recalc_moi();
-                                    self.ui_state.properties_panel_dirty = true;
+                                    properties_panel_dirty = true;
                                 }
                             });
                             UiState::model_value_edit(
@@ -1995,7 +2032,7 @@ impl PofToolsGui {
                                 if let Some(id) = selected_id {
                                     self.model.apply_transform(id, &matrix, false);
                                     self.ui_state.viewport_3d_dirty = true;
-                                    self.ui_state.properties_panel_dirty = true;
+                                    properties_panel_dirty = true;
 
                                     for buf in &mut self.buffer_objects {
                                         if buf.obj_id == id || self.model.is_obj_id_ancestor(buf.obj_id, id) {
@@ -2050,7 +2087,7 @@ impl PofToolsGui {
 
                                 if response.clicked() {
                                     self.model.sub_objects[selected_id.unwrap()].recalc_bbox();
-                                    self.ui_state.properties_panel_dirty = true;
+                                    properties_panel_dirty = true;
                                     bbox_changed = true;
                                 }
                                 display_bbox = response.hovered() || response.has_focus() || display_bbox;
@@ -2113,7 +2150,7 @@ impl PofToolsGui {
 
                                 if response.clicked() {
                                     self.model.sub_objects[selected_id.unwrap()].recalc_radius();
-                                    self.ui_state.properties_panel_dirty = true;
+                                    properties_panel_dirty = true;
                                     radius_changed = true;
                                 }
                                 display_radius = response.hovered() || response.has_focus() || display_radius;
@@ -2181,7 +2218,15 @@ impl PofToolsGui {
                             }
                         }
                         PropertiesPanel::Texture { texture_name } => {
-                            ui.heading("Textures");
+                            ui.horizontal(|ui| {
+                                ui.heading("Textures");
+
+                                ui.add_space(ui.available_width() - 70.0);
+
+                                if ui.add_sized([70.0, ui.available_height()], egui::Button::new("🔃 Reload")).clicked() {
+                                    reload_textures = true;
+                                }
+                            });
                             ui.separator();
 
                             let tex = if let TreeSelection::Textures(TextureSelection::Texture(tex)) = self.ui_state.tree_view_selection {
@@ -2245,6 +2290,7 @@ impl PofToolsGui {
                                 } else {
                                     (None, None, None)
                                 };
+                            println!("{}", radius_string);
                             ui.label("Radius:");
                             UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, radius, radius_string);
                             ui.label("Position:");
@@ -2256,14 +2302,14 @@ impl PofToolsGui {
                                 let new_idx = response.apply(&mut self.model.thruster_banks);
 
                                 self.ui_state.tree_view_selection = TreeSelection::Thrusters(ThrusterSelection::bank(new_idx));
-                                self.ui_state.properties_panel_dirty = true;
+                                properties_panel_dirty = true;
                                 self.ui_state.viewport_3d_dirty = true;
                             } else if let Some(response) = point_idx_response {
                                 let new_idx = response.apply(&mut self.model.thruster_banks[bank_num.unwrap()].glows);
 
                                 self.ui_state.tree_view_selection =
                                     TreeSelection::Thrusters(ThrusterSelection::bank_point(bank_num.unwrap(), new_idx));
-                                self.ui_state.properties_panel_dirty = true;
+                                properties_panel_dirty = true;
                                 self.ui_state.viewport_3d_dirty = true;
                             }
                         }
@@ -2354,7 +2400,7 @@ impl PofToolsGui {
                                 let new_idx = response.apply(weapon_system);
 
                                 self.ui_state.tree_view_selection = TreeSelection::Weapons(WeaponSelection::bank(is_primary, new_idx));
-                                self.ui_state.properties_panel_dirty = true;
+                                properties_panel_dirty = true;
                                 self.ui_state.viewport_3d_dirty = true;
                             } else if let Some(response) = point_idx_response {
                                 let (weapon_system, is_primary) = weapon_system.unwrap();
@@ -2362,7 +2408,7 @@ impl PofToolsGui {
 
                                 self.ui_state.tree_view_selection =
                                     TreeSelection::Weapons(WeaponSelection::bank_point(is_primary, bank_num.unwrap(), new_idx));
-                                self.ui_state.properties_panel_dirty = true;
+                                properties_panel_dirty = true;
                                 self.ui_state.viewport_3d_dirty = true;
                             }
 
@@ -2474,7 +2520,7 @@ impl PofToolsGui {
                                 let new_idx = response.apply(&mut self.model.docking_bays);
 
                                 self.ui_state.tree_view_selection = TreeSelection::DockingBays(DockingSelection::bay(new_idx));
-                                self.ui_state.properties_panel_dirty = true;
+                                properties_panel_dirty = true;
                                 self.ui_state.viewport_3d_dirty = true;
                             }
                         }
@@ -2595,13 +2641,13 @@ impl PofToolsGui {
                                 let new_idx = response.apply(&mut self.model.glow_banks);
 
                                 self.ui_state.tree_view_selection = TreeSelection::Glows(GlowSelection::bank(new_idx));
-                                self.ui_state.properties_panel_dirty = true;
+                                properties_panel_dirty = true;
                                 self.ui_state.viewport_3d_dirty = true;
                             } else if let Some(response) = point_idx_response {
                                 let new_idx = response.apply(&mut self.model.glow_banks[bank_num.unwrap()].glow_points);
 
                                 self.ui_state.tree_view_selection = TreeSelection::Glows(GlowSelection::bank_point(bank_num.unwrap(), new_idx));
-                                self.ui_state.properties_panel_dirty = true;
+                                properties_panel_dirty = true;
                                 self.ui_state.viewport_3d_dirty = true;
                             }
                         }
@@ -2653,7 +2699,7 @@ impl PofToolsGui {
                                 let new_idx = response.apply(&mut self.model.special_points);
 
                                 self.ui_state.tree_view_selection = TreeSelection::SpecialPoints(SpecialPointSelection::point(new_idx));
-                                self.ui_state.properties_panel_dirty = true;
+                                properties_panel_dirty = true;
                                 self.ui_state.viewport_3d_dirty = true;
                             }
                         }
@@ -2757,14 +2803,14 @@ impl PofToolsGui {
                                 let new_idx = response.apply(&mut self.model.turrets);
 
                                 self.ui_state.tree_view_selection = TreeSelection::Turrets(TurretSelection::turret(new_idx));
-                                self.ui_state.properties_panel_dirty = true;
+                                properties_panel_dirty = true;
                                 self.ui_state.viewport_3d_dirty = true;
                             } else if let Some(response) = point_idx_response {
                                 let new_idx = response.apply(&mut self.model.turrets[turret_num.unwrap()].fire_points);
 
                                 self.ui_state.tree_view_selection =
                                     TreeSelection::Turrets(TurretSelection::turret_point(turret_num.unwrap(), new_idx));
-                                self.ui_state.properties_panel_dirty = true;
+                                properties_panel_dirty = true;
                                 self.ui_state.viewport_3d_dirty = true;
                             }
                         }
@@ -2824,13 +2870,13 @@ impl PofToolsGui {
                                 let new_idx = response.apply(&mut self.model.paths);
 
                                 self.ui_state.tree_view_selection = TreeSelection::Paths(PathSelection::path(new_idx));
-                                self.ui_state.properties_panel_dirty = true;
+                                properties_panel_dirty = true;
                                 self.ui_state.viewport_3d_dirty = true;
                             } else if let Some(response) = point_idx_response {
                                 let new_idx = response.apply(&mut self.model.paths[path_num.unwrap()].points);
 
                                 self.ui_state.tree_view_selection = TreeSelection::Paths(PathSelection::path_point(path_num.unwrap(), new_idx));
-                                self.ui_state.properties_panel_dirty = true;
+                                properties_panel_dirty = true;
                                 self.ui_state.viewport_3d_dirty = true;
                             }
                         }
@@ -2911,7 +2957,7 @@ impl PofToolsGui {
                                 let new_idx = response.apply(&mut self.model.eye_points);
 
                                 self.ui_state.tree_view_selection = TreeSelection::EyePoints(EyeSelection::point(new_idx));
-                                self.ui_state.properties_panel_dirty = true;
+                                properties_panel_dirty = true;
                                 self.ui_state.viewport_3d_dirty = true;
                             }
                         }
@@ -2932,9 +2978,12 @@ impl PofToolsGui {
                         }
                     }
 
-                    if self.properties_panel_dirty {
+                    if reload_textures {
+                        self.load_textures();
+                    }
+
+                    if properties_panel_dirty {
                         self.ui_state.refresh_properties_panel(&self.model);
-                        self.properties_panel_dirty = false;
                     }
                 });
             });

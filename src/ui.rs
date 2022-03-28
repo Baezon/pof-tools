@@ -1,4 +1,4 @@
-use egui::{text::LayoutJob, Align2, CollapsingHeader, Color32, DragValue, Label, Response, RichText, TextFormat};
+use egui::{style::Widgets, text::LayoutJob, Align2, CollapsingHeader, Color32, DragValue, Label, Response, RichText, TextFormat};
 use glium::Display;
 use nalgebra_glm::TMat4;
 use pof::{
@@ -757,10 +757,7 @@ impl UiState {
     }
 
     fn reset_widget_color(ui: &mut Ui) {
-        ui.visuals_mut().widgets.hovered.fg_stroke.color = Default::default();
-        ui.visuals_mut().widgets.inactive.fg_stroke.color = Default::default();
-        ui.visuals_mut().widgets.active.fg_stroke.color = Default::default();
-        ui.visuals_mut().widgets.open.fg_stroke.color = Default::default();
+        ui.visuals_mut().widgets = Widgets::default();
     }
 
     fn tree_selectable_item(&mut self, model: &Model, ui: &mut Ui, name: &str, selection: TreeSelection) {

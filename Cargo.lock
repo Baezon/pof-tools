@@ -1945,7 +1945,6 @@ dependencies = [
  "once_cell",
  "pof",
  "simplelog",
- "walkdir",
 ]
 
 [[package]]

@@ -4,6 +4,7 @@ use std::convert::TryInto;
 use std::f32::consts::PI;
 use std::io::{self};
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
+use std::path::PathBuf;
 
 fn parse_subsys_mov_type(val: i32) -> SubsysMovementType {
     match val {
@@ -43,7 +44,7 @@ impl<R: Read + Seek> Parser<R> {
         Ok(Parser { file, version })
     }
 
-    pub fn parse(&mut self, filename: String) -> io::Result<Model> {
+    pub fn parse(&mut self, path: PathBuf) -> io::Result<Model> {
         // println!("parsing new model!");
         let mut header = None;
         let mut sub_objects = ObjVec::default();
@@ -427,7 +428,7 @@ impl<R: Read + Seek> Parser<R> {
             glow_banks: glow_banks.unwrap_or_default(),
             visual_center: visual_center.unwrap_or_default(),
             shield_data,
-            filename,
+            path_to_file: path.canonicalize().unwrap_or(path),
         })
     }
 
@@ -784,7 +785,7 @@ fn dae_parse_properties(node: &Node, properties: &mut String) {
 // 'transform` should contain only scaling and rotation!
 // all translation should be removed and put into a separate offset of some kind
 fn dae_parse_geometry(
-    node: &Node, local_maps: &LocalMaps, material_map: &HashMap<&String, TextureId>, transform: Mat4x4,
+    node: &Node, local_maps: &dae_parser::LocalMaps, material_map: &HashMap<&String, TextureId>, transform: Mat4x4,
 ) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(Texturing, Vec<PolyVertex>)>) {
     let mut vertices_out: Vec<Vec3d> = vec![];
     let mut normals_out: Vec<Vec3d> = vec![];
@@ -867,7 +868,7 @@ fn dae_parse_geometry(
 
 fn dae_parse_subobject_recursive(
     node: &Node, sub_objects: &mut Vec<SubObject>, parent: ObjectId, insignias: &mut Vec<Insignia>, detail_level: Option<u32>,
-    turrets: &mut Vec<Turret>, local_maps: &LocalMaps, material_map: &HashMap<&String, TextureId>, parent_transform: Mat4x4,
+    turrets: &mut Vec<Turret>, local_maps: &dae_parser::LocalMaps, material_map: &HashMap<&String, TextureId>, parent_transform: Mat4x4,
 ) {
     if node.instance_geometry.is_empty() {
         // ignore subobjects with no geo
@@ -1016,8 +1017,8 @@ fn node_children_with_keyword<'a>(node_list: &'a [Node], keyword: &'a str) -> im
     })
 }
 
-pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Model> {
-    let document = Document::from_file(path).unwrap();
+pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
+    let document = Document::from_file(&path).unwrap();
     // use std::io::Write;
     // write!(std::fs::File::create("output.log").unwrap(), "{:#?}", document).unwrap();
     let mut sub_objects = ObjVec(vec![]);
@@ -1431,7 +1432,7 @@ pub fn parse_dae(path: impl AsRef<std::path::Path>, filename: String) -> Box<Mod
         docking_bays,
         insignias,
         shield_data,
-        filename,
+        path_to_file: path.canonicalize().unwrap_or(path),
     };
 
     model.recalc_radius();

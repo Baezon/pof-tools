@@ -8,18 +8,25 @@ extern crate nalgebra_glm as glm;
 extern crate simplelog;
 
 use crate::ui::{
-    DockingSelection, EyeSelection, GlowSelection, InsigniaSelection, PathSelection, SpecialPointSelection, SubObjectSelection, TextureSelection,
-    ThrusterSelection, TurretSelection, WeaponSelection,
+    DisplayMode, DockingSelection, EyeSelection, GlowSelection, InsigniaSelection, PathSelection, SpecialPointSelection, SubObjectSelection,
+    TextureSelection, ThrusterSelection, TurretSelection, WeaponSelection,
 };
 use egui::{Color32, RichText, TextEdit};
 use glium::{
     glutin::{self, event::WindowEvent, window::Icon},
+    texture::SrgbTexture2d,
     BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer,
 };
 use native_dialog::FileDialog;
 use pof::{Insignia, Model, ObjVec, ObjectId, Parser, ShieldData, SubObject, TextureId, Texturing, Vec3d};
 use simplelog::*;
-use std::{collections::HashMap, fs::File, path::PathBuf, sync::mpsc::TryRecvError};
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{Cursor, Read},
+    path::PathBuf,
+    sync::mpsc::TryRecvError,
+};
 use ui::{PofToolsGui, Set::*, TreeSelection};
 
 mod primitives;
@@ -76,8 +83,9 @@ impl GlLollipopsBuilder {
         matrix = glm::scale(&matrix, &glm::vec3(radius, radius, radius));
         self.lolly_vertices.push(InstanceMatrix { world_matrix: matrix.into() });
 
-        self.stick_vertices.push(Vertex { position: vertex.to_tuple() });
-        self.stick_vertices.push(Vertex { position: (vertex + normal).to_tuple() });
+        self.stick_vertices.push(Vertex { position: vertex.to_tuple(), uv: (0.0, 0.0) });
+        self.stick_vertices
+            .push(Vertex { position: (vertex + normal).to_tuple(), uv: (0.0, 0.0) });
     }
 
     fn finish(&self, display: &Display) -> GlLollipops {
@@ -112,18 +120,21 @@ impl GlBufferedShield {
         for poly in &shield_data.polygons {
             vertices.push(Vertex {
                 position: shield_data.verts[poly.verts.0 .0 as usize].to_tuple(),
+                uv: (0.0, 0.0),
             });
             normals.push(Normal { normal: poly.normal.to_tuple() });
             indices.push(indices.len() as u32);
 
             vertices.push(Vertex {
                 position: shield_data.verts[poly.verts.1 .0 as usize].to_tuple(),
+                uv: (0.0, 0.0),
             });
             normals.push(Normal { normal: poly.normal.to_tuple() });
             indices.push(indices.len() as u32);
 
             vertices.push(Vertex {
                 position: shield_data.verts[poly.verts.2 .0 as usize].to_tuple(),
+                uv: (0.0, 0.0),
             });
             normals.push(Normal { normal: poly.normal.to_tuple() });
             indices.push(indices.len() as u32);
@@ -155,18 +166,21 @@ impl GlBufferedInsignia {
 
             vertices.push(Vertex {
                 position: insignia.vertices[vert1.vertex_id.0 as usize].to_tuple(),
+                uv: vert1.uv,
             });
             normals.push(Normal { normal: normal.to_tuple() });
             indices.push(indices.len() as u32);
 
             vertices.push(Vertex {
                 position: insignia.vertices[vert2.vertex_id.0 as usize].to_tuple(),
+                uv: vert2.uv,
             });
             normals.push(Normal { normal: normal.to_tuple() });
             indices.push(indices.len() as u32);
 
             vertices.push(Vertex {
                 position: insignia.vertices[vert3.vertex_id.0 as usize].to_tuple(),
+                uv: vert3.uv,
             });
             normals.push(Normal { normal: normal.to_tuple() });
             indices.push(indices.len() as u32);
@@ -182,7 +196,7 @@ impl GlBufferedInsignia {
 
 struct GlBufferedObject {
     obj_id: ObjectId,
-    tmap: Option<TextureId>,
+    texture_id: Option<TextureId>,
     vertices: VertexBuffer<Vertex>,
     normals: VertexBuffer<Normal>,
     indices: IndexBuffer<u32>,
@@ -213,29 +227,35 @@ impl GlBufferedObject {
                     // split the first vertex off from the rest of them
                     for vertpair in remainder.windows(2) {
                         // for each pair of verts in the remainder make a tri of them, [first, vertpair[0], vertpair[1]],
-                        let index = *map.entry((first.vertex_id, first.normal_id)).or_insert_with(|| {
-                            let n = vertices.len();
-                            vertices.push(Vertex {
-                                position: bsp_data.verts[first.vertex_id.0 as usize].to_tuple(),
-                            });
-                            normals.push(Normal {
-                                normal: bsp_data.norms[first.normal_id.0 as usize].to_tuple(),
-                            });
-                            n.try_into().unwrap()
-                        });
-                        indices.push(index);
-
-                        for polyvert in vertpair {
-                            let index = *map.entry((polyvert.vertex_id, polyvert.normal_id)).or_insert_with(|| {
+                        let index = *map
+                            .entry((first.vertex_id, first.normal_id, first.uv.0.to_bits(), first.uv.1.to_bits()))
+                            .or_insert_with(|| {
                                 let n = vertices.len();
                                 vertices.push(Vertex {
-                                    position: bsp_data.verts[polyvert.vertex_id.0 as usize].to_tuple(),
+                                    position: bsp_data.verts[first.vertex_id.0 as usize].to_tuple(),
+                                    uv: first.uv,
                                 });
                                 normals.push(Normal {
-                                    normal: bsp_data.norms[polyvert.normal_id.0 as usize].to_tuple(),
+                                    normal: bsp_data.norms[first.normal_id.0 as usize].to_tuple(),
                                 });
                                 n.try_into().unwrap()
                             });
+                        indices.push(index);
+
+                        for polyvert in vertpair {
+                            let index = *map
+                                .entry((polyvert.vertex_id, polyvert.normal_id, first.uv.0.to_bits(), first.uv.1.to_bits()))
+                                .or_insert_with(|| {
+                                    let n = vertices.len();
+                                    vertices.push(Vertex {
+                                        position: bsp_data.verts[polyvert.vertex_id.0 as usize].to_tuple(),
+                                        uv: polyvert.uv,
+                                    });
+                                    normals.push(Normal {
+                                        normal: bsp_data.norms[polyvert.normal_id.0 as usize].to_tuple(),
+                                    });
+                                    n.try_into().unwrap()
+                                });
                             indices.push(index);
                         }
                     }
@@ -249,7 +269,7 @@ impl GlBufferedObject {
             info!("Built buffer for subobj {}", object.name);
             Some(GlBufferedObject {
                 obj_id: object.obj_id,
-                tmap,
+                texture_id: tmap,
                 vertices: glium::VertexBuffer::new(display, &vertices).unwrap(),
                 normals: glium::VertexBuffer::new(display, &normals).unwrap(),
                 indices: glium::IndexBuffer::new(display, glium::index::PrimitiveType::TrianglesList, &indices).unwrap(),
@@ -269,9 +289,10 @@ glium::implement_vertex!(InstanceMatrix, world_matrix);
 #[derive(Copy, Clone, Debug)]
 pub struct Vertex {
     position: (f32, f32, f32),
+    uv: (f32, f32),
 }
 
-glium::implement_vertex!(Vertex, position);
+glium::implement_vertex!(Vertex, position, uv);
 
 #[derive(Copy, Clone)]
 pub struct Normal {
@@ -287,7 +308,7 @@ impl PofToolsGui {
         crossbeam::thread::scope(|s| {
             s.spawn(|_| {
                 let path = FileDialog::new()
-                    .set_filename(&model.filename)
+                    .set_filename(&model.path_to_file.file_name().unwrap_or_default().to_string_lossy())
                     .add_filter("All Supported Files", &["pof", "dae"])
                     .add_filter("Parallax Object File", &["pof"])
                     .add_filter("Digital Asset Exchange file", &["dae"])
@@ -310,8 +331,9 @@ impl PofToolsGui {
     // opens a thread which opens the dialog and starts parsing a model
     fn start_loading_model(&mut self, filepath: Option<PathBuf>) {
         let (sender, receiver) = std::sync::mpsc::channel();
-        self.loading_thread = Some(receiver);
+        self.model_loading_thread = Some(receiver);
 
+        // the model loading thread
         std::thread::spawn(move || {
             let model = std::panic::catch_unwind(move || {
                 let path = filepath.or_else(|| {
@@ -328,11 +350,11 @@ impl PofToolsGui {
                     let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
                     info!("Attempting to load {}", filename);
                     match ext.as_ref().and_then(|ext| ext.to_str()) {
-                        Some("dae") => pof::parse_dae(path, filename),
+                        Some("dae") => pof::parse_dae(path),
                         Some("pof") => {
-                            let file = File::open(path).expect("TODO invalid file or smth i dunno");
+                            let file = File::open(&path).expect("TODO invalid file or smth i dunno");
                             let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
-                            Box::new(parser.parse(filename).expect("TODO invalid pof file or smth i dunno"))
+                            Box::new(parser.parse(path).expect("TODO invalid pof file or smth i dunno"))
                         }
                         _ => todo!(),
                     }
@@ -340,6 +362,25 @@ impl PofToolsGui {
             });
             let _ = sender.send(model.map_err(|panic| *panic.downcast().unwrap()));
         });
+    }
+
+    fn handle_model_loading_thread(&mut self, display: &Display) {
+        if let Some(thread) = &self.model_loading_thread {
+            let response = thread.try_recv();
+            match response {
+                Ok(Ok(Some(data))) => {
+                    self.model = data;
+                    self.finish_loading_model(display);
+
+                    self.model_loading_thread = None;
+                }
+                Err(TryRecvError::Disconnected) => self.model_loading_thread = None,
+                Ok(Ok(None)) => self.model_loading_thread = None,
+                Ok(Err(panic_msg)) => std::panic::panic_any(panic_msg),
+
+                Err(TryRecvError::Empty) => {}
+            }
+        }
     }
 
     // after the above thread has returned, stuffs the new model in
@@ -355,8 +396,6 @@ impl PofToolsGui {
                     self.buffer_objects.push(buf);
                 }
             }
-
-            //println!("{}", subobject.bsp_data.verts.len());
 
             let buf = GlBufferedObject::new(display, subobject, None);
             if let Some(buf) = buf {
@@ -384,12 +423,66 @@ impl PofToolsGui {
         self.camera_offset = Vec3d::ZERO;
         self.camera_scale = self.model.header.max_radius * 2.0;
         self.ui_state.last_selected_subobj = self.model.header.detail_levels.first().copied();
+
+        self.load_textures();
+
+        let filename = self.model.path_to_file.file_name().unwrap_or_default().to_string_lossy();
         display
             .gl_window()
             .window()
-            .set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, &self.model.filename));
+            .set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, filename));
 
-        info!("Loaded {}", self.model.filename);
+        info!("Loaded {}", filename);
+    }
+
+    fn handle_texture_loading_thread(&mut self, display: &Display) {
+        if let Some(thread) = &self.texture_loading_thread {
+            let response = thread.try_recv();
+            match response {
+                Ok(Some(data)) => {
+                    let texture = SrgbTexture2d::new(display, data.0).unwrap();
+                    self.buffer_textures.insert(data.1, texture);
+                }
+                Err(TryRecvError::Disconnected) | Ok(None) => self.texture_loading_thread = None,
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+    }
+
+    fn load_textures(&mut self) {
+        self.buffer_textures.clear();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.texture_loading_thread = Some(receiver);
+        let textures = self.model.textures.clone();
+        let path = self.model.path_to_file.clone();
+
+        // the texture loading thread
+        std::thread::spawn(move || {
+            for (i, tex_name) in textures.iter().enumerate() {
+                if let Some((mut file, format)) = ["png", "dds"].iter().find_map(|ext| {
+                    if let Ok(file) = std::fs::File::open(path.with_file_name(format!("{}.{}", tex_name, ext))) {
+                        Some((file, image::ImageFormat::from_extension(ext).unwrap()))
+                    } else {
+                        Some((
+                            std::fs::File::open(path.with_file_name(format!("../maps/{}.{}", tex_name, ext))).ok()?,
+                            image::ImageFormat::from_extension(ext).unwrap(),
+                        ))
+                    }
+                }) {
+                    let mut buf = vec![];
+                    file.read_to_end(&mut buf).expect("failed to read image");
+                    let image = image::load(Cursor::new(buf), format).unwrap().to_rgba8();
+                    let image_dimensions = image.dimensions();
+                    let image = glium::texture::RawImage2d::from_raw_rgba(image.into_raw(), image_dimensions);
+
+                    info!("Loaded texture {}.{}", tex_name, format.extensions_str()[0]);
+
+                    let _ = sender.send(Some((image, TextureId(i as u32))));
+                }
+            }
+
+            let _ = sender.send(None);
+        });
     }
 }
 
@@ -444,12 +537,12 @@ fn main() {
     let mut egui = egui_glium::EguiGlium::new(&display);
 
     pt_gui.start_loading_model(path);
-    egui.egui_ctx.output().cursor_icon = egui::CursorIcon::Wait;
 
     let model = &pt_gui.model;
 
     // lots of graphics stuff to initialize
     let default_material_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, DEFAULT_MAT_FRAGMENT_SHADER, None).unwrap();
+    let textured_material_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, TEXTURED_FRAGMENT_SHADER, None).unwrap();
     let shield_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, SHIELD_FRAGMENT_SHADER, None).unwrap();
     let wireframe_shader = glium::Program::from_source(&display, NO_NORMS_VERTEX_SHADER, WIRE_FRAGMENT_SHADER, None).unwrap();
     let lollipop_stick_shader = glium::Program::from_source(&display, NO_NORMS_VERTEX_SHADER, LOLLIPOP_STICK_FRAGMENT_SHADER, None).unwrap();
@@ -508,26 +601,11 @@ fn main() {
         let mut catch_redraw = || {
             let redraw = || {
                 // handle whether the thread which handles loading has responded (if it exists)
-                if let Some(thread) = &pt_gui.loading_thread {
-                    let response = thread.try_recv();
-                    match response {
-                        Ok(Ok(Some(data))) => {
-                            pt_gui.model = data;
-                            pt_gui.finish_loading_model(&display);
+                pt_gui.handle_model_loading_thread(&display);
 
-                            pt_gui.loading_thread = None;
+                pt_gui.handle_texture_loading_thread(&display);
 
-                            egui.egui_ctx.output().cursor_icon = egui::CursorIcon::Default;
-                        }
-                        Err(TryRecvError::Disconnected) => pt_gui.loading_thread = None,
-                        Ok(Ok(None)) => pt_gui.loading_thread = None,
-                        Ok(Err(panic_msg)) => std::panic::panic_any(panic_msg),
-
-                        Err(TryRecvError::Empty) => {}
-                    }
-                }
-
-                let (needs_repaint, shapes) = egui.run(&display, |ctx| pt_gui.show_ui(ctx, &display));
+                let needs_repaint = egui.run(&display, |ctx| pt_gui.show_ui(ctx, &display));
 
                 *control_flow = if needs_repaint {
                     display.gl_window().window().request_redraw();
@@ -553,8 +631,8 @@ fn main() {
 
                     // handle user interactions like rotating the camera
                     let rect = egui.egui_ctx.available_rect(); // the rectangle not covered by egui UI, i.e. the 3d viewport
-                    let input = egui.egui_ctx.input();
                     if rect.is_positive() {
+                        let input = egui.egui_ctx.input();
                         let mouse_pos = input.pointer.hover_pos();
                         let last_click_pos = input.pointer.press_origin();
                         let in_3d_viewport = mouse_pos.map_or(false, |hover_pos| rect.contains(hover_pos));
@@ -590,7 +668,7 @@ fn main() {
 
                     // brighten up the dark bits so wireframe is easier to see
                     let mut dark_color;
-                    if pt_gui.wireframe_enabled {
+                    if pt_gui.display_mode == DisplayMode::Wireframe {
                         default_material_draw_params.polygon_mode = glium::draw_parameters::PolygonMode::Line;
                         default_material_draw_params.backface_culling = glium::draw_parameters::BackfaceCullingMode::CullingDisabled;
                         dark_color = [0.2, 0.2, 0.2f32];
@@ -613,11 +691,11 @@ fn main() {
                         | TreeSelection::EyePoints(_)
                         | TreeSelection::VisualCenter => {
                             light_color = [0.3, 0.3, 0.3f32];
-                            if pt_gui.wireframe_enabled {
+                            if pt_gui.display_mode == DisplayMode::Wireframe {
                                 dark_color = [0.05, 0.05, 0.05f32];
                             }
                         }
-                        _ => light_color = [0.9, 0.9, 0.9f32],
+                        _ => light_color = [1.0, 1.0, 1.0f32],
                     }
 
                     // set up the camera matrix
@@ -647,27 +725,59 @@ fn main() {
                         if displayed_subobjects[buffer_obj.obj_id] {
                             let mut mat = glm::identity::<f32, 4>();
                             mat.append_translation_mut(&pt_gui.model.get_total_subobj_offset(buffer_obj.obj_id).into());
+                            if let Some(texture) = buffer_obj
+                                .texture_id
+                                // if the buffer has a tex id assigned...
+                                .filter(|_| pt_gui.display_mode == DisplayMode::Textured)
+                                // if we're displaying textures...
+                                .and_then(|tex_id| pt_gui.buffer_textures.get(&tex_id))
+                            // and we have a texture loaded, then display
+                            {
+                                // draw textured
+                                let uniforms = glium::uniform! {
+                                    model: <[[f32; 4]; 4]>::from(mat),
+                                    view: view_mat,
+                                    perspective: perspective_matrix,
+                                    u_light: <[f32; 3]>::from(light_vec),
+                                    dark_color: dark_color,
+                                    light_color: light_color,
+                                    tint_color: [0.0, 0.0, 1.0f32],
+                                    tint_val: buffer_obj.tint_val,
+                                    tex: texture,
+                                };
 
-                            let uniforms = glium::uniform! {
-                                model: <[[f32; 4]; 4]>::from(mat),
-                                view: view_mat,
-                                perspective: perspective_matrix,
-                                u_light: <[f32; 3]>::from(light_vec),
-                                dark_color: dark_color,
-                                light_color: light_color,
-                                tint_color: [0.0, 0.0, 1.0f32],
-                                tint_val: buffer_obj.tint_val,
-                            };
+                                target
+                                    .draw(
+                                        (&buffer_obj.vertices, &buffer_obj.normals),
+                                        &buffer_obj.indices,
+                                        &textured_material_shader,
+                                        &uniforms,
+                                        &default_material_draw_params,
+                                    )
+                                    .unwrap();
+                            } else {
+                                // draw untextured
+                                let uniforms = glium::uniform! {
+                                    model: <[[f32; 4]; 4]>::from(mat),
+                                    view: view_mat,
+                                    perspective: perspective_matrix,
+                                    u_light: <[f32; 3]>::from(light_vec),
+                                    dark_color: dark_color,
+                                    light_color: light_color,
+                                    tint_color: [0.0, 0.0, 1.0f32],
+                                    tint_val: buffer_obj.tint_val,
+                                };
 
-                            target
-                                .draw(
-                                    (&buffer_obj.vertices, &buffer_obj.normals),
-                                    &buffer_obj.indices,
-                                    &default_material_shader,
-                                    &uniforms,
-                                    &default_material_draw_params,
-                                )
-                                .unwrap();
+                                target
+                                    .draw(
+                                        (&buffer_obj.vertices, &buffer_obj.normals),
+                                        &buffer_obj.indices,
+                                        &default_material_shader,
+                                        &uniforms,
+                                        &default_material_draw_params,
+                                    )
+                                    .unwrap();
+                            }
                         }
                     }
 
@@ -930,7 +1040,7 @@ fn main() {
                         }
                     }
 
-                    egui.paint(&display, &mut target, shapes);
+                    egui.paint(&display, &mut target);
 
                     target.finish().unwrap();
                 }
@@ -948,7 +1058,7 @@ fn main() {
 
             // if there was an error, do this mini event loop and display the error message
             if let Some((error_string, backtrace)) = &errored {
-                let (needs_repaint, shapes) = egui.run(&display, |ctx| {
+                let needs_repaint = egui.run(&display, |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                             ui.horizontal(|ui| {
@@ -973,7 +1083,7 @@ fn main() {
                 use glium::Surface as _;
                 target.clear_color_and_depth((0.0, 0.0, 0.0, 1.0), 1.0);
 
-                egui.paint(&display, &mut target, shapes);
+                egui.paint(&display, &mut target);
 
                 target.finish().unwrap();
             }
@@ -1102,7 +1212,7 @@ impl PofToolsGui {
             }
             TreeSelection::Textures(TextureSelection::Texture(tex)) => {
                 for buffer in &mut self.buffer_objects {
-                    if buffer.tmap == Some(tex) {
+                    if buffer.texture_id == Some(tex) {
                         buffer.tint_val = 0.3;
                     }
                 }
@@ -1463,7 +1573,9 @@ const DEFAULT_VERTEX_SHADER: &str = r#"
 
 in vec3 position;
 in vec3 normal;
+in vec2 uv;
 
+out vec2 v_uv;
 out vec3 v_normal;
 
 uniform mat4 perspective;
@@ -1471,6 +1583,7 @@ uniform mat4 view;
 uniform mat4 model;
 
 void main() {
+    v_uv = uv;
     mat4 modelview = view * model;
     v_normal = transpose(inverse(mat3(modelview))) * normal;
     gl_Position = perspective * modelview * vec4(position, 1.0);
@@ -1489,6 +1602,34 @@ uniform mat4 model;
 void main() {
     mat4 modelview = view * model;
     gl_Position = perspective * modelview * vec4(position, 1.0);
+}
+"#;
+
+const TEXTURED_FRAGMENT_SHADER: &str = r#"
+#version 140
+
+in vec3 v_normal;
+in vec2 v_uv;
+
+out vec4 color;
+
+uniform vec3 u_light;
+uniform vec3 dark_color;
+uniform vec3 light_color;
+uniform vec3 tint_color;
+uniform float tint_val;
+uniform sampler2D tex;
+
+void main() {
+    float brightness = dot(normalize(v_normal), normalize(u_light));
+    brightness = 0.3 + 0.7 * brightness;
+    brightness = clamp(brightness, 0.0, 1.0);
+    brightness = pow(brightness, 2.5);
+
+    vec4 tex_color = texture(tex, v_uv);
+    vec3 untinted_color = mix(dark_color * tex_color.xyz, light_color * tex_color.xyz, brightness);
+
+    color = vec4(mix(untinted_color, tint_color, tint_val), 0.5);
 }
 "#;
 

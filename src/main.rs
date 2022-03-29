@@ -31,6 +31,7 @@ use ui::{PofToolsGui, Set::*, TreeSelection};
 
 mod primitives;
 mod ui;
+mod ui_properties_panel;
 
 fn create_display(event_loop: &glutin::event_loop::EventLoop<()>) -> glium::Display {
     let window_builder = glutin::window::WindowBuilder::new()

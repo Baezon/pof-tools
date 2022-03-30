@@ -1142,14 +1142,14 @@ fn get_list_of_display_subobjects(model: &Model, tree_selection: TreeSelection, 
     } else if let Some(last_selected_subobj) = last_selected_subobj {
         //find the top level parent of the currently subobject
         let mut top_level_parent = last_selected_subobj;
-        while let Some(id) = model.sub_objects[top_level_parent].parent {
+        while let Some(id) = model.sub_objects[top_level_parent].parent() {
             top_level_parent = id;
         }
 
         fn display_subobject_recursive(display_subobjects: &mut ObjVec<bool>, subobjects: &ObjVec<SubObject>, id: ObjectId) {
             display_subobjects[id] = true;
 
-            for child_id in &subobjects[id].children {
+            for child_id in subobjects[id].children() {
                 if !subobjects[*child_id].is_destroyed_model() {
                     display_subobject_recursive(display_subobjects, subobjects, *child_id);
                 }

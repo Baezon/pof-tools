@@ -390,11 +390,12 @@ pub enum Set<T> {
     One(T),
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Error {
     InvalidTurretGunSubobject(usize), // turret index
     TooManyDebrisObjects,
-    // detail# not at top of hierarchy
+    DetailObjWithParent(ObjectId),
+    DetailAndDebrisObj(ObjectId),
     // all turret base/gun objects must be disjoint!
 }
 
@@ -679,6 +680,28 @@ impl PofToolsGui {
                                         .color(Color32::RED),
                                     ));
                                 }
+                                Error::DetailObjWithParent(id) => {
+                                    ui.add(Label::new(
+                                        RichText::new(format!(
+                                            "⊗ Detail {} object ({}) must be at the top of the heirarchy (no object parent)",
+                                            self.model.header.detail_levels.iter().position(|detail_id| *detail_id == id).unwrap(),
+                                            self.model.sub_objects[id].name,
+                                        ))
+                                        .text_style(TextStyle::Button)
+                                        .color(Color32::RED),
+                                    ));
+                                }
+                                Error::DetailAndDebrisObj(id) => {
+                                    ui.add(Label::new(
+                                        RichText::new(format!(
+                                            "⊗ Detail {} object ({}) cannot also be a debris object",
+                                            self.model.header.detail_levels.iter().position(|detail_id| *detail_id == id).unwrap(),
+                                            self.model.sub_objects[id].name,
+                                        ))
+                                        .text_style(TextStyle::Button)
+                                        .color(Color32::RED),
+                                    ));
+                                }
                             }
                         }
                         for warning in &self.warnings {
@@ -747,11 +770,11 @@ impl PofToolsGui {
                             fn make_subobject_child_list(ui_state: &mut UiState, model: &Model, obj: &SubObject, ui: &mut Ui) {
                                 let name = format!("{} ({:#?})", obj.name, obj.obj_id);
                                 let selection = TreeSelection::SubObjects(SubObjectSelection::SubObject(obj.obj_id));
-                                if obj.children.is_empty() {
+                                if obj.children().next() == None {
                                     ui_state.tree_selectable_item(model, ui, &name, selection);
                                 } else {
                                     ui_state.tree_collapsing_item(model, ui, &name, selection, |ui_state, ui| {
-                                        for &i in &obj.children {
+                                        for &i in obj.children() {
                                             make_subobject_child_list(ui_state, model, &model.sub_objects[i], ui)
                                         }
                                     });
@@ -759,7 +782,7 @@ impl PofToolsGui {
                             }
 
                             for object in &self.model.sub_objects {
-                                if object.parent.is_none() {
+                                if object.parent().is_none() {
                                     make_subobject_child_list(ui_state, &self.model, object, ui);
                                 }
                             }
@@ -1060,6 +1083,8 @@ impl PofToolsGui {
             let failed_check = match error {
                 Error::InvalidTurretGunSubobject(turret) => PofToolsGui::turret_gun_subobj_not_valid(model, turret),
                 Error::TooManyDebrisObjects => model.num_debris_objects() > pof::MAX_DEBRIS_OBJECTS,
+                Error::DetailAndDebrisObj(id) => model.header.detail_levels.contains(&id) && model.sub_objects[id].is_debris_model,
+                Error::DetailObjWithParent(id) => model.header.detail_levels.contains(&id) && model.sub_objects[id].parent().is_some(),
             };
 
             let existing_warning = errors.contains(&error);
@@ -1080,6 +1105,16 @@ impl PofToolsGui {
             if model.num_debris_objects() > pof::MAX_DEBRIS_OBJECTS {
                 errors.insert(Error::TooManyDebrisObjects);
             }
+
+            for &id in &model.header.detail_levels {
+                let subobj = &model.sub_objects[id];
+                if subobj.parent().is_some() {
+                    errors.insert(Error::DetailObjWithParent(id));
+                }
+                if subobj.is_debris_model {
+                    errors.insert(Error::DetailAndDebrisObj(id));
+                }
+            }
         }
     }
 
@@ -1089,7 +1124,7 @@ impl PofToolsGui {
             return false;
         }
 
-        for &child_id in &model.sub_objects[turret.base_obj].children {
+        for &child_id in model.sub_objects[turret.base_obj].children() {
             if child_id == turret.gun_obj {
                 return false;
             }

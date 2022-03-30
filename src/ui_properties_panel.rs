@@ -180,8 +180,9 @@ impl UiState {
     }
 
     // a combo box for subobjects
-    fn subobject_combo_box(
-        ui: &mut Ui, name_list: &[String], mut_selection: &mut usize, selector_value: Option<usize>, label: &str, active_error_idx: Option<usize>,
+    // selector value is a convenience option to disable the combo box, since most properties panels work on a current selection of Option<something>
+    fn subobject_combo_box<T>(
+        ui: &mut Ui, name_list: &[String], mut_selection: &mut usize, selector_value: Option<T>, label: &str, active_error_idx: Option<usize>,
     ) -> Option<usize> {
         let mut ret = None;
 
@@ -194,6 +195,7 @@ impl UiState {
                     ui.visuals().text_color()
                 };
                 egui::ComboBox::from_label(RichText::new(label).color(color))
+                    .width(100.0)
                     .selected_text(name_list[*mut_selection].clone())
                     .show_ui(ui, |ui| {
                         for (i, name) in name_list.iter().enumerate() {
@@ -201,11 +203,12 @@ impl UiState {
                                 // change the color of this entry to red if its the error one
                                 ui.visuals_mut().override_text_color = Some(color);
                             }
-                            ui.selectable_value(mut_selection, i, name);
+                            if ui.selectable_value(mut_selection, i, name).clicked() {
+                                ret = Some(*mut_selection);
+                            }
                             ui.visuals_mut().override_text_color = None;
                         }
                     });
-                ret = Some(*mut_selection);
 
                 UiState::reset_widget_color(ui);
             } else {
@@ -816,33 +819,6 @@ impl PofToolsGui {
                 ui.heading("Header");
                 ui.separator();
 
-                if ui.add(egui::Button::new("Transform")).clicked() {
-                    transform_window.open = true;
-                }
-                if let Some(matrix) = UiState::show_transform_window(ctx, transform_window) {
-                    for i in 0..self.model.sub_objects.len() {
-                        // only apply to top-level subobjects (no parent), apply_transform() will
-                        // recursively apply the proper transform to its children
-                        if self.model.sub_objects[ObjectId(i as u32)].parent == None {
-                            self.model.apply_transform(ObjectId(i as u32), &matrix, true);
-                            self.ui_state.viewport_3d_dirty = true;
-                            properties_panel_dirty = true;
-
-                            for buf in &mut self.buffer_objects {
-                                if buf.obj_id == ObjectId(i as u32) || self.model.is_obj_id_ancestor(buf.obj_id, ObjectId(i as u32)) {
-                                    let new_buf = GlBufferedObject::new(display, &self.model.sub_objects[buf.obj_id], buf.texture_id);
-                                    if let Some(new_buf) = new_buf {
-                                        *buf = new_buf;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    self.model.recalc_bbox();
-                    self.model.recalc_radius();
-                }
-
                 let mut bbox_changed = false;
                 let mut display_bbox = false;
                 ui.horizontal(|ui| {
@@ -960,6 +936,35 @@ impl PofToolsGui {
                 if bbox_changed {
                     PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::BBoxTooSmall(None)));
                 }
+
+                ui.separator();
+
+                if ui.add(egui::Button::new("Transform Mesh")).clicked() {
+                    transform_window.open = true;
+                }
+                if let Some(matrix) = UiState::show_transform_window(ctx, transform_window) {
+                    for i in 0..self.model.sub_objects.len() {
+                        // only apply to top-level subobjects (no parent), apply_transform() will
+                        // recursively apply the proper transform to its children
+                        if self.model.sub_objects[ObjectId(i as u32)].parent() == None {
+                            self.model.apply_transform(ObjectId(i as u32), &matrix, true);
+                            self.ui_state.viewport_3d_dirty = true;
+                            properties_panel_dirty = true;
+
+                            for buf in &mut self.buffer_objects {
+                                if buf.obj_id == ObjectId(i as u32) || self.model.is_obj_id_ancestor(buf.obj_id, ObjectId(i as u32)) {
+                                    let new_buf = GlBufferedObject::new(display, &self.model.sub_objects[buf.obj_id], buf.texture_id);
+                                    if let Some(new_buf) = new_buf {
+                                        *buf = new_buf;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    self.model.recalc_bbox();
+                    self.model.recalc_radius();
+                }
             }
             PropertiesPanel::SubObject {
                 bbox_min_string,
@@ -981,26 +986,6 @@ impl PofToolsGui {
                     None
                 };
 
-                if ui.add_enabled(matches!(selected_id, Some(_)), egui::Button::new("Transform")).clicked() {
-                    transform_window.open = true;
-                }
-                if let Some(matrix) = UiState::show_transform_window(ctx, transform_window) {
-                    if let Some(id) = selected_id {
-                        self.model.apply_transform(id, &matrix, false);
-                        self.ui_state.viewport_3d_dirty = true;
-                        properties_panel_dirty = true;
-
-                        for buf in &mut self.buffer_objects {
-                            if buf.obj_id == id || self.model.is_obj_id_ancestor(buf.obj_id, id) {
-                                let new_buf = GlBufferedObject::new(display, &self.model.sub_objects[buf.obj_id], buf.texture_id);
-                                if let Some(new_buf) = new_buf {
-                                    *buf = new_buf;
-                                }
-                            }
-                        }
-                    }
-                }
-
                 ui.label("Name:");
                 if let Some(id) = selected_id {
                     ui.add(egui::TextEdit::singleline(&mut self.model.sub_objects[id].name));
@@ -1011,19 +996,32 @@ impl PofToolsGui {
                 ui.add_space(5.0);
 
                 let num_debris = self.model.num_debris_objects();
+                let cannot_be_debris =
+                    num_debris >= pof::MAX_DEBRIS_OBJECTS || selected_id.map_or(false, |id| self.model.header.detail_levels.contains(&id));
+
                 ui.add_enabled_ui(
-                    selected_id.is_some() && (num_debris < pof::MAX_DEBRIS_OBJECTS || self.model.sub_objects[selected_id.unwrap()].is_debris_model),
+                    selected_id.is_some() && (self.model.sub_objects[selected_id.unwrap()].is_debris_model || !cannot_be_debris),
                     |ui| {
-                        if selected_id.map_or(false, |id| !self.model.sub_objects[id].is_debris_model) && num_debris >= pof::MAX_DEBRIS_OBJECTS {
+                        if selected_id.map_or(false, |id| self.model.sub_objects[id].is_debris_model)
+                            && (self.model.header.detail_levels.contains(&selected_id.unwrap()) || num_debris > pof::MAX_DEBRIS_OBJECTS)
+                        {
                             UiState::set_widget_color(ui, Color32::RED);
                         }
-                        if ui
-                            .checkbox(is_debris_check, "Debris Subobject")
-                            .on_disabled_hover_text(format!("The Maximum number of Debris is {}", pof::MAX_DEBRIS_OBJECTS))
-                            .changed()
-                        {
+
+                        let mut checkbox = ui.checkbox(is_debris_check, "Debris Subobject");
+
+                        if selected_id.map_or(false, |_| num_debris >= pof::MAX_DEBRIS_OBJECTS) {
+                            checkbox = checkbox.on_disabled_hover_text(format!("The maximum number of debris is {}", pof::MAX_DEBRIS_OBJECTS));
+                        }
+
+                        if selected_id.map_or(false, |id| self.model.header.detail_levels.contains(&id)) {
+                            checkbox = checkbox.on_disabled_hover_text(format!("A detail object cannot also be debris"));
+                        }
+
+                        if checkbox.changed() {
                             self.model.sub_objects[selected_id.unwrap()].is_debris_model = *is_debris_check;
                             PofToolsGui::recheck_errors(&mut self.errors, &self.model, One(Error::TooManyDebrisObjects));
+                            PofToolsGui::recheck_errors(&mut self.errors, &self.model, One(Error::DetailAndDebrisObj(selected_id.unwrap())));
                         }
 
                         UiState::reset_widget_color(ui);
@@ -1124,6 +1122,66 @@ impl PofToolsGui {
 
                 if radius_changed {
                     PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::RadiusTooSmall(selected_id)));
+                }
+
+                ui.separator();
+
+                if ui
+                    .add_enabled(matches!(selected_id, Some(_)), egui::Button::new("Transform Mesh"))
+                    .clicked()
+                {
+                    transform_window.open = true;
+                }
+                if let Some(matrix) = UiState::show_transform_window(ctx, transform_window) {
+                    if let Some(id) = selected_id {
+                        self.model.apply_transform(id, &matrix, false);
+                        self.ui_state.viewport_3d_dirty = true;
+                        properties_panel_dirty = true;
+
+                        for buf in &mut self.buffer_objects {
+                            if buf.obj_id == id || self.model.is_obj_id_ancestor(buf.obj_id, id) {
+                                let new_buf = GlBufferedObject::new(display, &self.model.sub_objects[buf.obj_id], buf.texture_id);
+                                if let Some(new_buf) = new_buf {
+                                    *buf = new_buf;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // first index is none
+                let mut subobj_names_list = vec![format!("None")];
+                let mut combo_idx = 0;
+                // add the current parent if it exists as the second entry
+                if let Some(parent_id) = selected_id.and_then(|id| self.model.sub_objects[id].parent()) {
+                    subobj_names_list.push(self.model.sub_objects[parent_id].name.clone());
+                    combo_idx = 1;
+                }
+
+                // fill the remainder with the rest of the subobjects which are NOT children of this one
+                if let Some(id) = selected_id {
+                    subobj_names_list.extend(
+                        self.model
+                            .sub_objects
+                            .iter()
+                            .filter(|subobj| {
+                                self.model.sub_objects[id].parent() != Some(subobj.obj_id) && !self.model.is_obj_id_ancestor(subobj.obj_id, id)
+                            })
+                            .map(|subobj| subobj.name.clone()),
+                    );
+                }
+
+                if let Some(new_parent) = UiState::subobject_combo_box(ui, &subobj_names_list, &mut combo_idx, selected_id, "Parent", None) {
+                    self.model.make_orphan(selected_id.unwrap());
+
+                    if new_parent != 0 {
+                        let parent_id = self.model.get_obj_id_by_name(&subobj_names_list[new_parent]).unwrap();
+                        self.model.make_parent(parent_id, selected_id.unwrap());
+                    }
+
+                    //Error::InvalidTurretGunSubobject(())
+                    //Error::DetailObjWithParent(())
+                    PofToolsGui::recheck_errors(&mut self.errors, &self.model, All);
                 }
 
                 ui.label("Properties:");
@@ -1655,6 +1713,7 @@ impl PofToolsGui {
 
                 if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, base_idx, turret_num, "Base object", None) {
                     self.model.turrets[turret_num.unwrap()].base_obj = ObjectId(new_subobj as u32);
+                    PofToolsGui::recheck_errors(&mut self.errors, &self.model, One(Error::InvalidTurretGunSubobject(turret_num.unwrap())));
                 }
 
                 // turret gun subobjexct combo box is a bit trickier since we only want to show valid subobjects (and the currently used one,
@@ -1725,12 +1784,14 @@ impl PofToolsGui {
 
                 if let Some(response) = turret_idx_response {
                     let new_idx = response.apply(&mut self.model.turrets);
+                    PofToolsGui::recheck_errors(&mut self.errors, &self.model, All);
 
                     self.ui_state.tree_view_selection = TreeSelection::Turrets(TurretSelection::turret(new_idx));
                     properties_panel_dirty = true;
                     self.ui_state.viewport_3d_dirty = true;
                 } else if let Some(response) = point_idx_response {
                     let new_idx = response.apply(&mut self.model.turrets[turret_num.unwrap()].fire_points);
+                    PofToolsGui::recheck_errors(&mut self.errors, &self.model, All);
 
                     self.ui_state.tree_view_selection = TreeSelection::Turrets(TurretSelection::turret_point(turret_num.unwrap(), new_idx));
                     properties_panel_dirty = true;

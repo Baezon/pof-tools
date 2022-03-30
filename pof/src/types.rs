@@ -1140,7 +1140,7 @@ pub const MAX_DEBRIS_OBJECTS: u32 = 32;
 pub struct SubObject {
     pub obj_id: ObjectId,
     pub radius: f32,
-    pub parent: Option<ObjectId>,
+    pub(crate) parent: Option<ObjectId>,
     pub offset: Vec3d,
     pub geo_center: Vec3d,
     pub bbox: BoundingBox,
@@ -1150,10 +1150,18 @@ pub struct SubObject {
     pub movement_axis: SubsysMovementAxis,
     pub bsp_data: BspData,
 
-    pub children: Vec<ObjectId>,
+    pub(crate) children: Vec<ObjectId>,
     pub is_debris_model: bool,
 }
 impl SubObject {
+    pub fn parent(&self) -> Option<ObjectId> {
+        self.parent
+    }
+
+    pub fn children(&self) -> std::slice::Iter<'_, ObjectId> {
+        self.children.iter()
+    }
+
     pub fn is_destroyed_model(&self) -> bool {
         self.name.to_lowercase().ends_with("-destroyed")
     }
@@ -1645,6 +1653,24 @@ impl Model {
             if shield.collision_tree.is_none() {
                 shield.collision_tree = Some(ShieldData::recalculate_tree(&shield.verts, &shield.polygons));
             }
+        }
+    }
+
+    pub fn make_orphan(&mut self, would_be_orphan: ObjectId) {
+        if let Some(parent_id) = self.sub_objects[would_be_orphan].parent {
+            let parent_children = &mut self.sub_objects[parent_id].children;
+            parent_children.remove(parent_children.iter().position(|child_id| *child_id == would_be_orphan).unwrap());
+        }
+        self.sub_objects[would_be_orphan].parent = None;
+    }
+
+    pub fn make_parent(&mut self, new_parent: ObjectId, new_child: ObjectId) -> Option<()> {
+        if !self.is_obj_id_ancestor(new_parent, new_child) {
+            self.sub_objects[new_parent].children.push(new_child);
+            self.sub_objects[new_child].parent = Some(new_parent);
+            Some(())
+        } else {
+            None
         }
     }
 }

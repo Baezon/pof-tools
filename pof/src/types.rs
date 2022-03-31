@@ -1385,44 +1385,66 @@ impl GlowPointBank {
     }
 }
 
-mk_enumeration! {
-    #[derive(PartialOrd, Ord, PartialEq, Eq, Debug, Clone, Copy)]
-    pub enum Version(i32) {
-        V19_03 = 1903, // mass / MOI introduced
-        V20_04 = 2004, // glow point radius introduced after this
-        V20_07 = 2007, // muzzle flash introduced
-        V20_09 = 2009, // area mass conversion
-        V20_14 = 2014, // (retail freespace 1) cross sections introduced
-        V21_16 = 2116, // (retail freespace 2)
-        V21_17 = 2117, // (retail) thruster properties
-        V21_18 = 2118, // weapon offset
-        V22_00 = 2200, // aligned and SLC2
-        V22_01 = 2201, // weapon offset (+aligned, SLC2)
-    }
-}
-impl Default for Version {
-    fn default() -> Self {
-        Self::LATEST
-    }
-}
-impl Display for Version {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Version::V19_03 => write!(f, "19.03"),
-            Version::V20_04 => write!(f, "20.04"),
-            Version::V20_07 => write!(f, "20.07"),
-            Version::V20_09 => write!(f, "20.09"),
-            Version::V20_14 => write!(f, "20.14"),
-            Version::V21_16 => write!(f, "21.16"),
-            Version::V21_17 => write!(f, "21.17"),
-            Version::V21_18 => write!(f, "21.18"),
-            Version::V22_00 => write!(f, "22.00"),
-            Version::V22_01 => write!(f, "22.01"),
+macro_rules! mk_versions {
+    (@latest $last:ident) => { Self::$last };
+    (@latest $first:ident $($rest:ident)*) => { mk_versions!(@latest $($rest)*) };
+    ($($(#[doc=$doc:expr])* $name:ident($num:literal, $str:literal),)*) => {
+        mk_enumeration! {
+            #[derive(PartialOrd, Ord, PartialEq, Eq, Debug, Clone, Copy)]
+            pub enum Version(i32) {
+                $($(#[doc=$doc])* $name = $num,)*
+            }
         }
-    }
+        impl Version {
+            pub const LATEST: Version = mk_versions!(@latest $($name)*);
+            pub fn to_str(self) -> &'static str {
+                match self {
+                    $(Version::$name => $str,)*
+                }
+            }
+            pub fn documentation(self) -> &'static str {
+                match self {
+                    $(Version::$name => concat!($($doc, "\n"),*).trim()),*
+                }
+            }
+            pub fn for_each(mut f: impl FnMut(Self)) {
+                $(f(Version::$name);)*
+            }
+        }
+        impl Default for Version {
+            fn default() -> Self {
+                Self::LATEST
+            }
+        }
+        impl Display for Version {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.to_str())
+            }
+        }
+    };
 }
-impl Version {
-    pub const LATEST: Version = Self::V22_01;
+
+mk_versions! {
+    /// Prehistoric - Mass / MOI introduced
+    V19_03(1903, "19.03"),
+    /// Prehistoric - Glow point radius introduced after this
+    V20_04(2004, "20.04"),
+    /// Prehistoric - Muzzle flash introduced
+    V20_07(2007, "20.07"),
+    /// Prehistoric - Area mass conversion
+    V20_09(2009, "20.09"),
+    /// Retail FS1 - Cross sections introduced
+    V20_14(2014, "20.14"),
+    /// Retail FS2 - PCS2 Compatible
+    V21_16(2116, "21.16"),
+    /// Retail FS2 - PCS2 Compatible - Thruster properties added
+    V21_17(2117, "21.17"),
+    /// External weapon angle offset added
+    V21_18(2118, "21.18"),
+    /// SLC2 replaces SLDC (no weapon offset compatibility)
+    V22_00(2200, "22.00"),
+    /// External weapon angle offset compatible
+    V22_01(2201, "22.01"),
 }
 
 #[derive(Debug, Default)]

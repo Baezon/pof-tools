@@ -573,29 +573,17 @@ impl PofToolsGui {
                 ui.separator();
 
                 ui.menu_button(RichText::new(format!("Version: {}", self.model.version)).text_style(TextStyle::Button), |ui| {
-                    let mut response = ui
-                        .radio_value(&mut self.model.version, Version::V21_16, "21.16")
-                        .on_hover_text("Retail - PCS2 Compatible");
-                    response = response.union(
-                        ui.radio_value(&mut self.model.version, Version::V21_17, "21.17")
-                            .on_hover_text("Retail - PCS2 Compatible - Thruster properties added"),
-                    );
-                    response = response.union(
-                        ui.radio_value(&mut self.model.version, Version::V21_18, "21.18")
-                            .on_hover_text("External weapon angle offset added"),
-                    );
-                    response = response.union(
-                        ui.radio_value(&mut self.model.version, Version::V22_00, "22.00")
-                            .on_hover_text("SLC2 replaces SLDC (no weapon offset compatibility)"),
-                    );
-                    response = response.union(
-                        ui.radio_value(&mut self.model.version, Version::V22_01, "22.01")
-                            .on_hover_text("External weapon angle offset compatible"),
-                    );
+                    let mut changed = false;
+                    Version::for_each(|version| {
+                        changed |= ui
+                            .radio_value(&mut self.model.version, version, version.to_str())
+                            .on_hover_text(version.documentation())
+                            .changed();
+                    });
 
                     // we only need to recheck verson-specific warnings, but since those are parameterized, there's no easy way to say
                     // 'those specific warnings but for all their parameters' so just do them all i guess
-                    if response.changed() {
+                    if changed {
                         PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All);
                     }
                 });

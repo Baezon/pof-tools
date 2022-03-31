@@ -261,7 +261,9 @@ impl<R: Read + Seek> Parser<R> {
                     //println!("{:#?}", eye_points);
                 }
                 b"GPNT" | b"MPNT" => {
-                    let list = self.read_list(|this| {
+                    let target = if id == b"GPNT" { &mut primary_weps } else { &mut secondary_weps };
+                    assert!(target.is_none());
+                    *target = Some(self.read_list(|this| {
                         this.read_list(|this| {
                             Ok(WeaponHardpoint {
                                 position: this.read_vec3d()?,
@@ -274,14 +276,8 @@ impl<R: Read + Seek> Parser<R> {
                                 },
                             })
                         })
-                    })?;
-                    if id == b"GPNT" {
-                        primary_weps = Some(list);
-                        //println!("{:#?}", primary_weps);
-                    } else {
-                        secondary_weps = Some(list);
-                        //println!("{:#?}", secondary_weps);
-                    }
+                    })?);
+                    //println!("{:#?}", target);
                 }
                 b"TGUN" | b"TMIS" => {
                     turrets.extend(self.read_list(|this| {

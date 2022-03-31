@@ -153,6 +153,7 @@ impl<R: Read + Seek> Parser<R> {
                     let bsp_data = parse_bsp_data(&bsp_data_buffer);
                     //println!("parsed subobject {}", name);
 
+                    assert!(sub_objects[obj_id.0 as usize].is_none());
                     sub_objects[obj_id.0 as usize] = Some(SubObject {
                         obj_id,
                         radius,

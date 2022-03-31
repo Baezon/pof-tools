@@ -47,7 +47,7 @@ impl<R: Read + Seek> Parser<R> {
     pub fn parse(&mut self, path: PathBuf) -> io::Result<Model> {
         // println!("parsing new model!");
         let mut header = None;
-        let mut sub_objects = ObjVec::default();
+        let mut sub_objects = vec![];
         let mut textures = None;
         let mut paths = None;
         let mut special_points = None;
@@ -82,6 +82,9 @@ impl<R: Read + Seek> Parser<R> {
                     let max_radius = self.read_f32()?;
                     let obj_flags = self.read_u32()?;
                     let num_subobjects = self.read_u32()?;
+
+                    sub_objects = vec![None; num_subobjects as usize];
+
                     let bounding_box = self.read_bbox()?;
 
                     let detail_levels = self.read_list(|this| Ok(ObjectId(this.read_u32()?)))?;
@@ -128,6 +131,7 @@ impl<R: Read + Seek> Parser<R> {
                     //println!("{:#?}", header)
                 }
                 b"OBJ2" => {
+                    assert!(header.is_some());
                     let obj_id = ObjectId(self.read_u32().unwrap()); //id
 
                     let radius = self.read_f32().unwrap();
@@ -149,7 +153,8 @@ impl<R: Read + Seek> Parser<R> {
                     let bsp_data = parse_bsp_data(&bsp_data_buffer);
                     //println!("parsed subobject {}", name);
 
-                    sub_objects.push(SubObject {
+                    assert!(sub_objects[obj_id.0 as usize].is_none());
+                    sub_objects[obj_id.0 as usize] = Some(SubObject {
                         obj_id,
                         radius,
                         parent,
@@ -165,7 +170,7 @@ impl<R: Read + Seek> Parser<R> {
                         children: vec![],
                         is_debris_model: false,
                     });
-                    //println!("parsed subobject {:#?}", sub_objects.last());
+                    //println!("parsed subobject {:#?}", sub_objects[obj_id.0 as usize]);
                 }
                 b"TXTR" => {
                     assert!(textures.is_none());
@@ -398,6 +403,9 @@ impl<R: Read + Seek> Parser<R> {
             (None, Some(_)) => unreachable!(),
             _ => None,
         };
+
+        // now that all the subobjects shouldve have been slotted in, assert that they all exist
+        let mut sub_objects = ObjVec(sub_objects.into_iter().map(|subobj_opt| subobj_opt.unwrap()).collect());
 
         for i in 0..sub_objects.len() {
             if let Some(parent) = sub_objects.0[i].parent {

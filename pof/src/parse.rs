@@ -715,7 +715,7 @@ fn parse_bsp_data(mut buf: &[u8]) -> io::Result<BspData> {
 }
 
 fn parse_shield_node(buf: &[u8], version: Version) -> io::Result<Box<ShieldNode>> {
-    let (chunk_type, mut chunk, _) = parse_chunk_header(buf, version <= Version::V21_17)?;
+    let (chunk_type, mut chunk, _) = parse_chunk_header(buf, version < Version::V21_18)?;
     Ok(Box::new(match chunk_type {
         ShieldNode::SPLIT => ShieldNode::Split {
             bbox: read_bbox(&mut chunk)?,

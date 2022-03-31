@@ -108,11 +108,20 @@ fn align_buf(buf: &mut Vec<u8>) -> io::Result<()> {
     buf.write_all(&[0; 4][..padding_length])
 }
 
-pub(crate) fn write_shield_node(buf: &mut Vec<u8>, shield_node: &ShieldNode) -> io::Result<()> {
+pub(crate) fn write_shield_node(buf: &mut Vec<u8>, shield_node: &ShieldNode, chunk_type_is_u8: bool) -> io::Result<()> {
+    macro_rules! write_chunk_type {
+        ($n:expr) => {
+            if chunk_type_is_u8 {
+                buf.write_u8($n as u8)
+            } else {
+                buf.write_u32::<LE>($n)
+            }
+        };
+    }
     match shield_node {
         ShieldNode::Split { bbox, front, back } => {
             let base = buf.len();
-            buf.write_u32::<LE>(ShieldNode::SPLIT)?;
+            write_chunk_type!(ShieldNode::SPLIT)?;
             let chunk_size_pointer = Fixup::new(buf, base)?;
 
             bbox.write_to(buf)?;
@@ -120,16 +129,16 @@ pub(crate) fn write_shield_node(buf: &mut Vec<u8>, shield_node: &ShieldNode) -> 
             let back_offset = Fixup::new(buf, base)?;
 
             front_offset.finish(buf);
-            write_shield_node(buf, front)?;
+            write_shield_node(buf, front, chunk_type_is_u8)?;
 
             back_offset.finish(buf);
-            write_shield_node(buf, back)?;
+            write_shield_node(buf, back, chunk_type_is_u8)?;
 
             chunk_size_pointer.finish(buf);
         }
         ShieldNode::Leaf { bbox, poly_list } => {
             let base = buf.len();
-            buf.write_u32::<LE>(ShieldNode::LEAF)?;
+            write_chunk_type!(ShieldNode::LEAF)?;
             let chunk_size_pointer = Fixup::new(buf, base)?;
 
             bbox.write_to(buf)?;
@@ -309,10 +318,16 @@ impl Model {
 
         w.write_i32::<LE>(self.version.into())?;
 
-        write_chunk_raw(w, b"HDR2", |w| {
-            self.header.max_radius.write_to(w)?;
-            self.header.obj_flags.write_to(w)?;
-            self.header.num_subobjects.write_to(w)?;
+        write_chunk_raw(w, if self.version >= Version::V21_16 { b"HDR2" } else { b"OHDR" }, |w| {
+            if self.version >= Version::V21_16 {
+                self.header.max_radius.write_to(w)?;
+                self.header.obj_flags.write_to(w)?;
+                self.header.num_subobjects.write_to(w)?;
+            } else {
+                self.header.num_subobjects.write_to(w)?;
+                self.header.max_radius.write_to(w)?;
+                self.header.obj_flags.write_to(w)?;
+            }
             self.header.bbox.write_to(w)?;
             self.header.detail_levels.write_to(w)?;
             self.sub_objects
@@ -321,14 +336,28 @@ impl Model {
                 .map(|obj| obj.obj_id)
                 .collect::<Vec<_>>()
                 .write_to(w)?;
-            self.header.mass.write_to(w)?;
-            self.header.center_of_mass.write_to(w)?;
-            self.header.moment_of_inertia.write_to(w)?;
-            self.header.cross_sections.write_to(w)?;
-            self.header.bsp_lights.write_to(w)
+            if self.version >= Version::V20_09 {
+                self.header.mass.write_to(w)?;
+                self.header.center_of_mass.write_to(w)?;
+                self.header.moment_of_inertia.write_to(w)?;
+            } else if self.version >= Version::V19_03 {
+                let vol_mass = (self.header.mass / 4.65).powf(1.5);
+                vol_mass.write_to(w)?;
+                self.header.center_of_mass.write_to(w)?;
+                let mut moi = self.header.moment_of_inertia;
+                moi *= self.header.mass / vol_mass;
+                moi.write_to(w)?;
+            }
+            if self.version >= Version::V20_14 {
+                self.header.cross_sections.write_to(w)?;
+            }
+            if self.version >= Version::V20_07 {
+                self.header.bsp_lights.write_to(w)?;
+            }
+            Ok(())
         })?;
         for subobject in &self.sub_objects {
-            write_chunk(w, b"OBJ2", Some(subobject))?;
+            write_chunk(w, if self.version >= Version::V21_16 { b"SOBJ" } else { b"OBJ2" }, Some(subobject))?;
         }
         write_chunk_vec(w, b"TXTR", &self.textures)?;
         write_chunk_vec(w, b"PATH", &self.paths)?;
@@ -361,7 +390,7 @@ impl Model {
             })?;
 
             if self.version >= Version::V21_18 {
-                write_chunk(w, b"SLC2", shield_data.collision_tree.as_ref())?;
+                write_chunk(w, if self.version >= Version::V22_00 { b"SLC2" } else { b"SLDC" }, shield_data.collision_tree.as_ref())?;
             }
         }
         if self.visual_center != Vec3d::default() {

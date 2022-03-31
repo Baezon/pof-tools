@@ -657,7 +657,7 @@ impl Serialize for ShieldNode {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         let mut buf = vec![];
 
-        crate::write::write_shield_node(&mut buf, self)?;
+        crate::write::write_shield_node(&mut buf, self, get_version!() < Version::V21_18)?;
 
         w.write_u32::<LE>((buf.len()) as u32)?;
         w.write_all(&buf)
@@ -694,7 +694,8 @@ impl Serialize for WeaponHardpoint {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         self.position.write_to(w)?;
         self.normal.write_to(w)?;
-        if get_version!() >= Version::V22_01 || get_version!() == Version::V21_18 {
+        let version = get_version!();
+        if version >= Version::V22_01 || version == Version::V21_18 {
             self.offset.write_to(w)?;
         }
         Ok(())
@@ -710,13 +711,11 @@ impl Default for WeaponHardpoint {
     }
 }
 
-mk_struct! {
-    #[derive(Debug, Clone)]
-    pub struct ThrusterGlow {
-        pub position: Vec3d,
-        pub normal: Vec3d,
-        pub radius: f32,
-    }
+#[derive(Debug, Clone)]
+pub struct ThrusterGlow {
+    pub position: Vec3d,
+    pub normal: Vec3d,
+    pub radius: f32,
 }
 impl Default for ThrusterGlow {
     fn default() -> Self {
@@ -725,6 +724,16 @@ impl Default for ThrusterGlow {
             normal: Vec3d { x: 0.0, y: 0.0, z: -1.0 },
             radius: 1.0,
         }
+    }
+}
+impl Serialize for ThrusterGlow {
+    fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
+        self.position.write_to(w)?;
+        self.normal.write_to(w)?;
+        if get_version!() > Version::V20_04 {
+            self.radius.write_to(w)?;
+        }
+        Ok(())
     }
 }
 
@@ -1226,10 +1235,17 @@ impl SubObject {
 }
 impl Serialize for SubObject {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
+        let version = get_version!();
         self.obj_id.write_to(w)?;
-        self.radius.write_to(w)?;
-        self.parent.unwrap_or(ObjectId(u32::MAX)).write_to(w)?;
-        self.offset.write_to(w)?;
+        if version >= Version::V21_16 {
+            self.radius.write_to(w)?;
+            self.parent.unwrap_or(ObjectId(u32::MAX)).write_to(w)?;
+            self.offset.write_to(w)?;
+        } else {
+            self.parent.unwrap_or(ObjectId(u32::MAX)).write_to(w)?;
+            self.offset.write_to(w)?;
+            self.radius.write_to(w)?;
+        }
         self.geo_center.write_to(w)?;
         self.bbox.write_to(w)?;
         self.name.write_to(w)?;

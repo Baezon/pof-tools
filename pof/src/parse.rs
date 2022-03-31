@@ -76,12 +76,20 @@ impl<R: Read + Seek> Parser<R> {
             // println!("found chunk {}", std::str::from_utf8(id).unwrap());
             // println!("length is {} bytes", len);
             match id {
-                b"HDR2" => {
+                b"OHDR" | b"HDR2" => {
                     assert!(header.is_none());
+                    assert_eq!(self.version >= Version::V21_16, id == b"HDR2");
 
-                    let max_radius = self.read_f32()?;
-                    let obj_flags = self.read_u32()?;
-                    let num_subobjects = self.read_u32()?;
+                    let (max_radius, obj_flags, num_subobjects);
+                    if self.version >= Version::V21_16 {
+                        max_radius = self.read_f32()?;
+                        obj_flags = self.read_u32()?;
+                        num_subobjects = self.read_u32()?;
+                    } else {
+                        num_subobjects = self.read_u32()?;
+                        max_radius = self.read_f32()?;
+                        obj_flags = self.read_u32()?;
+                    }
 
                     sub_objects = vec![None; num_subobjects as usize];
 
@@ -90,31 +98,52 @@ impl<R: Read + Seek> Parser<R> {
                     let detail_levels = self.read_list(|this| Ok(ObjectId(this.read_u32()?)))?;
                     debris_objs = self.read_list(|this| Ok(ObjectId(this.read_u32()?)))?;
 
-                    // todo worry about verioning
-                    let mass = self.read_f32()?;
-                    let center_of_mass = self.read_vec3d()?;
-                    let moment_of_inertia = Mat3d {
-                        rvec: self.read_vec3d()?,
-                        uvec: self.read_vec3d()?,
-                        fvec: self.read_vec3d()?,
+                    let (mut mass, center_of_mass, mut moment_of_inertia);
+                    if self.version >= Version::V19_03 {
+                        mass = self.read_f32()?;
+                        center_of_mass = self.read_vec3d()?;
+                        moment_of_inertia = Mat3d {
+                            rvec: self.read_vec3d()?,
+                            uvec: self.read_vec3d()?,
+                            fvec: self.read_vec3d()?,
+                        };
+                        if self.version < Version::V20_09 {
+                            // migration code ported from FSO
+                            let area_mass = mass.powf(0.6667) * 4.65;
+                            moment_of_inertia *= mass / area_mass;
+                            mass = area_mass;
+                        }
+                    } else {
+                        mass = 50.0; // default used by FSO
+                        center_of_mass = Vec3d::ZERO;
+                        moment_of_inertia = Mat3d::IDENTITY;
+                        moment_of_inertia *= 0.001;
                     };
 
-                    let num_cross_sections = match self.read_u32()? {
-                        u32::MAX => 0,
-                        n => n,
+                    let cross_sections = if self.version >= Version::V20_14 {
+                        let num_cross_sections = match self.read_u32()? {
+                            u32::MAX => 0,
+                            n => n,
+                        };
+                        self.read_list_n(num_cross_sections as usize, |this| Ok((this.read_f32()?, this.read_f32()?)))?
+                    } else {
+                        vec![]
                     };
-                    let cross_sections = self.read_list_n(num_cross_sections as usize, |this| Ok((this.read_f32()?, this.read_f32()?)))?;
 
-                    let bsp_lights = self.read_list(|this| {
-                        Ok(BspLight {
-                            location: this.read_vec3d()?,
-                            kind: match this.read_u32()? {
-                                1 => BspLightKind::Muzzle,
-                                2 => BspLightKind::Thruster,
-                                _ => panic!(), // maybe dont just panic
-                            },
-                        })
-                    })?;
+                    let bsp_lights = if self.version >= Version::V20_07 {
+                        self.read_list(|this| {
+                            Ok(BspLight {
+                                location: this.read_vec3d()?,
+                                kind: match this.read_u32()? {
+                                    1 => BspLightKind::Muzzle,
+                                    2 => BspLightKind::Thruster,
+                                    _ => panic!(), // maybe dont just panic
+                                },
+                            })
+                        })?
+                    } else {
+                        vec![]
+                    };
 
                     header = Some(ObjHeader {
                         num_subobjects,
@@ -130,27 +159,39 @@ impl<R: Read + Seek> Parser<R> {
                     });
                     //println!("{:#?}", header)
                 }
-                b"OBJ2" => {
+                b"SOBJ" | b"OBJ2" => {
                     assert!(header.is_some());
-                    let obj_id = ObjectId(self.read_u32().unwrap()); //id
+                    assert_eq!(self.version >= Version::V21_16, id == b"OBJ2");
 
-                    let radius = self.read_f32().unwrap();
-                    let parent = match self.read_u32().unwrap() {
-                        u32::MAX => None,
-                        parent_id => Some(ObjectId(parent_id)),
+                    let obj_id = ObjectId(self.read_u32()?); //id
+
+                    let (radius, parent, offset);
+                    if self.version >= Version::V21_16 {
+                        radius = self.read_f32()?;
+                        parent = self.read_u32()?;
+                        offset = self.read_vec3d()?;
+                    } else {
+                        parent = self.read_u32()?;
+                        offset = self.read_vec3d()?;
+                        radius = self.read_f32()?;
+                    }
+                    let parent = if parent < obj_id.0 {
+                        Some(ObjectId(parent))
+                    } else {
+                        assert!(parent == u32::MAX, "parent out of order");
+                        None
                     };
-                    let offset = self.read_vec3d().unwrap();
 
-                    let geo_center = self.read_vec3d().unwrap();
-                    let bbox = self.read_bbox().unwrap();
-                    let name = self.read_string().unwrap();
-                    let properties = self.read_string().unwrap();
-                    let movement_type = parse_subsys_mov_type(self.read_i32().unwrap());
-                    let movement_axis = parse_subsys_mov_axis(self.read_i32().unwrap());
+                    let geo_center = self.read_vec3d()?;
+                    let bbox = self.read_bbox()?;
+                    let name = self.read_string()?;
+                    let properties = self.read_string()?;
+                    let movement_type = parse_subsys_mov_type(self.read_i32()?);
+                    let movement_axis = parse_subsys_mov_axis(self.read_i32()?);
 
-                    let _ = self.read_i32().unwrap();
-                    let bsp_data_buffer = self.read_byte_buffer().unwrap();
-                    let bsp_data = parse_bsp_data(&bsp_data_buffer);
+                    assert!(self.read_i32()? == 0, "chunked models unimplemented in FSO");
+                    let bsp_data_buffer = self.read_byte_buffer()?;
+                    let bsp_data = parse_bsp_data(&bsp_data_buffer)?;
                     //println!("parsed subobject {}", name);
 
                     assert!(sub_objects[obj_id.0 as usize].is_none());
@@ -219,33 +260,28 @@ impl<R: Read + Seek> Parser<R> {
                     })?);
                     //println!("{:#?}", eye_points);
                 }
-                b"GPNT" => {
-                    primary_weps = Some(self.read_list(|this| {
+                b"GPNT" | b"MPNT" => {
+                    let list = self.read_list(|this| {
                         this.read_list(|this| {
                             Ok(WeaponHardpoint {
                                 position: this.read_vec3d()?,
                                 normal: this.read_vec3d()?,
-                                offset: (this.version >= Version::V22_01 || this.version == Version::V21_18)
-                                    .then(|| this.read_f32().unwrap())
-                                    .unwrap_or(0.0),
+                                // TODO: document this at https://wiki.hard-light.net/index.php/POF_data_structure
+                                offset: if this.version >= Version::V22_01 || this.version == Version::V21_18 {
+                                    this.read_f32()?
+                                } else {
+                                    0.0
+                                },
                             })
                         })
-                    })?);
-                    //println!("{:#?}", primary_weps);
-                }
-                b"MPNT" => {
-                    secondary_weps = Some(self.read_list(|this| {
-                        this.read_list(|this| {
-                            Ok(WeaponHardpoint {
-                                position: this.read_vec3d()?,
-                                normal: this.read_vec3d()?,
-                                offset: (this.version >= Version::V22_01 || this.version == Version::V21_18)
-                                    .then(|| this.read_f32().unwrap())
-                                    .unwrap_or(0.0),
-                            })
-                        })
-                    })?);
-                    //println!("{:#?}", secondary_weps);
+                    })?;
+                    if id == b"GPNT" {
+                        primary_weps = Some(list);
+                        //println!("{:#?}", primary_weps);
+                    } else {
+                        secondary_weps = Some(list);
+                        //println!("{:#?}", secondary_weps);
+                    }
                 }
                 b"TGUN" | b"TMIS" => {
                     turrets.extend(self.read_list(|this| {
@@ -263,12 +299,17 @@ impl<R: Read + Seek> Parser<R> {
                     thruster_banks = Some(self.read_list(|this| {
                         let num_glows = this.read_u32()?;
                         Ok(ThrusterBank {
-                            properties: (this.version >= Version::V21_17).then(|| this.read_string().unwrap()).unwrap_or_default(),
+                            properties: if this.version >= Version::V21_17 {
+                                this.read_string()?
+                            } else {
+                                String::new()
+                            },
                             glows: this.read_list_n(num_glows as usize, |this| {
                                 Ok(ThrusterGlow {
                                     position: this.read_vec3d()?,
                                     normal: this.read_vec3d()?,
-                                    radius: this.read_f32()?,
+                                    // TODO document this at https://wiki.hard-light.net/index.php/POF_data_structure
+                                    radius: if this.version > Version::V20_04 { this.read_f32()? } else { 1.0 },
                                 })
                             })?,
                         })
@@ -365,14 +406,9 @@ impl<R: Read + Seek> Parser<R> {
                         })?,
                     ))
                 }
-                b"SLDC" => {
+                b"SLDC" | b"SLC2" => {
                     assert!(shield_tree_chunk.is_none());
-                    // deal with this later, once we're sure to also have the shield data
-                    shield_tree_chunk = Some(self.read_byte_buffer()?);
-                }
-                b"SLC2" => {
-                    assert!(shield_tree_chunk.is_none());
-                    assert!(self.version >= Version::V22_00 || self.version == Version::V21_18);
+                    assert_eq!(self.version >= Version::V22_00, id == b"SLC2");
                     // deal with this later, once we're sure to also have the shield data
                     shield_tree_chunk = Some(self.read_byte_buffer()?);
                 }
@@ -386,8 +422,8 @@ impl<R: Read + Seek> Parser<R> {
                     comments = Some(String::from_utf8(buffer[..end].into()).unwrap());
                     // println!("{:#?}", comments);
                 }
-                asd => {
-                    eprintln!("I don't know how to handle id {:x?}", asd);
+                _ => {
+                    eprintln!("I don't know how to handle id {:x?}", id);
                     self.file.seek(SeekFrom::Current(len as i64))?;
                 }
             }
@@ -398,7 +434,10 @@ impl<R: Read + Seek> Parser<R> {
             (Some((verts, poly_list)), shield_tree_chunk) => Some(ShieldData {
                 verts,
                 polygons: poly_list,
-                collision_tree: shield_tree_chunk.map(|chunk| parse_shield_node(&chunk, self.version)),
+                collision_tree: match shield_tree_chunk {
+                    Some(chunk) => Some(*parse_shield_node(&chunk, self.version)?),
+                    None => None,
+                },
             }),
             (None, Some(_)) => unreachable!(),
             _ => None,
@@ -507,24 +546,28 @@ fn read_bytes<const N: usize>(file: &mut impl Read) -> io::Result<[u8; N]> {
     Ok(buffer)
 }
 
-fn read_list_n<T>(n: usize, buf: &mut &[u8], mut f: impl FnMut(&mut &[u8]) -> T) -> Vec<T> {
+fn read_list_n<T>(n: usize, buf: &mut &[u8], mut f: impl FnMut(&mut &[u8]) -> io::Result<T>) -> io::Result<Vec<T>> {
     (0..n).map(|_| f(buf)).collect()
 }
 
-fn read_vec3d(buf: &mut &[u8]) -> Vec3d {
-    Vec3d {
-        x: buf.read_f32::<LE>().unwrap(),
-        y: buf.read_f32::<LE>().unwrap(),
-        z: buf.read_f32::<LE>().unwrap(),
-    }
+fn read_vec3d(buf: &mut &[u8]) -> io::Result<Vec3d> {
+    Ok(Vec3d {
+        x: buf.read_f32::<LE>()?,
+        y: buf.read_f32::<LE>()?,
+        z: buf.read_f32::<LE>()?,
+    })
 }
 
-fn parse_chunk_header(buf: &[u8], chunk_type_is_u8: bool) -> (u32, &[u8], &[u8]) {
+fn read_bbox(chunk: &mut &[u8]) -> io::Result<BoundingBox> {
+    Ok(BoundingBox { min: read_vec3d(chunk)?, max: read_vec3d(chunk)? })
+}
+
+fn parse_chunk_header(buf: &[u8], chunk_type_is_u8: bool) -> io::Result<(u32, &[u8], &[u8])> {
     let mut pointer = buf;
     let chunk_type = if chunk_type_is_u8 {
-        pointer.read_u8().unwrap().into()
+        pointer.read_u8()?.into()
     } else {
-        pointer.read_u32::<LE>().unwrap()
+        pointer.read_u32::<LE>()?
     };
 
     /*println!("found a {}", match chunk_type {
@@ -544,83 +587,85 @@ fn parse_chunk_header(buf: &[u8], chunk_type_is_u8: bool) -> (u32, &[u8], &[u8])
             _ => "dunno lol",
         }
     );*/
-    let chunk_size = pointer.read_u32::<LE>().unwrap() as usize;
-    (chunk_type, pointer, &buf[chunk_size..])
+    let chunk_size = pointer.read_u32::<LE>()? as usize;
+    Ok((chunk_type, pointer, &buf[chunk_size..]))
 }
 
-fn parse_bsp_data(mut buf: &[u8]) -> BspData {
-    fn parse_bsp_node(mut buf: &[u8]) -> BspNode {
-        let read_bbox = |chunk: &mut &[u8]| BoundingBox { min: read_vec3d(chunk), max: read_vec3d(chunk) };
-
+fn parse_bsp_data(mut buf: &[u8]) -> io::Result<BspData> {
+    fn parse_bsp_node(mut buf: &[u8]) -> io::Result<Box<BspNode>> {
         // parse the first header
-        let (chunk_type, mut chunk, next_chunk) = parse_chunk_header(buf, false);
+        let (chunk_type, mut chunk, next_chunk) = parse_chunk_header(buf, false)?;
         // the first chunk (after deffpoints) AND the chunks pointed to be SORTNORM's front and back branches should ALWAYS be either another
         // SORTNORM or a BOUNDBOX followed by some polygons
         //dbg!(chunk_type);
-        match chunk_type {
+        Ok(Box::new(match chunk_type {
             BspData::SORTNORM => BspNode::Split {
-                normal: read_vec3d(&mut chunk),
-                point: read_vec3d(&mut chunk),
+                normal: read_vec3d(&mut chunk)?,
+                point: read_vec3d(&mut chunk)?,
                 front: {
-                    let _reserved = chunk.read_u32::<LE>().unwrap(); // just to advance past it
-                    let offset = chunk.read_u32::<LE>().unwrap();
+                    let _reserved = chunk.read_u32::<LE>()?; // just to advance past it
+                    let offset = chunk.read_u32::<LE>()?;
                     assert!(offset != 0);
-                    Box::new(parse_bsp_node(&buf[offset as usize..]))
+                    parse_bsp_node(&buf[offset as usize..])?
                 },
                 back: {
-                    let offset = chunk.read_u32::<LE>().unwrap();
+                    let offset = chunk.read_u32::<LE>()?;
                     assert!(offset != 0);
-                    Box::new(parse_bsp_node(&buf[offset as usize..]))
+                    parse_bsp_node(&buf[offset as usize..])?
                 },
                 bbox: {
-                    let _prelist = chunk.read_u32::<LE>().unwrap(); //
-                    let _postlist = chunk.read_u32::<LE>().unwrap(); // All 3 completely unused, as far as i can tell
-                    let _online = chunk.read_u32::<LE>().unwrap(); //
+                    let _prelist = chunk.read_u32::<LE>()?; //
+                    let _postlist = chunk.read_u32::<LE>()?; // All 3 completely unused, as far as i can tell
+                    let _online = chunk.read_u32::<LE>()?; //
                     assert!(_prelist == 0 || buf[_prelist as usize] == 0); //
                     assert!(_postlist == 0 || buf[_postlist as usize] == 0); // And so let's make sure thats the case, they should all lead to ENDOFBRANCH
                     assert!(_online == 0 || buf[_online as usize] == 0); //
-                    read_bbox(&mut chunk)
+                    read_bbox(&mut chunk)?
                 },
             },
             BspData::BOUNDBOX => BspNode::Leaf {
-                bbox: read_bbox(&mut chunk),
+                bbox: read_bbox(&mut chunk)?,
                 poly_list: {
                     let mut poly_list = vec![];
                     buf = next_chunk;
                     loop {
-                        let (chunk_type, mut chunk, next_chunk) = parse_chunk_header(buf, false);
+                        let (chunk_type, mut chunk, next_chunk) = parse_chunk_header(buf, false)?;
                         // keeping looping and pushing new polygons
                         poly_list.push(match chunk_type {
                             BspData::TMAPPOLY => {
-                                let normal = read_vec3d(&mut chunk);
-                                let center = read_vec3d(&mut chunk);
-                                let radius = chunk.read_f32::<LE>().unwrap();
-                                let num_verts = chunk.read_u32::<LE>().unwrap();
-                                let texture = Texturing::Texture(TextureId(chunk.read_u32::<LE>().unwrap()));
-                                let verts = read_list_n(num_verts as usize, &mut chunk, |chunk| PolyVertex {
-                                    vertex_id: VertexId(chunk.read_u16::<LE>().unwrap()),
-                                    normal_id: NormalId(chunk.read_u16::<LE>().unwrap()),
-                                    uv: (chunk.read_f32::<LE>().unwrap(), chunk.read_f32::<LE>().unwrap()),
-                                });
+                                let normal = read_vec3d(&mut chunk)?;
+                                let center = read_vec3d(&mut chunk)?;
+                                let radius = chunk.read_f32::<LE>()?;
+                                let num_verts = chunk.read_u32::<LE>()?;
+                                let texture = Texturing::Texture(TextureId(chunk.read_u32::<LE>()?));
+                                let verts = read_list_n(num_verts as usize, &mut chunk, |chunk| {
+                                    Ok(PolyVertex {
+                                        vertex_id: VertexId(chunk.read_u16::<LE>()?),
+                                        normal_id: NormalId(chunk.read_u16::<LE>()?),
+                                        uv: (chunk.read_f32::<LE>()?, chunk.read_f32::<LE>()?),
+                                    })
+                                })?;
 
                                 Polygon { normal, center, radius, verts, texture }
                             }
                             BspData::FLATPOLY => {
-                                let normal = read_vec3d(&mut chunk);
-                                let center = read_vec3d(&mut chunk);
-                                let radius = chunk.read_f32::<LE>().unwrap();
-                                let num_verts = chunk.read_u32::<LE>().unwrap();
+                                let normal = read_vec3d(&mut chunk)?;
+                                let center = read_vec3d(&mut chunk)?;
+                                let radius = chunk.read_f32::<LE>()?;
+                                let num_verts = chunk.read_u32::<LE>()?;
                                 let texture = Texturing::Flat(Color {
-                                    red: chunk.read_u8().unwrap(),
-                                    green: chunk.read_u8().unwrap(),
-                                    blue: chunk.read_u8().unwrap(),
+                                    red: chunk.read_u8()?,
+                                    green: chunk.read_u8()?,
+                                    blue: chunk.read_u8()?,
                                 });
-                                let _ = chunk.read_u8().unwrap(); // get rid of padding byte
-                                let verts = read_list_n(num_verts as usize, &mut chunk, |chunk| PolyVertex {
-                                    vertex_id: VertexId(chunk.read_u16::<LE>().unwrap()),
-                                    normal_id: NormalId(chunk.read_u16::<LE>().unwrap()),
-                                    uv: Default::default(),
-                                });
+                                let _ = chunk.read_u8()?; // get rid of padding byte
+                                let verts = read_list_n(num_verts as usize, &mut chunk, |chunk| {
+                                    Ok(PolyVertex {
+                                        vertex_id: VertexId(chunk.read_u16::<LE>()?),
+                                        normal_id: NormalId(chunk.read_u16::<LE>()?),
+                                        uv: Default::default(),
+                                    })
+                                })?;
 
                                 Polygon { normal, center, radius, verts, texture }
                             }
@@ -642,17 +687,17 @@ fn parse_bsp_data(mut buf: &[u8]) -> BspData {
             _ => {
                 unreachable!();
             }
-        }
+        }))
     }
 
     //println!("started parsing a bsp tree");
 
-    let (chunk_type, mut chunk, next_chunk) = parse_chunk_header(buf, false);
+    let (chunk_type, mut chunk, next_chunk) = parse_chunk_header(buf, false)?;
     assert!(chunk_type == BspData::DEFFPOINTS);
 
-    let num_verts = chunk.read_u32::<LE>().unwrap();
-    let num_norms = chunk.read_u32::<LE>().unwrap();
-    let offset = chunk.read_u32::<LE>().unwrap();
+    let num_verts = chunk.read_u32::<LE>()?;
+    let num_norms = chunk.read_u32::<LE>()?;
+    let offset = chunk.read_u32::<LE>()?;
     let norm_counts = &chunk[0..num_verts as usize];
 
     buf = &buf[offset as usize..];
@@ -660,43 +705,41 @@ fn parse_bsp_data(mut buf: &[u8]) -> BspData {
     let mut verts = vec![];
     let mut norms = vec![];
     for &count in norm_counts {
-        verts.push(read_vec3d(&mut buf));
+        verts.push(read_vec3d(&mut buf)?);
         for _ in 0..count {
-            norms.push(read_vec3d(&mut buf));
+            norms.push(read_vec3d(&mut buf)?);
         }
     }
 
     assert!(num_norms as usize == norms.len());
 
-    let bsp_tree = parse_bsp_node(next_chunk);
+    let bsp_tree = *parse_bsp_node(next_chunk)?;
 
-    BspData { collision_tree: bsp_tree, norms, verts }
+    Ok(BspData { collision_tree: bsp_tree, norms, verts })
 }
 
-fn parse_shield_node(buf: &[u8], version: Version) -> ShieldNode {
-    let read_bbox = |chunk: &mut &[u8]| BoundingBox { min: read_vec3d(chunk), max: read_vec3d(chunk) };
-
-    let (chunk_type, mut chunk, _) = parse_chunk_header(buf, version <= Version::V21_17);
-    match chunk_type {
+fn parse_shield_node(buf: &[u8], version: Version) -> io::Result<Box<ShieldNode>> {
+    let (chunk_type, mut chunk, _) = parse_chunk_header(buf, version <= Version::V21_17)?;
+    Ok(Box::new(match chunk_type {
         ShieldNode::SPLIT => ShieldNode::Split {
-            bbox: read_bbox(&mut chunk),
+            bbox: read_bbox(&mut chunk)?,
             front: {
-                let offset = chunk.read_u32::<LE>().unwrap();
+                let offset = chunk.read_u32::<LE>()?;
                 assert!(offset != 0);
-                Box::new(parse_shield_node(&buf[offset as usize..], version))
+                parse_shield_node(&buf[offset as usize..], version)?
             },
             back: {
-                let offset = chunk.read_u32::<LE>().unwrap();
+                let offset = chunk.read_u32::<LE>()?;
                 assert!(offset != 0);
-                Box::new(parse_shield_node(&buf[offset as usize..], version))
+                parse_shield_node(&buf[offset as usize..], version)?
             },
         },
         ShieldNode::LEAF => ShieldNode::Leaf {
-            bbox: read_bbox(&mut chunk),
-            poly_list: read_list_n(chunk.read_u32::<LE>().unwrap() as usize, &mut chunk, |chunk| PolygonId(chunk.read_u32::<LE>().unwrap())),
+            bbox: read_bbox(&mut chunk)?,
+            poly_list: read_list_n(chunk.read_u32::<LE>()? as usize, &mut chunk, |chunk| Ok(PolygonId(chunk.read_u32::<LE>()?)))?,
         },
         _ => unreachable!(),
-    }
+    }))
 }
 
 // =================================================================
@@ -793,7 +836,7 @@ fn dae_parse_properties(node: &Node, properties: &mut String) {
 // 'transform` should contain only scaling and rotation!
 // all translation should be removed and put into a separate offset of some kind
 fn dae_parse_geometry(
-    node: &Node, local_maps: &dae_parser::LocalMaps, material_map: &HashMap<&String, TextureId>, transform: Mat4x4,
+    node: &Node, local_maps: &LocalMaps, material_map: &HashMap<&String, TextureId>, transform: Mat4x4,
 ) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(Texturing, Vec<PolyVertex>)>) {
     let mut vertices_out: Vec<Vec3d> = vec![];
     let mut normals_out: Vec<Vec3d> = vec![];
@@ -876,7 +919,7 @@ fn dae_parse_geometry(
 
 fn dae_parse_subobject_recursive(
     node: &Node, sub_objects: &mut Vec<SubObject>, parent: ObjectId, insignias: &mut Vec<Insignia>, detail_level: Option<u32>,
-    turrets: &mut Vec<Turret>, local_maps: &dae_parser::LocalMaps, material_map: &HashMap<&String, TextureId>, parent_transform: Mat4x4,
+    turrets: &mut Vec<Turret>, local_maps: &LocalMaps, material_map: &HashMap<&String, TextureId>, parent_transform: Mat4x4,
 ) {
     if node.instance_geometry.is_empty() {
         // ignore subobjects with no geo

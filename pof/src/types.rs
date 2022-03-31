@@ -211,7 +211,7 @@ impl Display for Vec3d {
 }
 impl Vec3d {
     pub const ZERO: Vec3d = Vec3d { x: 0.0, y: 0.0, z: 0.0 };
-    pub fn new(x: f32, y: f32, z: f32) -> Self {
+    pub const fn new(x: f32, y: f32, z: f32) -> Self {
         Vec3d { x, y, z }
     }
     pub fn to_tuple(self) -> (f32, f32, f32) {
@@ -358,6 +358,13 @@ impl From<glm::Mat3x3> for Mat3d {
         }
     }
 }
+impl MulAssign<f32> for Mat3d {
+    fn mul_assign(&mut self, rhs: f32) {
+        self.rvec *= rhs;
+        self.uvec *= rhs;
+        self.fvec *= rhs;
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct NormalVec3(pub Vec3d);
@@ -392,6 +399,12 @@ impl FromStr for NormalVec3 {
 }
 
 impl Mat3d {
+    pub const IDENTITY: Mat3d = Mat3d {
+        rvec: Vec3d::new(1., 0., 0.),
+        uvec: Vec3d::new(0., 1., 0.),
+        fvec: Vec3d::new(0., 0., 1.),
+    };
+
     pub fn add_point_mass_moi(&mut self, pos: Vec3d) {
         self.rvec.x += pos.y * pos.y + pos.z * pos.z;
         self.rvec.y -= pos.x * pos.y;
@@ -1375,7 +1388,12 @@ impl GlowPointBank {
 mk_enumeration! {
     #[derive(PartialOrd, Ord, PartialEq, Eq, Debug, Clone, Copy)]
     pub enum Version(i32) {
-        V21_16 = 2116, // (retail)
+        V19_03 = 1903, // mass / MOI introduced
+        V20_04 = 2004, // glow point radius introduced after this
+        V20_07 = 2007, // muzzle flash introduced
+        V20_09 = 2009, // area mass conversion
+        V20_14 = 2014, // (retail freespace 1) cross sections introduced
+        V21_16 = 2116, // (retail freespace 2)
         V21_17 = 2117, // (retail) thruster properties
         V21_18 = 2118, // weapon offset
         V22_00 = 2200, // aligned and SLC2
@@ -1390,6 +1408,11 @@ impl Default for Version {
 impl Display for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Version::V19_03 => write!(f, "19.03"),
+            Version::V20_04 => write!(f, "20.04"),
+            Version::V20_07 => write!(f, "20.07"),
+            Version::V20_09 => write!(f, "20.09"),
+            Version::V20_14 => write!(f, "20.14"),
             Version::V21_16 => write!(f, "21.16"),
             Version::V21_17 => write!(f, "21.17"),
             Version::V21_18 => write!(f, "21.18"),

@@ -836,7 +836,7 @@ pub struct Polygon {
     pub verts: Vec<PolyVertex>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BspNode {
     Split {
         normal: Vec3d,
@@ -849,6 +849,11 @@ pub enum BspNode {
         bbox: BoundingBox,
         poly_list: Vec<Polygon>,
     },
+}
+impl Default for BspNode {
+    fn default() -> Self {
+        Self::Leaf { bbox: BoundingBox::default(), poly_list: vec![] }
+    }
 }
 impl BspNode {
     pub fn leaves(&self) -> BspNodeIter<'_> {
@@ -956,7 +961,7 @@ impl<'a> Iterator for BspNodeIter<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Default)]
 pub struct BspData {
     pub verts: Vec<Vec3d>,
     pub norms: Vec<Vec3d>,
@@ -1136,7 +1141,7 @@ impl Default for SubsysMovementAxis {
 
 pub const MAX_DEBRIS_OBJECTS: u32 = 32;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Default)]
 pub struct SubObject {
     pub obj_id: ObjectId,
     pub radius: f32,

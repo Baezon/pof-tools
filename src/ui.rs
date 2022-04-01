@@ -575,10 +575,12 @@ impl PofToolsGui {
                 ui.menu_button(RichText::new(format!("Version: {}", self.model.version)).text_style(TextStyle::Button), |ui| {
                     let mut changed = false;
                     Version::for_each(|version| {
-                        changed |= ui
-                            .radio_value(&mut self.model.version, version, version.to_str())
-                            .on_hover_text(version.documentation())
-                            .changed();
+                        if version >= Version::V21_16 {
+                            changed |= ui
+                                .radio_value(&mut self.model.version, version, version.to_str())
+                                .on_hover_text(version.documentation())
+                                .changed();
+                        }
                     });
 
                     // we only need to recheck verson-specific warnings, but since those are parameterized, there's no easy way to say

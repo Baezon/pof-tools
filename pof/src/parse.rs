@@ -175,11 +175,11 @@ impl<R: Read + Seek> Parser<R> {
                         offset = self.read_vec3d()?;
                         radius = self.read_f32()?;
                     }
-                    let parent = if parent < obj_id.0 {
-                        Some(ObjectId(parent))
-                    } else {
-                        assert!(parent == u32::MAX, "parent out of order");
+                    let parent = if parent == u32::MAX {
                         None
+                    } else {
+                        assert!(sub_objects[parent as usize].is_some(), "parent out of order");
+                        Some(ObjectId(parent))
                     };
 
                     let geo_center = self.read_vec3d()?;
@@ -281,9 +281,13 @@ impl<R: Read + Seek> Parser<R> {
                 }
                 b"TGUN" | b"TMIS" => {
                     turrets.extend(self.read_list(|this| {
+                        let base_obj = ObjectId(this.read_u32()?);
+                        let gun_obj = ObjectId(this.read_u32()?);
+                        assert!(sub_objects[base_obj.0 as usize].is_some(), "turret precedes base object");
+                        assert!(sub_objects[gun_obj.0 as usize].is_some(), "turret precedes gun object");
                         Ok(Turret {
-                            base_obj: ObjectId(this.read_u32()?),
-                            gun_obj: ObjectId(this.read_u32()?),
+                            base_obj,
+                            gun_obj,
                             normal: this.read_vec3d()?,
                             fire_points: this.read_list(|this| this.read_vec3d())?,
                         })

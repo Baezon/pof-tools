@@ -9,8 +9,8 @@ use glm::{Mat4x4, Vec3};
 extern crate nalgebra_glm as glm;
 
 use crate::{
-    BspData, BspNode, Dock, EyePoint, GlowPointBank, Insignia, Model, ObjVec, Path, ShieldData, ShieldNode, SpecialPoint, SubObject, Texturing,
-    ThrusterBank, Turret, Vec3d, Version, WeaponHardpoint,
+    BspData, BspNode, Dock, EyePoint, GlowPointBank, Insignia, Model, ObjVec, ObjectId, Path, ShieldData, ShieldNode, SpecialPoint, SubObject,
+    Texturing, ThrusterBank, Turret, Vec3d, Version, WeaponHardpoint,
 };
 
 pub(crate) trait Serialize {
@@ -308,6 +308,27 @@ fn write_chunk_vec<T: Serialize>(w: &mut impl Write, chunk_name: &[u8; 4], data:
     Ok(())
 }
 
+fn write_subobjects(w: &mut impl Write, chunk_name: &[u8; 4], objects: &[SubObject]) -> io::Result<()> {
+    fn write_subobject(w: &mut impl Write, chunk_name: [u8; 4], objects: &[SubObject], written: &mut [bool], id: ObjectId) -> io::Result<()> {
+        if !written[id.0 as usize] {
+            let obj = &objects[id.0 as usize];
+            // ensure parents are written before children
+            if let Some(parent) = obj.parent {
+                write_subobject(w, chunk_name, objects, written, parent)?;
+            }
+            write_chunk(w, &chunk_name, Some(obj))?;
+            written[id.0 as usize] = true;
+        }
+        Ok(())
+    }
+
+    let mut written = vec![false; objects.len()];
+    for i in 0..objects.len() as u32 {
+        write_subobject(w, *chunk_name, objects, &mut written, ObjectId(i))?;
+    }
+    Ok(())
+}
+
 impl Model {
     pub fn write(&self, w: &mut impl Write) -> io::Result<()> {
         // set the version to be using be all the serializers
@@ -356,9 +377,7 @@ impl Model {
             }
             Ok(())
         })?;
-        for subobject in &self.sub_objects {
-            write_chunk(w, if self.version >= Version::V21_16 { b"SOBJ" } else { b"OBJ2" }, Some(subobject))?;
-        }
+        write_subobjects(w, if self.version >= Version::V21_16 { b"SOBJ" } else { b"OBJ2" }, &self.sub_objects)?;
         write_chunk_vec(w, b"TXTR", &self.textures)?;
         write_chunk_vec(w, b"PATH", &self.paths)?;
         write_chunk_vec(w, b"SPCL", &self.special_points)?;

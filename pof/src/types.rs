@@ -211,7 +211,7 @@ impl Display for Vec3d {
 }
 impl Vec3d {
     pub const ZERO: Vec3d = Vec3d { x: 0.0, y: 0.0, z: 0.0 };
-    pub fn new(x: f32, y: f32, z: f32) -> Self {
+    pub const fn new(x: f32, y: f32, z: f32) -> Self {
         Vec3d { x, y, z }
     }
     pub fn to_tuple(self) -> (f32, f32, f32) {
@@ -358,6 +358,13 @@ impl From<glm::Mat3x3> for Mat3d {
         }
     }
 }
+impl MulAssign<f32> for Mat3d {
+    fn mul_assign(&mut self, rhs: f32) {
+        self.rvec *= rhs;
+        self.uvec *= rhs;
+        self.fvec *= rhs;
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct NormalVec3(pub Vec3d);
@@ -392,6 +399,12 @@ impl FromStr for NormalVec3 {
 }
 
 impl Mat3d {
+    pub const IDENTITY: Mat3d = Mat3d {
+        rvec: Vec3d::new(1., 0., 0.),
+        uvec: Vec3d::new(0., 1., 0.),
+        fvec: Vec3d::new(0., 0., 1.),
+    };
+
     pub fn add_point_mass_moi(&mut self, pos: Vec3d) {
         self.rvec.x += pos.y * pos.y + pos.z * pos.z;
         self.rvec.y -= pos.x * pos.y;
@@ -644,7 +657,7 @@ impl Serialize for ShieldNode {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         let mut buf = vec![];
 
-        crate::write::write_shield_node(&mut buf, self)?;
+        crate::write::write_shield_node(&mut buf, self, get_version!() < Version::V21_18)?;
 
         w.write_u32::<LE>((buf.len()) as u32)?;
         w.write_all(&buf)
@@ -681,7 +694,8 @@ impl Serialize for WeaponHardpoint {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         self.position.write_to(w)?;
         self.normal.write_to(w)?;
-        if get_version!() >= Version::V22_01 || get_version!() == Version::V21_18 {
+        let version = get_version!();
+        if version >= Version::V22_01 || version == Version::V21_18 {
             self.offset.write_to(w)?;
         }
         Ok(())
@@ -697,13 +711,11 @@ impl Default for WeaponHardpoint {
     }
 }
 
-mk_struct! {
-    #[derive(Debug, Clone)]
-    pub struct ThrusterGlow {
-        pub position: Vec3d,
-        pub normal: Vec3d,
-        pub radius: f32,
-    }
+#[derive(Debug, Clone)]
+pub struct ThrusterGlow {
+    pub position: Vec3d,
+    pub normal: Vec3d,
+    pub radius: f32,
 }
 impl Default for ThrusterGlow {
     fn default() -> Self {
@@ -712,6 +724,16 @@ impl Default for ThrusterGlow {
             normal: Vec3d { x: 0.0, y: 0.0, z: -1.0 },
             radius: 1.0,
         }
+    }
+}
+impl Serialize for ThrusterGlow {
+    fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
+        self.position.write_to(w)?;
+        self.normal.write_to(w)?;
+        if get_version!() > Version::V20_04 {
+            self.radius.write_to(w)?;
+        }
+        Ok(())
     }
 }
 
@@ -1213,10 +1235,17 @@ impl SubObject {
 }
 impl Serialize for SubObject {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
+        let version = get_version!();
         self.obj_id.write_to(w)?;
-        self.radius.write_to(w)?;
-        self.parent.unwrap_or(ObjectId(u32::MAX)).write_to(w)?;
-        self.offset.write_to(w)?;
+        if version >= Version::V21_16 {
+            self.radius.write_to(w)?;
+            self.parent.unwrap_or(ObjectId(u32::MAX)).write_to(w)?;
+            self.offset.write_to(w)?;
+        } else {
+            self.parent.unwrap_or(ObjectId(u32::MAX)).write_to(w)?;
+            self.offset.write_to(w)?;
+            self.radius.write_to(w)?;
+        }
         self.geo_center.write_to(w)?;
         self.bbox.write_to(w)?;
         self.name.write_to(w)?;
@@ -1372,34 +1401,66 @@ impl GlowPointBank {
     }
 }
 
-mk_enumeration! {
-    #[derive(PartialOrd, Ord, PartialEq, Eq, Debug, Clone, Copy)]
-    pub enum Version(i32) {
-        V21_16 = 2116, // (retail)
-        V21_17 = 2117, // (retail) thruster properties
-        V21_18 = 2118, // weapon offset
-        V22_00 = 2200, // aligned and SLC2
-        V22_01 = 2201, // weapon offset (+aligned, SLC2)
-    }
-}
-impl Default for Version {
-    fn default() -> Self {
-        Self::LATEST
-    }
-}
-impl Display for Version {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Version::V21_16 => write!(f, "21.16"),
-            Version::V21_17 => write!(f, "21.17"),
-            Version::V21_18 => write!(f, "21.18"),
-            Version::V22_00 => write!(f, "22.00"),
-            Version::V22_01 => write!(f, "22.01"),
+macro_rules! mk_versions {
+    (@latest $last:ident) => { Self::$last };
+    (@latest $first:ident $($rest:ident)*) => { mk_versions!(@latest $($rest)*) };
+    ($($(#[doc=$doc:expr])* $name:ident($num:literal, $str:literal),)*) => {
+        mk_enumeration! {
+            #[derive(PartialOrd, Ord, PartialEq, Eq, Debug, Clone, Copy)]
+            pub enum Version(i32) {
+                $($(#[doc=$doc])* $name = $num,)*
+            }
         }
-    }
+        impl Version {
+            pub const LATEST: Version = mk_versions!(@latest $($name)*);
+            pub fn to_str(self) -> &'static str {
+                match self {
+                    $(Version::$name => $str,)*
+                }
+            }
+            pub fn documentation(self) -> &'static str {
+                match self {
+                    $(Version::$name => concat!($($doc, "\n"),*).trim()),*
+                }
+            }
+            pub fn for_each(mut f: impl FnMut(Self)) {
+                $(f(Version::$name);)*
+            }
+        }
+        impl Default for Version {
+            fn default() -> Self {
+                Self::LATEST
+            }
+        }
+        impl Display for Version {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.to_str())
+            }
+        }
+    };
 }
-impl Version {
-    pub const LATEST: Version = Self::V22_01;
+
+mk_versions! {
+    /// Prehistoric - Mass / MOI introduced
+    V19_03(1903, "19.03"),
+    /// Prehistoric - Glow point radius introduced after this
+    V20_04(2004, "20.04"),
+    /// Prehistoric - Muzzle flash introduced
+    V20_07(2007, "20.07"),
+    /// Prehistoric - Area mass conversion
+    V20_09(2009, "20.09"),
+    /// Retail FS1 - Cross sections introduced
+    V20_14(2014, "20.14"),
+    /// Retail FS2 - PCS2 Compatible
+    V21_16(2116, "21.16"),
+    /// Retail FS2 - PCS2 Compatible - Thruster properties added
+    V21_17(2117, "21.17"),
+    /// External weapon angle offset added
+    V21_18(2118, "21.18"),
+    /// SLC2 replaces SLDC (no weapon offset compatibility)
+    V22_00(2200, "22.00"),
+    /// External weapon angle offset compatible
+    V22_01(2201, "22.01"),
 }
 
 #[derive(Debug, Default)]

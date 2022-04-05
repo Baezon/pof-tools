@@ -32,8 +32,8 @@ macro_rules! id_type {
 
 id_type! {ObjectId, u32}
 id_type! {TextureId, u32}
-id_type! {VertexId, u16}
-id_type! {NormalId, u16}
+id_type! {VertexId, u32}
+id_type! {NormalId, u32}
 id_type! {PolygonId, u32}
 id_type! {PathId, u32}
 

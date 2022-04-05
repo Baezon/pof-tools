@@ -1224,8 +1224,16 @@ impl PofToolsGui {
                 ui.separator();
 
                 if let Some(id) = selected_id {
-                    ui.label(RichText::new(format!("Vertices: {}", self.model.sub_objects[id].bsp_data.verts.len())).weak());
-                    ui.label(RichText::new(format!("Normals: {}", self.model.sub_objects[id].bsp_data.norms.len())).weak());
+                    let mut vert_string = RichText::new(format!("Vertices: {}", self.model.sub_objects[id].bsp_data.verts.len())).weak();
+                    if self.errors.contains(&Error::TooManyVerts(id)) {
+                        vert_string = vert_string.color(Color32::RED);
+                    }
+                    let mut norm_string = RichText::new(format!("Normals: {}", self.model.sub_objects[id].bsp_data.norms.len())).weak();
+                    if self.errors.contains(&Error::TooManyNorms(id)) {
+                        norm_string = norm_string.color(Color32::RED);
+                    }
+                    ui.label(vert_string);
+                    ui.label(norm_string);
                 }
             }
             PropertiesPanel::Texture { texture_name } => {

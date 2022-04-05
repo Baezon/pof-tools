@@ -1486,20 +1486,17 @@ pub struct Model {
     pub path_to_file: PathBuf,
 }
 impl Model {
-    pub fn get_total_subobj_offset(&self, mut id: ObjectId) -> Vec3d {
-        let mut out = Vec3d::ZERO;
-        loop {
-            let subobj = &self.sub_objects[id];
+    pub fn get_total_subobj_offset(&self, id: ObjectId) -> Vec3d {
+        let mut subobj = &self.sub_objects[id];
+        let mut out = subobj.offset;
+        while let Some(parent) = subobj.parent {
+            subobj = &self.sub_objects[parent];
             out += subobj.offset;
-            if let Some(parent) = subobj.parent {
-                id = parent;
-            } else {
-                break out;
-            }
         }
+        out
     }
 
-    // see if maybe_anscestor is actually an anscestor of obj_id in the subobject hierarchy
+    // see if maybe_ancestor is actually an ancestor of obj_id in the subobject hierarchy
     pub fn is_obj_id_ancestor(&self, obj_id: ObjectId, maybe_ancestor: ObjectId) -> bool {
         if obj_id == maybe_ancestor {
             return true;

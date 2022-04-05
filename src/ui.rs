@@ -1256,8 +1256,9 @@ impl PofToolsGui {
                     continue;
                 }
 
+                let offset = model.get_total_subobj_offset(subobj.obj_id);
                 for vert in &subobj.bsp_data.verts {
-                    if !model.header.bbox.contains(*vert) {
+                    if !model.header.bbox.contains(offset + *vert) {
                         return true;
                     }
                 }

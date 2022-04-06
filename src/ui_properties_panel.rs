@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use egui::{style::Widgets, text::LayoutJob, Color32, DragValue, Label, Response, RichText, TextFormat, TextStyle, Ui};
+use egui::{style::Widgets, text::LayoutJob, CollapsingHeader, Color32, DragValue, Label, Response, RichText, TextFormat, TextStyle, Ui};
 use glium::Display;
 use nalgebra_glm::TMat4;
 use pof::{
@@ -406,7 +406,6 @@ impl UiState {
                         offset_string: format!("{}", model.sub_objects[id].offset),
                         radius_string: format!("{}", model.sub_objects[id].radius),
                         is_debris_check: model.sub_objects[id].is_debris_model,
-                        properties: format!("{}", model.sub_objects[id].properties),
                         name: format!("{}", model.sub_objects[id].name),
                         rot_axis: model.sub_objects[id].movement_axis,
                         transform_window: Default::default(),
@@ -425,18 +424,24 @@ impl UiState {
                 ThrusterSelection::Header => self.properties_panel = PropertiesPanel::default_thruster(),
                 ThrusterSelection::Bank(bank) => {
                     self.properties_panel = PropertiesPanel::Thruster {
+                        engine_subsys_string: format!(
+                            "{}",
+                            pof::properties_get_field(&model.thruster_banks[bank].properties, "$engine_subsystem").unwrap_or_default()
+                        ),
                         radius_string: Default::default(),
                         normal_string: Default::default(),
                         position_string: Default::default(),
-                        properties: model.thruster_banks[bank].properties.clone(),
                     }
                 }
                 ThrusterSelection::BankPoint(bank, point) => {
                     self.properties_panel = PropertiesPanel::Thruster {
+                        engine_subsys_string: format!(
+                            "{}",
+                            pof::properties_get_field(&model.thruster_banks[bank].properties, "$engine_subsystem").unwrap_or_default()
+                        ),
                         radius_string: format!("{}", model.thruster_banks[bank].glows[point].radius),
                         normal_string: format!("{}", model.thruster_banks[bank].glows[point].normal),
                         position_string: format!("{}", model.thruster_banks[bank].glows[point].position),
-                        properties: model.thruster_banks[bank].properties.clone(),
                     }
                 }
             },
@@ -460,10 +465,11 @@ impl UiState {
             TreeSelection::DockingBays(docking_select) => match docking_select {
                 DockingSelection::Bay(bay) => {
                     self.properties_panel = PropertiesPanel::DockingBay {
+                        name_string: pof::properties_get_field(&model.docking_bays[bay].properties, "$name")
+                            .map_or(format!("Dock {}", bay + 1), |name| format!("{}", name)),
                         position_string: format!("{}", model.docking_bays[bay].position),
                         fvec_string: format!("{}", model.docking_bays[bay].fvec.0),
                         uvec_ang: model.docking_bays[bay].get_uvec_angle().to_degrees() % 360.0,
-                        properties: format!("{}", model.docking_bays[bay].properties),
                         path_num: model.docking_bays[bay].path.unwrap_or(PathId(model.paths.len() as u32)).0 as usize,
                     }
                 }
@@ -478,7 +484,10 @@ impl UiState {
                         attached_subobj_idx: model.glow_banks[bank].obj_parent.0 as usize,
                         lod_string: format!("{}", model.glow_banks[bank].lod),
                         glow_type_string: format!("{}", model.glow_banks[bank].glow_type),
-                        glow_texture_string: format!("{}", model.glow_banks[bank].get_glow_texture().unwrap_or_default()),
+                        glow_texture_string: format!(
+                            "{}",
+                            pof::properties_get_field(&model.glow_banks[bank].properties, "$glow_texture").unwrap_or_default()
+                        ),
                         position_string: format!("{}", model.glow_banks[bank].glow_points[point].position),
                         normal_string: format!("{}", model.glow_banks[bank].glow_points[point].normal),
                         radius_string: format!("{}", model.glow_banks[bank].glow_points[point].radius),
@@ -492,7 +501,10 @@ impl UiState {
                         attached_subobj_idx: model.glow_banks[bank].obj_parent.0 as usize,
                         lod_string: format!("{}", model.glow_banks[bank].lod),
                         glow_type_string: format!("{}", model.glow_banks[bank].glow_type),
-                        glow_texture_string: format!("{}", model.glow_banks[bank].get_glow_texture().unwrap_or_default()),
+                        glow_texture_string: format!(
+                            "{}",
+                            pof::properties_get_field(&model.glow_banks[bank].properties, "$glow_texture").unwrap_or_default()
+                        ),
                         position_string: Default::default(),
                         normal_string: Default::default(),
                         radius_string: Default::default(),
@@ -506,7 +518,6 @@ impl UiState {
                         name_string: format!("{}", model.special_points[point].name),
                         position_string: format!("{}", model.special_points[point].position),
                         radius_string: format!("{}", model.special_points[point].radius),
-                        properties: format!("{}", model.special_points[point].properties),
                     }
                 }
                 _ => self.properties_panel = PropertiesPanel::default_special_point(),
@@ -612,7 +623,6 @@ pub(crate) enum PropertiesPanel {
         offset_string: String,
         radius_string: String,
         is_debris_check: bool,
-        properties: String,
         rot_axis: SubsysMovementAxis,
         transform_window: TransformWindow,
     },
@@ -620,10 +630,10 @@ pub(crate) enum PropertiesPanel {
         texture_name: String,
     },
     Thruster {
+        engine_subsys_string: String,
         normal_string: String,
         position_string: String,
         radius_string: String,
-        properties: String,
     },
     Weapon {
         position_string: String,
@@ -631,10 +641,10 @@ pub(crate) enum PropertiesPanel {
         offset_string: String,
     },
     DockingBay {
+        name_string: String,
         position_string: String,
         fvec_string: String,
         uvec_ang: f32,
-        properties: String,
         path_num: usize,
     },
     GlowBank {
@@ -653,7 +663,6 @@ pub(crate) enum PropertiesPanel {
         name_string: String,
         position_string: String,
         radius_string: String,
-        properties: String,
     },
     Turret {
         base_idx: usize,
@@ -710,7 +719,6 @@ impl PropertiesPanel {
             offset_string: Default::default(),
             radius_string: Default::default(),
             is_debris_check: Default::default(),
-            properties: Default::default(),
             rot_axis: SubsysMovementAxis::NONE,
             transform_window: TransformWindow {
                 open: false,
@@ -726,10 +734,10 @@ impl PropertiesPanel {
     }
     fn default_thruster() -> Self {
         Self::Thruster {
+            engine_subsys_string: Default::default(),
             radius_string: Default::default(),
             normal_string: Default::default(),
             position_string: Default::default(),
-            properties: Default::default(),
         }
     }
     fn default_weapon() -> Self {
@@ -741,10 +749,10 @@ impl PropertiesPanel {
     }
     fn default_docking_bay() -> Self {
         Self::DockingBay {
+            name_string: Default::default(),
             position_string: Default::default(),
             fvec_string: Default::default(),
             uvec_ang: Default::default(),
-            properties: Default::default(),
             path_num: Default::default(),
         }
     }
@@ -767,7 +775,6 @@ impl PropertiesPanel {
             radius_string: Default::default(),
             name_string: Default::default(),
             position_string: Default::default(),
-            properties: Default::default(),
         }
     }
     fn default_turret() -> Self {
@@ -804,6 +811,10 @@ impl PofToolsGui {
     pub(crate) fn do_properties_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, display: &Display) {
         let mut reload_textures = false;
         let mut properties_panel_dirty = false;
+
+        // this is needed for blank string fields when the properties panel can't display
+        // anything for that field due to an invalid tree selection
+        let mut blank_string = String::new();
 
         match &mut self.ui_state.properties_panel {
             PropertiesPanel::Header {
@@ -973,7 +984,6 @@ impl PofToolsGui {
                 offset_string,
                 radius_string,
                 is_debris_check,
-                properties,
                 rot_axis,
                 transform_window,
             } => {
@@ -1188,7 +1198,7 @@ impl PofToolsGui {
                 if let Some(id) = selected_id {
                     ui.add(egui::TextEdit::multiline(&mut self.model.sub_objects[id].properties).desired_rows(2));
                 } else {
-                    ui.add_enabled(false, egui::TextEdit::multiline(properties).desired_rows(2));
+                    ui.add_enabled(false, egui::TextEdit::multiline(&mut blank_string).desired_rows(2));
                 }
 
                 ui.label("Rotation Axis:");
@@ -1249,7 +1259,12 @@ impl PofToolsGui {
                 ui.label("Texture Name:");
                 UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, tex, texture_name);
             }
-            PropertiesPanel::Thruster { position_string, normal_string, radius_string, properties } => {
+            PropertiesPanel::Thruster {
+                engine_subsys_string,
+                position_string,
+                normal_string,
+                radius_string,
+            } => {
                 ui.heading("Thruster");
                 ui.separator();
 
@@ -1263,21 +1278,37 @@ impl PofToolsGui {
 
                 ui.add_space(10.0);
 
-                ui.label("Properties:");
-                if let Some(bank) = bank_num {
-                    if self.warnings.contains(&Warning::ThrusterPropertiesInvalidVersion(bank)) {
-                        UiState::set_widget_color(ui, Color32::YELLOW);
+                ui.horizontal(|ui| {
+                    ui.label("Engine Subsystem:");
+                    if let Some(bank) = bank_num {
+                        if self.warnings.contains(&Warning::ThrusterPropertiesInvalidVersion(bank)) {
+                            UiState::set_widget_color(ui, Color32::YELLOW);
+                        }
+                        if ui.text_edit_singleline(engine_subsys_string).changed() {
+                            pof::properties_update_field(&mut self.model.thruster_banks[bank].properties, "$engine_subsystem", engine_subsys_string);
+                        }
+                        UiState::reset_widget_color(ui);
+                    } else {
+                        ui.add_enabled(false, egui::TextEdit::multiline(&mut blank_string).desired_rows(1));
                     }
-                    if ui
-                        .add(egui::TextEdit::multiline(&mut self.model.thruster_banks[bank].properties).desired_rows(1))
-                        .changed()
-                    {
-                        PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::ThrusterPropertiesInvalidVersion(bank)));
+                });
+
+                CollapsingHeader::new("Properties Raw").show(ui, |ui| {
+                    if let Some(bank) = bank_num {
+                        if self.warnings.contains(&Warning::ThrusterPropertiesInvalidVersion(bank)) {
+                            UiState::set_widget_color(ui, Color32::YELLOW);
+                        }
+                        if ui
+                            .add(egui::TextEdit::multiline(&mut self.model.thruster_banks[bank].properties).desired_rows(1))
+                            .changed()
+                        {
+                            PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::ThrusterPropertiesInvalidVersion(bank)));
+                        }
+                        UiState::reset_widget_color(ui);
+                    } else {
+                        ui.add_enabled(false, egui::TextEdit::multiline(&mut blank_string).desired_rows(1));
                     }
-                    UiState::reset_widget_color(ui);
-                } else {
-                    ui.add_enabled(false, egui::TextEdit::multiline(properties).desired_rows(1));
-                }
+                });
 
                 ui.separator();
 
@@ -1293,7 +1324,7 @@ impl PofToolsGui {
                     } else {
                         (None, None, None)
                     };
-                println!("{}", radius_string);
+
                 ui.label("Radius:");
                 UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, radius, radius_string);
                 ui.label("Position:");
@@ -1416,7 +1447,13 @@ impl PofToolsGui {
                     PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::WeaponOffsetInvalidVersion(weapon_selection)));
                 }
             }
-            PropertiesPanel::DockingBay { position_string, fvec_string, uvec_ang, properties, path_num } => {
+            PropertiesPanel::DockingBay {
+                name_string,
+                position_string,
+                fvec_string,
+                uvec_ang,
+                path_num,
+            } => {
                 ui.heading("Docking Bay");
                 ui.separator();
 
@@ -1429,11 +1466,38 @@ impl PofToolsGui {
 
                 ui.add_space(10.0);
 
-                ui.label("Properties:");
-                if let Some(bay) = bay_num {
-                    ui.add(egui::TextEdit::multiline(&mut self.model.docking_bays[bay].properties).desired_rows(1));
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    if let Some(bay) = bay_num {
+                        if ui.text_edit_singleline(name_string).changed() {
+                            pof::properties_update_field(&mut self.model.docking_bays[bay].properties, "$name", name_string);
+                        }
+                    } else {
+                        ui.add_enabled(false, egui::TextEdit::singleline(&mut blank_string));
+                    }
+                });
+
+                let mut subobj_names_list = vec![String::new()];
+                subobj_names_list.extend(self.model.get_subobj_names().into_iter());
+
+                let mut parent_id = if let Some(bay) = bay_num {
+                    pof::properties_get_field(&self.model.docking_bays[bay].properties, "$parent_submodel").map_or(0, |parent_name| {
+                        subobj_names_list
+                            .iter()
+                            .position(|name| name.to_lowercase() == parent_name.to_lowercase())
+                            .unwrap_or(0)
+                    })
                 } else {
-                    ui.add_enabled(false, egui::TextEdit::multiline(properties).desired_rows(1));
+                    0 // doesnt matter
+                };
+
+                if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, &mut parent_id, bay_num, "Parent Object", None) {
+                    pof::properties_update_field(
+                        &mut self.model.docking_bays[bay_num.unwrap()].properties,
+                        "$parent_submodel",
+                        &subobj_names_list[new_subobj],
+                    );
+                    self.ui_state.viewport_3d_dirty = true;
                 }
 
                 // combo box list of path names
@@ -1462,6 +1526,23 @@ impl PofToolsGui {
                             self.model.docking_bays[bay_num.unwrap()].path = Some(PathId(*path_num as u32))
                         }
                         PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All);
+                    }
+                });
+
+                ui.separator();
+
+                CollapsingHeader::new("Properties Raw").show(ui, |ui| {
+                    if let Some(bay) = bay_num {
+                        if ui
+                            .add(egui::TextEdit::multiline(&mut self.model.docking_bays[bay].properties).desired_rows(1))
+                            .changed()
+                        {
+                            if let Some(new_name) = pof::properties_get_field(&self.model.docking_bays[bay].properties, "$name") {
+                                *name_string = new_name.to_string();
+                            }
+                        }
+                    } else {
+                        ui.add_enabled(false, egui::TextEdit::multiline(&mut String::new()).desired_rows(1));
                     }
                 });
 
@@ -1549,11 +1630,11 @@ impl PofToolsGui {
 
                 ui.label("Glow Texture:");
                 if let Some(bank) = bank_num {
-                    if ui.add(egui::TextEdit::multiline(glow_texture_string).desired_rows(1)).changed() {
-                        self.model.glow_banks[bank].set_glow_texture(glow_texture_string);
+                    if ui.add(egui::TextEdit::singleline(glow_texture_string).desired_rows(1)).changed() {
+                        pof::properties_update_field(&mut self.model.glow_banks[bank].properties, "$glow_texture", glow_texture_string);
                     }
                 } else {
-                    ui.add_enabled(false, egui::TextEdit::multiline(glow_texture_string).desired_rows(1));
+                    ui.add_enabled(false, egui::TextEdit::singleline(&mut blank_string).desired_rows(1));
                 }
 
                 let subobj_names_list = self.model.get_subobj_names();
@@ -1562,21 +1643,17 @@ impl PofToolsGui {
                     self.model.glow_banks[bank_num.unwrap()].obj_parent = ObjectId(new_subobj as u32);
                 }
 
-                let (disp_time, on_time, off_time, lod, glow_type, glow_points) =
+                let (disp_time, on_time, off_time, lod, glow_type) =
                     if let TreeSelection::Glows(GlowSelection::BankPoint(bank, _)) = self.ui_state.tree_view_selection {
-                        let GlowPointBank {
-                            disp_time, on_time, off_time, lod, glow_type, glow_points, ..
-                        } = &mut self.model.glow_banks[bank as usize];
+                        let GlowPointBank { disp_time, on_time, off_time, lod, glow_type, .. } = &mut self.model.glow_banks[bank as usize];
 
-                        (Some(disp_time), Some(on_time), Some(off_time), Some(lod), Some(glow_type), Some(glow_points))
+                        (Some(disp_time), Some(on_time), Some(off_time), Some(lod), Some(glow_type))
                     } else if let TreeSelection::Glows(GlowSelection::Bank(bank)) = self.ui_state.tree_view_selection {
-                        let GlowPointBank {
-                            disp_time, on_time, off_time, lod, glow_type, glow_points, ..
-                        } = &mut self.model.glow_banks[bank as usize];
+                        let GlowPointBank { disp_time, on_time, off_time, lod, glow_type, .. } = &mut self.model.glow_banks[bank as usize];
 
-                        (Some(disp_time), Some(on_time), Some(off_time), Some(lod), Some(glow_type), Some(glow_points))
+                        (Some(disp_time), Some(on_time), Some(off_time), Some(lod), Some(glow_type))
                     } else {
-                        (None, None, None, None, None, None)
+                        (None, None, None, None, None)
                     };
 
                 ui.horizontal(|ui| {
@@ -1611,6 +1688,29 @@ impl PofToolsGui {
 
                 ui.separator();
 
+                CollapsingHeader::new("Properties Raw").show(ui, |ui| {
+                    if let Some(bank) = bank_num {
+                        if ui
+                            .add(egui::TextEdit::multiline(&mut self.model.glow_banks[bank].properties).desired_rows(1))
+                            .changed()
+                        {
+                            println!("{}", &self.model.glow_banks[bank].properties);
+                        }
+                    } else {
+                        ui.add_enabled(false, egui::TextEdit::multiline(&mut String::new()).desired_rows(1));
+                    }
+                });
+
+                ui.separator();
+
+                let glow_points = if let TreeSelection::Glows(GlowSelection::BankPoint(bank, _)) = self.ui_state.tree_view_selection {
+                    Some(&mut self.model.glow_banks[bank as usize].glow_points)
+                } else if let TreeSelection::Glows(GlowSelection::Bank(bank)) = self.ui_state.tree_view_selection {
+                    Some(&mut self.model.glow_banks[bank as usize].glow_points)
+                } else {
+                    None
+                };
+
                 let point_idx_response = UiState::list_manipulator_widget(ui, point_num, glow_points.map(|list| list.len()), "Point");
 
                 let (pos, norm, radius) = if let TreeSelection::Glows(GlowSelection::BankPoint(bank, point)) = self.ui_state.tree_view_selection {
@@ -1644,7 +1744,7 @@ impl PofToolsGui {
                     self.ui_state.viewport_3d_dirty = true;
                 }
             }
-            PropertiesPanel::SpecialPoint { radius_string, position_string, name_string, properties } => {
+            PropertiesPanel::SpecialPoint { radius_string, position_string, name_string } => {
                 ui.heading("Special Point");
                 ui.separator();
 
@@ -1657,19 +1757,60 @@ impl PofToolsGui {
 
                 ui.add_space(10.0);
 
-                ui.label("Name:");
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    if let Some(point) = point_num {
+                        ui.add(egui::TextEdit::singleline(&mut self.model.special_points[point].name));
+                    } else {
+                        ui.add_enabled(false, egui::TextEdit::singleline(name_string));
+                    }
+                });
+
+                ui.separator();
+
+                let types_display = vec!["", "Subsystem", "Shield point"];
+                let types = vec!["", "subsystem", "shieldpoint"];
+                let mut idx = 0;
                 if let Some(point) = point_num {
-                    ui.add(egui::TextEdit::singleline(&mut self.model.special_points[point].name));
-                } else {
-                    ui.add_enabled(false, egui::TextEdit::singleline(name_string));
+                    if let Some(type_str) = pof::properties_get_field(&self.model.special_points[point].properties, "$special") {
+                        if let Some(i) = types.iter().position(|str| *str == type_str) {
+                            idx = i;
+                        }
+                    }
                 }
 
-                ui.label("Properties:");
-                if let Some(point) = point_num {
-                    ui.add(egui::TextEdit::multiline(&mut self.model.special_points[point].properties).desired_rows(1));
-                } else {
-                    ui.add_enabled(false, egui::TextEdit::multiline(properties).desired_rows(1));
-                }
+                ui.add_enabled_ui(point_num.is_some(), |ui| {
+                    if let Some(point) = point_num {
+                        let mut changed = false;
+                        egui::ComboBox::from_label("Type").selected_text(types_display[idx]).show_ui(ui, |ui| {
+                            changed |= ui.selectable_value(&mut idx, 0, types_display[0]).changed();
+                            changed |= ui.selectable_value(&mut idx, 1, types_display[1]).changed();
+                            changed |= ui.selectable_value(&mut idx, 2, types_display[2]).changed();
+                        });
+                        if changed {
+                            pof::properties_update_field(&mut self.model.special_points[point].properties, "$special", types[idx]);
+                        }
+                    } else {
+                        egui::ComboBox::from_label("Type").show_ui(ui, |ui| {
+                            ui.selectable_value(&mut idx, 0, "");
+                        });
+                    }
+                });
+
+                CollapsingHeader::new("Properties Raw").show(ui, |ui| {
+                    if let Some(point) = point_num {
+                        if ui
+                            .add(egui::TextEdit::multiline(&mut self.model.special_points[point].properties).desired_rows(1))
+                            .changed()
+                        {
+                            if let Some(new_name) = pof::properties_get_field(&self.model.special_points[point].properties, "$name") {
+                                *name_string = new_name.to_string();
+                            }
+                        }
+                    } else {
+                        ui.add_enabled(false, egui::TextEdit::multiline(&mut String::new()).desired_rows(1));
+                    }
+                });
 
                 ui.separator();
 

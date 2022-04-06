@@ -596,6 +596,14 @@ fn main() {
     pt_gui.camera_offset = Vec3d::ZERO;
     pt_gui.camera_scale = model.header.max_radius * 2.0;
 
+    // let mut str1 = String::from("asd=dsa\n123 = 321\nddd =01\n");
+    // pof::properties_update_field(&mut str1, "asd", "");
+    // println!("{:?}\n", str1);
+    // pof::properties_update_field(&mut str1, "ddd", "");
+    // println!("{:?}\n", str1);
+    // pof::properties_update_field(&mut str1, "123", "");
+    // println!("{:?}\n", str1);
+
     let mut errored = None;
 
     event_loop.run(move |event, _, control_flow| {
@@ -1326,7 +1334,12 @@ impl PofToolsGui {
                     &COLORS,
                     display,
                     model.docking_bays.iter().enumerate().flat_map(|(bay_idx, docking_bay)| {
-                        let position = docking_bay.position;
+                        let mut position = docking_bay.position;
+                        if let Some(parent_name) = pof::properties_get_field(&docking_bay.properties, "$parent_submodel") {
+                            if let Some(id) = model.get_obj_id_by_name(parent_name) {
+                                position += model.get_total_subobj_offset(id);
+                            }
+                        }
                         let radius = self.model.header.max_radius.powf(0.4) / 4.0;
                         let fvec = docking_bay.fvec.0 * radius * 3.0;
                         let uvec = docking_bay.uvec.0 * radius * 3.0;

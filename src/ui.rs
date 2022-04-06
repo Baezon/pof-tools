@@ -396,6 +396,8 @@ pub enum Error {
     TooManyDebrisObjects,
     DetailObjWithParent(ObjectId),
     DetailAndDebrisObj(ObjectId),
+    TooManyVerts(ObjectId),
+    TooManyNorms(ObjectId),
     // all turret base/gun objects must be disjoint!
 }
 
@@ -687,6 +689,28 @@ impl PofToolsGui {
                                             "⊗ Detail {} object ({}) cannot also be a debris object",
                                             self.model.header.detail_levels.iter().position(|detail_id| *detail_id == id).unwrap(),
                                             self.model.sub_objects[id].name,
+                                        ))
+                                        .text_style(TextStyle::Button)
+                                        .color(Color32::RED),
+                                    ));
+                                }
+                                Error::TooManyVerts(id) => {
+                                    ui.add(Label::new(
+                                        RichText::new(format!(
+                                            "⊗ Subobject {} has more than the {} vertices supported by the currently selected pof version",
+                                            self.model.sub_objects[id].name,
+                                            u16::MAX,
+                                        ))
+                                        .text_style(TextStyle::Button)
+                                        .color(Color32::RED),
+                                    ));
+                                }
+                                Error::TooManyNorms(id) => {
+                                    ui.add(Label::new(
+                                        RichText::new(format!(
+                                            "⊗ Subobject {} has more than the {} normals supported by the currently selected pof version",
+                                            self.model.sub_objects[id].name,
+                                            u16::MAX,
                                         ))
                                         .text_style(TextStyle::Button)
                                         .color(Color32::RED),
@@ -1075,6 +1099,8 @@ impl PofToolsGui {
                 Error::TooManyDebrisObjects => model.num_debris_objects() > pof::MAX_DEBRIS_OBJECTS,
                 Error::DetailAndDebrisObj(id) => model.header.detail_levels.contains(&id) && model.sub_objects[id].is_debris_model,
                 Error::DetailObjWithParent(id) => model.header.detail_levels.contains(&id) && model.sub_objects[id].parent().is_some(),
+                Error::TooManyVerts(id) => model.sub_objects[id].bsp_data.verts.len() > u16::MAX as usize,
+                Error::TooManyNorms(id) => model.sub_objects[id].bsp_data.norms.len() > u16::MAX as usize,
             };
 
             let existing_warning = errors.contains(&error);
@@ -1103,6 +1129,16 @@ impl PofToolsGui {
                 }
                 if subobj.is_debris_model {
                     errors.insert(Error::DetailAndDebrisObj(id));
+                }
+            }
+
+            for subobj in &model.sub_objects {
+                if subobj.bsp_data.verts.len() > u16::MAX as usize {
+                    errors.insert(Error::TooManyVerts(subobj.obj_id));
+                }
+
+                if subobj.bsp_data.norms.len() > u16::MAX as usize {
+                    errors.insert(Error::TooManyNorms(subobj.obj_id));
                 }
             }
         }

@@ -640,8 +640,8 @@ fn parse_bsp_data(mut buf: &[u8]) -> io::Result<BspData> {
                                 let texture = Texturing::Texture(TextureId(chunk.read_u32::<LE>()?));
                                 let verts = read_list_n(num_verts as usize, &mut chunk, |chunk| {
                                     Ok(PolyVertex {
-                                        vertex_id: VertexId(chunk.read_u16::<LE>()?),
-                                        normal_id: NormalId(chunk.read_u16::<LE>()?),
+                                        vertex_id: VertexId(chunk.read_u16::<LE>()? as u32),
+                                        normal_id: NormalId(chunk.read_u16::<LE>()? as u32),
                                         uv: (chunk.read_f32::<LE>()?, chunk.read_f32::<LE>()?),
                                     })
                                 })?;
@@ -661,8 +661,8 @@ fn parse_bsp_data(mut buf: &[u8]) -> io::Result<BspData> {
                                 let _ = chunk.read_u8()?; // get rid of padding byte
                                 let verts = read_list_n(num_verts as usize, &mut chunk, |chunk| {
                                     Ok(PolyVertex {
-                                        vertex_id: VertexId(chunk.read_u16::<LE>()?),
-                                        normal_id: NormalId(chunk.read_u16::<LE>()?),
+                                        vertex_id: VertexId(chunk.read_u16::<LE>()? as u32),
+                                        normal_id: NormalId(chunk.read_u16::<LE>()? as u32),
                                         uv: Default::default(),
                                     })
                                 })?;
@@ -755,14 +755,14 @@ use nalgebra::Point3;
 extern crate nalgebra_glm as glm;
 
 struct VertexContext {
-    vertex_offset: u16,
+    vertex_offset: u32,
     normal_ids: Vec<NormalId>,
 }
 
 impl<'a> dae_parser::geom::VertexLoad<'a, VertexContext> for PolyVertex {
     fn position(ctx: &VertexContext, _: &SourceReader<'a, XYZ>, index: u32) -> Self {
         PolyVertex {
-            vertex_id: VertexId(u16::try_from(index).unwrap() + ctx.vertex_offset),
+            vertex_id: VertexId(index + ctx.vertex_offset),
             normal_id: NormalId(0),
             uv: (0.0, 0.0),
         }
@@ -846,7 +846,7 @@ fn dae_parse_geometry(
     for geo in &node.instance_geometry {
         let geo = local_maps[&geo.url].element.as_mesh().unwrap();
         let verts = geo.vertices.as_ref().unwrap().importer(local_maps).unwrap();
-        let mut vert_ctx = VertexContext { vertex_offset: vertices_out.len() as u16, normal_ids: vec![] };
+        let mut vert_ctx = VertexContext { vertex_offset: vertices_out.len() as u32, normal_ids: vec![] };
 
         for position in Clone::clone(verts.position_importer().unwrap()) {
             vertices_out.push(flip_y_z(&transform * Vec3d::from(position)));

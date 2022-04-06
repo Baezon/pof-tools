@@ -221,8 +221,8 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, bsp_data: &BspData) -> io::Resul
                     poly.texture.write_to(buf)?;
 
                     for vert in &poly.verts {
-                        vert.vertex_id.write_to(buf)?;
-                        vert.normal_id.write_to(buf)?;
+                        u16::try_from(vert.vertex_id.0).unwrap().write_to(buf)?;
+                        u16::try_from(vert.normal_id.0).unwrap().write_to(buf)?;
                         if matches!(poly.texture, Texturing::Texture(_)) {
                             vert.uv.write_to(buf)?;
                         }

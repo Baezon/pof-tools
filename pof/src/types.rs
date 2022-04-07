@@ -1721,7 +1721,7 @@ pub fn properties_update_field(properties: &mut String, field: &str, val: &str) 
         if properties.is_empty() {
             *properties = format!("{}={}", field, val);
         } else {
-            *properties = format!("{}\n{}={}", properties, field, val);
+            *properties = format!("{}\n{}{}", properties, field, val);
         }
     }
 }

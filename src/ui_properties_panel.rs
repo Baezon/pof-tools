@@ -1285,7 +1285,7 @@ impl PofToolsGui {
                             UiState::set_widget_color(ui, Color32::YELLOW);
                         }
                         if ui.text_edit_singleline(engine_subsys_string).changed() {
-                            pof::properties_update_field(&mut self.model.thruster_banks[bank].properties, "$engine_subsystem", engine_subsys_string);
+                            pof::properties_update_field(&mut self.model.thruster_banks[bank].properties, "$engine_subsystem=", engine_subsys_string);
                         }
                         UiState::reset_widget_color(ui);
                     } else {
@@ -1470,7 +1470,7 @@ impl PofToolsGui {
                     ui.label("Name:");
                     if let Some(bay) = bay_num {
                         if ui.text_edit_singleline(name_string).changed() {
-                            pof::properties_update_field(&mut self.model.docking_bays[bay].properties, "$name", name_string);
+                            pof::properties_update_field(&mut self.model.docking_bays[bay].properties, "$name=", name_string);
                         }
                     } else {
                         ui.add_enabled(false, egui::TextEdit::singleline(&mut blank_string));
@@ -1494,7 +1494,7 @@ impl PofToolsGui {
                 if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, &mut parent_id, bay_num, "Parent Object", None) {
                     pof::properties_update_field(
                         &mut self.model.docking_bays[bay_num.unwrap()].properties,
-                        "$parent_submodel",
+                        "$parent_submodel=",
                         &subobj_names_list[new_subobj],
                     );
                     self.ui_state.viewport_3d_dirty = true;
@@ -1631,7 +1631,7 @@ impl PofToolsGui {
                 ui.label("Glow Texture:");
                 if let Some(bank) = bank_num {
                     if ui.add(egui::TextEdit::singleline(glow_texture_string).desired_rows(1)).changed() {
-                        pof::properties_update_field(&mut self.model.glow_banks[bank].properties, "$glow_texture", glow_texture_string);
+                        pof::properties_update_field(&mut self.model.glow_banks[bank].properties, "$glow_texture=", glow_texture_string);
                     }
                 } else {
                     ui.add_enabled(false, egui::TextEdit::singleline(&mut blank_string).desired_rows(1));
@@ -1788,7 +1788,7 @@ impl PofToolsGui {
                             changed |= ui.selectable_value(&mut idx, 2, types_display[2]).changed();
                         });
                         if changed {
-                            pof::properties_update_field(&mut self.model.special_points[point].properties, "$special", types[idx]);
+                            pof::properties_update_field(&mut self.model.special_points[point].properties, "$special=", types[idx]);
                         }
                     } else {
                         egui::ComboBox::from_label("Type").show_ui(ui, |ui| {

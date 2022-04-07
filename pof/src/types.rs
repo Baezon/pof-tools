@@ -1711,17 +1711,15 @@ fn properties_find_field(properties: &String, field: &str) -> Option<(usize, usi
 }
 
 pub fn properties_update_field(properties: &mut String, field: &str, val: &str) {
-    if let Some((start_idx, end_idx)) = properties_find_field(properties, field) {
-        if val == "" {
-            properties_delete_field(properties, field);
-        } else {
-            *properties = format!("{}{}{}", &properties[..start_idx], val, &properties[end_idx..]);
-        }
+    if val == "" {
+        properties_delete_field(properties, field);
     } else {
         if properties.is_empty() {
             *properties = format!("{}={}", field, val);
+        } else if let Some((start_idx, end_idx)) = properties_find_field(properties, field) {
+            *properties = format!("{}{}{}", &properties[..start_idx], val, &properties[end_idx..]);
         } else {
-            *properties = format!("{}\n{}{}", properties, field, val);
+            *properties = format!("{}\n{}={}", properties, field, val);
         }
     }
 }
@@ -1732,4 +1730,14 @@ pub fn properties_get_field<'a>(properties: &'a String, field: &str) -> Option<&
     } else {
         None
     }
+}
+
+pub fn properties_set_flag(properties: &mut String, flag: &str) {
+    if properties_find_field(properties, flag).is_none() {
+        *properties = format!("{}\n{}", properties, flag);
+    }
+}
+
+pub fn properties_remove_flag(properties: &mut String, flag: &str) {
+    properties_delete_field(properties, flag);
 }

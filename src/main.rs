@@ -471,8 +471,18 @@ impl PofToolsGui {
                     }
                 }) {
                     let mut buf = vec![];
-                    file.read_to_end(&mut buf).expect("failed to read image");
-                    let image = image::load(Cursor::new(buf), format).unwrap().to_rgba8();
+                    if let Err(e) = file.read_to_end(&mut buf) {
+                        error!("Failed to load texture {}.{}: {:?}", tex_name, format.extensions_str()[0], e);
+                        continue;
+                    }
+                    let image = match image::load(Cursor::new(buf), format) {
+                        Ok(image) => image.to_rgba8(),
+                        Err(e) => {
+                            error!("Failed to load texture {}.{}: {:?}", tex_name, format.extensions_str()[0], e);
+                            continue;
+                        }
+                    };
+
                     let image_dimensions = image.dimensions();
                     let image = glium::texture::RawImage2d::from_raw_rgba(image.into_raw(), image_dimensions);
 

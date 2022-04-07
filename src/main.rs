@@ -596,14 +596,6 @@ fn main() {
     pt_gui.camera_offset = Vec3d::ZERO;
     pt_gui.camera_scale = model.header.max_radius * 2.0;
 
-    // let mut str1 = String::from("asd=dsa\n123 = 321\nddd =01\n");
-    // pof::properties_update_field(&mut str1, "asd", "");
-    // println!("{:?}\n", str1);
-    // pof::properties_update_field(&mut str1, "ddd", "");
-    // println!("{:?}\n", str1);
-    // pof::properties_update_field(&mut str1, "123", "");
-    // println!("{:?}\n", str1);
-
     let mut errored = None;
 
     event_loop.run(move |event, _, control_flow| {

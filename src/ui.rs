@@ -12,7 +12,7 @@ use std::{
 use eframe::egui::{self, Button, TextStyle, Ui};
 use pof::ObjectId;
 
-use crate::{ui_properties_panel::PropertiesPanel, GlBufferedInsignia, GlBufferedObject, GlBufferedShield, GlLollipops, POF_TOOLS_VERSION};
+use crate::{ui_properties_panel::PropertiesPanel, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers, POF_TOOLS_VERSION};
 
 #[derive(PartialEq, Hash, Debug, Clone, Copy)]
 pub(crate) enum TreeSelection {
@@ -452,7 +452,7 @@ pub(crate) struct PofToolsGui {
     pub camera_scale: f32,
     pub camera_offset: Vec3d,
 
-    pub buffer_objects: Vec<GlBufferedObject>, // all the subobjects, conditionally rendered based on the current tree selection
+    pub buffer_objects: Vec<GlObjectBuffers>, // all the subobjects, conditionally rendered based on the current tree selection
     pub buffer_textures: HashMap<TextureId, SrgbTexture2d>, // map of tex ids to actual textures
     pub buffer_shield: Option<GlBufferedShield>, // the shield, similar to the above
     pub buffer_insignias: Vec<GlBufferedInsignia>, // the insignias, similar to the above

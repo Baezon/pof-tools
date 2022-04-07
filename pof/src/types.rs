@@ -528,24 +528,13 @@ mk_struct! {
         pub kind: BspLightKind,
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Default, Debug, Clone)]
     pub struct EyePoint {
         pub attached_subobj: ObjectId,
         pub offset: Vec3d,
-        pub normal: Vec3d,
+        pub normal: NormalVec3,
     }
-}
-impl Default for EyePoint {
-    fn default() -> Self {
-        Self {
-            attached_subobj: ObjectId(0),
-            offset: Default::default(),
-            normal: Vec3d::new(0.0, 0.0, 1.0),
-        }
-    }
-}
 
-mk_struct! {
     #[derive(Debug, Clone, Default)]
     pub struct PathPoint {
         pub position: Vec3d,
@@ -684,10 +673,10 @@ impl Default for SpecialPoint {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct WeaponHardpoint {
     pub position: Vec3d,
-    pub normal: Vec3d,
+    pub normal: NormalVec3,
     pub offset: f32,
 }
 impl Serialize for WeaponHardpoint {
@@ -699,15 +688,6 @@ impl Serialize for WeaponHardpoint {
             self.offset.write_to(w)?;
         }
         Ok(())
-    }
-}
-impl Default for WeaponHardpoint {
-    fn default() -> Self {
-        Self {
-            position: Default::default(),
-            normal: Vec3d { x: 0.0, y: 0.0, z: 1.0 },
-            offset: Default::default(),
-        }
     }
 }
 
@@ -1328,7 +1308,7 @@ mk_struct! {
     pub struct Turret {
         pub base_obj: ObjectId,
         pub gun_obj: ObjectId,
-        pub normal: Vec3d,
+        pub normal: NormalVec3,
         pub fire_points: Vec<Vec3d>,
     }
 }
@@ -1451,6 +1431,8 @@ mk_versions! {
     V20_09(2009, "20.09"),
     /// Retail FS1 - Cross sections introduced
     V20_14(2014, "20.14"),
+    /// FS1 POFs produced by COB2FS v0.05
+    V20_16(2016, "20.16"),
     /// Retail FS2 - PCS2 Compatible
     V21_16(2116, "21.16"),
     /// Retail FS2 - PCS2 Compatible - Thruster properties added

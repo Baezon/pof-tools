@@ -1,0 +1,12 @@
+[package]
+name = "pof-census"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+pof = { path = "../../pof" }
+walkdir = "2"
+memchr = "2.4"
+byteorder = "1.4"

@@ -377,7 +377,7 @@ impl Model {
             }
             Ok(())
         })?;
-        write_subobjects(w, if self.version >= Version::V21_16 { b"SOBJ" } else { b"OBJ2" }, &self.sub_objects)?;
+        write_subobjects(w, if self.version >= Version::V21_16 { b"OBJ2" } else { b"SOBJ" }, &self.sub_objects)?;
         write_chunk_vec(w, b"TXTR", &self.textures)?;
         write_chunk_vec(w, b"PATH", &self.paths)?;
         write_chunk_vec(w, b"SPCL", &self.special_points)?;

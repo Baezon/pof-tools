@@ -432,6 +432,7 @@ pub(crate) struct UiState {
     pub display_radius: bool,
     pub display_bbox: bool,
     pub display_origin: bool,
+    pub move_only_offset: bool,
 }
 
 pub(crate) struct PofToolsGui {

@@ -937,7 +937,8 @@ impl BspNode {
                 };
             }
             BspNode::Leaf { bbox, poly_list } => {
-                *bbox = Default::default();
+                bbox.max = verts[poly_list.first().unwrap().verts.first().unwrap().vertex_id.0 as usize];
+                bbox.min = verts[poly_list.first().unwrap().verts.first().unwrap().vertex_id.0 as usize];
                 for poly in poly_list {
                     for vert_id in &poly.verts {
                         bbox.min = {
@@ -1601,6 +1602,9 @@ impl Model {
         subobj.radius = 0.0;
         for vert in &mut subobj.bsp_data.verts {
             *vert = matrix * *vert;
+            if !transform_offset {
+                *vert += translation.into();
+            }
             if vert.magnitude() > subobj.radius {
                 subobj.radius = vert.magnitude();
             }
@@ -1631,6 +1635,29 @@ impl Model {
         for child_id in children {
             self.apply_transform(child_id, matrix, true)
         }
+    }
+
+    pub fn recalc_subobj_offset(&mut self, id: ObjectId) {
+        let subobj = &mut self.sub_objects[id];
+        let new_offset = Vec3d::average(subobj.bsp_data.verts.iter().map(|vert| *vert + subobj.offset));
+        self.subobj_move_only_offset(id, new_offset)
+    }
+
+    pub fn subobj_move_only_offset(&mut self, id: ObjectId, new_offset: Vec3d) {
+        let subobj = &mut self.sub_objects[id];
+        let diff = new_offset - subobj.offset;
+
+        let children = subobj.children.clone();
+        for id in &children {
+            self.sub_objects[*id].offset -= diff;
+        }
+
+        let subobj = &mut self.sub_objects[id];
+        subobj.bbox.max -= diff;
+        subobj.bbox.min -= diff;
+        subobj.offset = new_offset;
+        self.apply_transform(id, &glm::translation(&(-diff).into()), false);
+        self.sub_objects[id].recalc_radius();
     }
 
     pub fn recalc_radius(&mut self) {

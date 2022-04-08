@@ -742,7 +742,7 @@ fn main() {
                                 .filter(|_| pt_gui.display_mode == DisplayMode::Textured)
                                 // if we're displaying textures...
                                 .and_then(|tex_id| pt_gui.buffer_textures.get(&tex_id))
-                            // and we have a texture loaded, then display
+                            //     and we have a texture loaded, then display
                             {
                                 // draw textured
                                 let uniforms = glium::uniform! {
@@ -1309,7 +1309,7 @@ impl PofToolsGui {
                         weapon_bank.iter().enumerate().map(move |(point_idx, weapon_point)| {
                             let position = weapon_point.position;
                             let radius = model.header.max_radius * 0.03;
-                            let normal = weapon_point.normal * radius * 2.0;
+                            let normal = weapon_point.normal.0 * radius * 2.0;
                             let selection = if selected_bank == Some(bank_idx) {
                                 if selected_point == Some(point_idx) {
                                     SELECTED_POINT
@@ -1438,7 +1438,7 @@ impl PofToolsGui {
                         let offset = self.model.get_total_subobj_offset(turret.gun_obj);
                         turret.fire_points.iter().enumerate().map(move |(point_idx, fire_point)| {
                             let position = *fire_point + offset;
-                            let normal = turret.normal * size * 2.0;
+                            let normal = turret.normal.0 * size * 2.0;
                             let radius = size;
                             let selection = if selected_turret == Some(turret_idx) {
                                 if selected_point == Some(point_idx) {
@@ -1513,7 +1513,7 @@ impl PofToolsGui {
                     display,
                     model.eye_points.iter().enumerate().map(|(eye_idx, eye_point)| {
                         let position = eye_point.offset;
-                        let normal = eye_point.normal * size * 2.0;
+                        let normal = eye_point.normal.0 * size * 2.0;
                         let radius = size;
                         let selection = if selected_eye == Some(eye_idx) { SELECTED_POINT } else { UNSELECTED };
                         (position, normal, radius, selection)

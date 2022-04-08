@@ -449,14 +449,14 @@ impl UiState {
                 WeaponSelection::PriBankPoint(bank_idx, point_idx) => {
                     self.properties_panel = PropertiesPanel::Weapon {
                         position_string: format!("{}", model.primary_weps[bank_idx][point_idx].position),
-                        normal_string: format!("{}", model.primary_weps[bank_idx][point_idx].normal),
+                        normal_string: format!("{}", model.primary_weps[bank_idx][point_idx].normal.0),
                         offset_string: format!("{}", model.primary_weps[bank_idx][point_idx].offset),
                     }
                 }
                 WeaponSelection::SecBankPoint(bank_idx, point_idx) => {
                     self.properties_panel = PropertiesPanel::Weapon {
                         position_string: format!("{}", model.secondary_weps[bank_idx][point_idx].position),
-                        normal_string: format!("{}", model.secondary_weps[bank_idx][point_idx].normal),
+                        normal_string: format!("{}", model.secondary_weps[bank_idx][point_idx].normal.0),
                         offset_string: format!("{}", model.secondary_weps[bank_idx][point_idx].offset),
                     }
                 }
@@ -525,14 +525,14 @@ impl UiState {
             TreeSelection::Turrets(turret_selection) => match turret_selection {
                 TurretSelection::TurretPoint(turret, point) => {
                     self.properties_panel = PropertiesPanel::Turret {
-                        normal_string: format!("{}", model.turrets[turret].normal),
+                        normal_string: format!("{}", model.turrets[turret].normal.0),
                         base_idx: model.turrets[turret].base_obj.0 as usize,
                         position_string: format!("{}", model.turrets[turret].fire_points[point]),
                     }
                 }
                 TurretSelection::Turret(turret) => {
                     self.properties_panel = PropertiesPanel::Turret {
-                        normal_string: format!("{}", model.turrets[turret].normal),
+                        normal_string: format!("{}", model.turrets[turret].normal.0),
                         base_idx: model.turrets[turret].base_obj.0 as usize,
                         position_string: Default::default(),
                     }
@@ -571,7 +571,7 @@ impl UiState {
                 EyeSelection::EyePoint(idx) => {
                     self.properties_panel = PropertiesPanel::EyePoint {
                         position_string: format!("{}", model.eye_points[idx].offset),
-                        normal_string: format!("{}", model.eye_points[idx].normal),
+                        normal_string: format!("{}", model.eye_points[idx].normal.0),
                         attached_subobj_idx: model.eye_points[idx].attached_subobj.0 as usize,
                     }
                 }

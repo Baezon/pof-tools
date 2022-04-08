@@ -255,7 +255,7 @@ impl<R: Read + Seek> Parser<R> {
                         Ok(EyePoint {
                             attached_subobj: ObjectId(this.read_u32()?),
                             offset: this.read_vec3d()?,
-                            normal: this.read_vec3d()?,
+                            normal: this.read_vec3d()?.try_into().unwrap_or_default(),
                         })
                     })?);
                     //println!("{:#?}", eye_points);
@@ -267,7 +267,7 @@ impl<R: Read + Seek> Parser<R> {
                         this.read_list(|this| {
                             Ok(WeaponHardpoint {
                                 position: this.read_vec3d()?,
-                                normal: this.read_vec3d()?,
+                                normal: this.read_vec3d()?.try_into().unwrap_or_default(),
                                 // TODO: document this at https://wiki.hard-light.net/index.php/POF_data_structure
                                 offset: if this.version >= Version::V22_01 || this.version == Version::V21_18 {
                                     this.read_f32()?
@@ -288,7 +288,7 @@ impl<R: Read + Seek> Parser<R> {
                         Ok(Turret {
                             base_obj,
                             gun_obj,
-                            normal: this.read_vec3d()?,
+                            normal: this.read_vec3d()?.try_into().unwrap_or_default(),
                             fire_points: this.read_list(|this| this.read_vec3d())?,
                         })
                     })?);
@@ -378,7 +378,7 @@ impl<R: Read + Seek> Parser<R> {
                             faces: this.read_list_n(num_faces as usize, |this| {
                                 let [x, y, z] = *this.read_array(|this| {
                                     Ok(PolyVertex {
-                                        vertex_id: VertexId(this.read_u32()?.try_into().unwrap()),
+                                        vertex_id: VertexId(this.read_u32()?),
                                         normal_id: (),
                                         uv: (this.read_f32()?, this.read_f32()?),
                                     })
@@ -396,11 +396,7 @@ impl<R: Read + Seek> Parser<R> {
                         self.read_list(|this| {
                             Ok(ShieldPolygon {
                                 normal: this.read_vec3d()?,
-                                verts: (
-                                    VertexId(this.read_u32()?.try_into().unwrap()),
-                                    VertexId(this.read_u32()?.try_into().unwrap()),
-                                    VertexId(this.read_u32()?.try_into().unwrap()),
-                                ),
+                                verts: (VertexId(this.read_u32()?), VertexId(this.read_u32()?), VertexId(this.read_u32()?)),
                                 neighbors: (PolygonId(this.read_u32()?), PolygonId(this.read_u32()?), PolygonId(this.read_u32()?)),
                             })
                         })?,
@@ -640,8 +636,8 @@ fn parse_bsp_data(mut buf: &[u8]) -> io::Result<BspData> {
                                 let texture = Texturing::Texture(TextureId(chunk.read_u32::<LE>()?));
                                 let verts = read_list_n(num_verts as usize, &mut chunk, |chunk| {
                                     Ok(PolyVertex {
-                                        vertex_id: VertexId(chunk.read_u16::<LE>()? as u32),
-                                        normal_id: NormalId(chunk.read_u16::<LE>()? as u32),
+                                        vertex_id: VertexId(chunk.read_u16::<LE>()?.into()),
+                                        normal_id: NormalId(chunk.read_u16::<LE>()?.into()),
                                         uv: (chunk.read_f32::<LE>()?, chunk.read_f32::<LE>()?),
                                     })
                                 })?;
@@ -661,8 +657,8 @@ fn parse_bsp_data(mut buf: &[u8]) -> io::Result<BspData> {
                                 let _ = chunk.read_u8()?; // get rid of padding byte
                                 let verts = read_list_n(num_verts as usize, &mut chunk, |chunk| {
                                     Ok(PolyVertex {
-                                        vertex_id: VertexId(chunk.read_u16::<LE>()? as u32),
-                                        normal_id: NormalId(chunk.read_u16::<LE>()? as u32),
+                                        vertex_id: VertexId(chunk.read_u16::<LE>()?.into()),
+                                        normal_id: NormalId(chunk.read_u16::<LE>()?.into()),
                                         uv: Default::default(),
                                     })
                                 })?;
@@ -1030,7 +1026,7 @@ fn dae_parse_subobject_recursive(
 
                     let (pos, norm, _) = dae_parse_point(node, parent_transform);
                     turret.fire_points.push(pos);
-                    turret.normal = norm;
+                    turret.normal = norm.try_into().unwrap_or_default();
                     continue;
                 } else if name.starts_with('#') && name.contains("properties") {
                     dae_parse_properties(node, &mut subobj.properties);
@@ -1296,7 +1292,7 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
 
                         let (pos, norm, _) = dae_parse_point(node, local_transform);
                         new_point.position = pos;
-                        new_point.normal = norm;
+                        new_point.normal = norm.try_into().unwrap_or_default();
 
                         for (_, name) in node_children_with_keyword(&node.children, "offset") {
                             if let Some(idx) = name.find(":") {
@@ -1424,7 +1420,7 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
 
                     let (pos, norm, _) = dae_parse_point(node, local_transform);
                     new_point.offset = pos;
-                    new_point.normal = norm;
+                    new_point.normal = norm.try_into().unwrap_or_default();
 
                     for (_, name) in node_children_with_keyword(&node.children, "parent") {
                         if let Some(idx) = name.find(":") {

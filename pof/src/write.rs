@@ -102,6 +102,11 @@ impl Serialize for i32 {
         w.write_i32::<LE>(*self)
     }
 }
+impl Serialize for crate::NormalVec3 {
+    fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
+        self.0.write_to(w)
+    }
+}
 
 fn align_buf(buf: &mut Vec<u8>) -> io::Result<()> {
     let padding_length = buf.len().wrapping_neg() % 4;
@@ -519,7 +524,7 @@ fn make_weapons_node(weapons: &[Vec<WeaponHardpoint>], kind: &str) -> Node {
             let mut point_node = Node::new(format!("#w{}b{}-point{}", &kind[0..1], i, j), Some(format!("#w{}b{}-point{}", &kind[0..1], i, j)));
             let pos = point.position;
             point_node.push_transform(Translate::new([pos.x, pos.z, pos.y])); // itentional swizzle
-            point_node.push_transform(vec_to_rotation(&point.normal));
+            point_node.push_transform(vec_to_rotation(&point.normal.0));
 
             if point.offset != 0.0 {
                 point_node.children.push(Node::new(
@@ -650,7 +655,7 @@ fn make_eyes_node(eye_points: &[EyePoint]) -> Node {
 
         let pos = point.offset;
         point_node.push_transform(Translate::new([pos.x, pos.z, pos.y])); // itentional swizzle
-        point_node.push_transform(vec_to_rotation(&point.normal));
+        point_node.push_transform(vec_to_rotation(&point.normal.0));
 
         point_node
             .children
@@ -901,7 +906,7 @@ fn make_subobj_node(
 
                 let mut gunpoint_node = Node::new(name.clone(), Some(name));
                 gunpoint_node.push_transform(Translate::new([point.x, point.z, point.y]));
-                gunpoint_node.push_transform(vec_to_rotation(&turret.normal));
+                gunpoint_node.push_transform(vec_to_rotation(&turret.normal.0));
                 node.children.push(gunpoint_node);
             }
         }

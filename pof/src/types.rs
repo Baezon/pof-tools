@@ -1392,14 +1392,6 @@ impl Serialize for GlowPointBank {
         Ok(())
     }
 }
-impl GlowPointBank {
-    pub fn get_glow_texture(&self) -> Option<&str> {
-        self.properties.strip_prefix("$glow_texture=")
-    }
-    pub fn set_glow_texture(&mut self, tex: &str) {
-        self.properties = format!("$glow_texture={}", tex);
-    }
-}
 
 macro_rules! mk_versions {
     (@latest $last:ident) => { Self::$last };
@@ -1736,4 +1728,74 @@ impl Model {
             None
         }
     }
+}
+
+fn properties_delete_field(properties: &mut String, field: &str) {
+    if let Some(start_idx) = properties.find(field) {
+        let mut end_idx = if let Some(idx) = properties[start_idx..].chars().position(|d| d.is_ascii_control()) {
+            start_idx + idx
+        } else {
+            start_idx + properties[start_idx..].len()
+        };
+
+        let mut chars = properties[start_idx..].chars();
+        while end_idx < properties.len() && chars.next().unwrap().is_ascii_control() {
+            end_idx += 1;
+        }
+
+        *properties = format!("{}{}", &properties[..start_idx], &properties[end_idx..]).trim().to_string();
+    }
+}
+
+fn properties_find_field(properties: &String, field: &str) -> Option<(usize, usize)> {
+    if let Some(mut start_idx) = properties.find(field) {
+        let end_idx = if let Some(idx) = properties[start_idx..].chars().position(|d| d.is_ascii_control()) {
+            start_idx + idx
+        } else {
+            start_idx + properties[start_idx..].len()
+        };
+
+        start_idx = start_idx + field.len();
+
+        let mut chars = properties[start_idx..].chars();
+        while chars.next().map_or(false, |c| c == '=' || c.is_whitespace()) {
+            start_idx += 1;
+        }
+
+        Some((start_idx, end_idx))
+    } else {
+        None
+    }
+}
+
+pub fn properties_update_field(properties: &mut String, field: &str, val: &str) {
+    if val == "" {
+        properties_delete_field(properties, field);
+    } else {
+        if properties.is_empty() {
+            *properties = format!("{}={}", field, val);
+        } else if let Some((start_idx, end_idx)) = properties_find_field(properties, field) {
+            *properties = format!("{}{}{}", &properties[..start_idx], val, &properties[end_idx..]);
+        } else {
+            *properties = format!("{}\n{}={}", properties, field, val);
+        }
+    }
+}
+
+pub fn properties_get_field<'a>(properties: &'a String, field: &str) -> Option<&'a str> {
+    if let Some((start_idx, end_idx)) = properties_find_field(properties, field) {
+        Some(&properties[start_idx..end_idx])
+    } else {
+        None
+    }
+}
+
+pub fn properties_set_flag(properties: &mut String, flag: &str) {
+    if properties_find_field(properties, flag).is_none() {
+        *properties = format!("{}\n{}", properties, flag);
+    }
+}
+
+pub fn properties_remove_flag(properties: &mut String, flag: &str) {
+    properties_delete_field(properties, flag);
 }

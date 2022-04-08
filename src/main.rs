@@ -1347,7 +1347,12 @@ impl PofToolsGui {
                     &COLORS,
                     display,
                     model.docking_bays.iter().enumerate().flat_map(|(bay_idx, docking_bay)| {
-                        let position = docking_bay.position;
+                        let mut position = docking_bay.position;
+                        if let Some(parent_name) = pof::properties_get_field(&docking_bay.properties, "$parent_submodel") {
+                            if let Some(id) = model.get_obj_id_by_name(parent_name) {
+                                position += model.get_total_subobj_offset(id);
+                            }
+                        }
                         let radius = self.model.header.max_radius.powf(0.4) / 4.0;
                         let fvec = docking_bay.fvec.0 * radius * 3.0;
                         let uvec = docking_bay.uvec.0 * radius * 3.0;

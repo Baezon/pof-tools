@@ -940,8 +940,7 @@ impl PofToolsGui {
                                     &format!(
                                         "Bank {}{}",
                                         i + 1,
-                                        self.model.glow_banks[i]
-                                            .get_glow_texture()
+                                        pof::properties_get_field(&self.model.glow_banks[i].properties, "$glow_texture")
                                             .map_or(String::new(), |tex| format!(" ({})", tex))
                                     ),
                                     TreeSelection::Glows(GlowSelection::Bank(i)),

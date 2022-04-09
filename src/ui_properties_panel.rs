@@ -164,11 +164,12 @@ impl UiState {
 
     // a text edit field attached to a model value that will show up red if it cannot parse
     fn parsable_text_edit<T: FromStr>(ui: &mut Ui, model_value: &mut T, parsable_string: &mut String) -> bool {
-        if parsable_string.parse::<T>().is_err() {
+        let parse = parsable_string.parse();
+        if parse.is_err() {
             ui.visuals_mut().override_text_color = Some(Color32::RED);
         }
         if ui.text_edit_singleline(parsable_string).changed() {
-            if let Ok(value) = parsable_string.parse() {
+            if let Ok(value) = parse {
                 *model_value = value;
                 return true;
             }
@@ -219,15 +220,16 @@ impl UiState {
         viewport_3d_dirty: &mut bool, ui: &mut Ui, active_warning: bool, model_value: Option<&mut T>, parsable_string: &mut String,
     ) -> Response {
         if let Some(value) = model_value {
-            if parsable_string.parse::<T>().is_err() {
+            let new_value = parsable_string.parse();
+            if new_value.is_err() {
                 ui.visuals_mut().override_text_color = Some(Color32::RED);
             } else if active_warning {
                 ui.visuals_mut().override_text_color = Some(Color32::YELLOW);
             }
             let response = ui.text_edit_singleline(parsable_string);
             if response.changed() {
-                if let Ok(parsed_string) = parsable_string.parse() {
-                    *value = parsed_string;
+                if let Ok(new_value) = new_value {
+                    *value = new_value;
                     *viewport_3d_dirty = true;
                 }
             }
@@ -294,24 +296,24 @@ impl UiState {
                     ui.separator();
                     ui.label("Axis:");
 
-                    if transform_window.vector.parse::<Vec3d>().is_err() {
+                    let vector = transform_window.vector.parse::<Vec3d>();
+                    if vector.is_err() {
                         ui.visuals_mut().override_text_color = Some(Color32::RED);
                     }
                     ui.text_edit_singleline(&mut transform_window.vector);
                     ui.visuals_mut().override_text_color = None;
 
                     ui.label("Angle:");
-                    if transform_window.value.parse::<f32>().is_err() {
+                    let angle = transform_window.value.parse::<f32>();
+                    if angle.is_err() {
                         ui.visuals_mut().override_text_color = Some(Color32::RED);
                     }
                     ui.text_edit_singleline(&mut transform_window.value);
                     ui.visuals_mut().override_text_color = None;
 
-                    if let Ok(vector) = transform_window.vector.parse::<Vec3d>() {
-                        if let Ok(angle) = transform_window.value.parse::<f32>() {
-                            mat = glm::rotation(angle.to_radians(), &vector.into());
-                            valid_input = true;
-                        }
+                    if let (Ok(vector), Ok(angle)) = (vector, angle) {
+                        mat = glm::rotation(angle.to_radians(), &vector.into());
+                        valid_input = true;
                     }
                 }
                 TransformType::Scale => {
@@ -327,13 +329,14 @@ impl UiState {
                     });
                     ui.separator();
                     ui.label("Scalar (negative values flip):");
-                    if transform_window.value.parse::<f32>().is_err() {
+                    let scalar = transform_window.vector.parse();
+                    if scalar.is_err() {
                         ui.visuals_mut().override_text_color = Some(Color32::RED);
                     }
                     ui.text_edit_singleline(&mut transform_window.value);
                     ui.visuals_mut().override_text_color = None;
 
-                    if let Ok(scalar) = transform_window.value.parse::<f32>() {
+                    if let Ok(scalar) = scalar {
                         let vector = match transform_window.axis_select {
                             0 => glm::vec3(scalar, scalar, scalar),
                             1 => glm::vec3(scalar, 1.0, 1.0),
@@ -348,13 +351,14 @@ impl UiState {
                 TransformType::Translate => {
                     ui.label("Translation Vector:");
 
-                    if transform_window.vector.parse::<Vec3d>().is_err() {
+                    let vector = transform_window.vector.parse::<Vec3d>();
+                    if vector.is_err() {
                         ui.visuals_mut().override_text_color = Some(Color32::RED);
                     }
                     ui.text_edit_singleline(&mut transform_window.vector);
                     ui.visuals_mut().override_text_color = None;
 
-                    if let Ok(vector) = transform_window.vector.parse::<Vec3d>() {
+                    if let Ok(vector) = vector {
                         mat = glm::translation(&vector.into());
                         valid_input = true;
                     }
@@ -1108,17 +1112,18 @@ impl PofToolsGui {
                 });
 
                 if let Some(id) = selected_id {
-                    if offset_string.parse::<Vec3d>().is_err() {
+                    let offset = offset_string.parse();
+                    if offset.is_err() {
                         ui.visuals_mut().override_text_color = Some(Color32::RED);
                     }
                     let response = ui.text_edit_singleline(offset_string);
                     if response.changed() {
-                        if let Ok(parsed_string) = offset_string.parse() {
+                        if let Ok(offset) = offset {
                             if self.ui_state.move_only_offset {
-                                self.model.subobj_move_only_offset(id, parsed_string);
+                                self.model.subobj_move_only_offset(id, offset);
                                 buffer_ids_to_rebuild.push(selected_id.unwrap());
                             } else {
-                                self.model.sub_objects[id].offset = parsed_string;
+                                self.model.sub_objects[id].offset = offset;
                             }
                             self.ui_state.viewport_3d_dirty = true;
                         }

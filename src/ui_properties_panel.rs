@@ -976,6 +976,17 @@ impl PofToolsGui {
                     self.model.recalc_bbox();
                     self.model.recalc_radius();
                 }
+
+                ui.add_space(10.0);
+
+                let mut num_verts = 0;
+                let mut num_norms = 0;
+                for subobj in &self.model.sub_objects {
+                    num_verts += subobj.bsp_data.verts.len();
+                    num_norms += subobj.bsp_data.norms.len();
+                }
+                ui.label(RichText::new(format!("Total vertices: {}", num_verts)).weak());
+                ui.label(RichText::new(format!("Total normals: {}", num_norms)).weak());
             }
             PropertiesPanel::SubObject {
                 bbox_min_string,
@@ -1234,6 +1245,7 @@ impl PofToolsGui {
                 ui.separator();
 
                 if let Some(id) = selected_id {
+                    ui.label(RichText::new(format!("Id: {:?}", self.model.sub_objects[id].obj_id)).weak());
                     let mut vert_string = RichText::new(format!("Vertices: {}", self.model.sub_objects[id].bsp_data.verts.len())).weak();
                     if self.errors.contains(&Error::TooManyVerts(id)) {
                         vert_string = vert_string.color(Color32::RED);

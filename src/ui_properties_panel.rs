@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use egui::{style::Widgets, text::LayoutJob, CollapsingHeader, Color32, DragValue, Label, Response, RichText, TextFormat, TextStyle, Ui};
+use egui::{style::Widgets, text::LayoutJob, CollapsingHeader, Color32, DragValue, Label, Response, RichText, TextEdit, TextFormat, TextStyle, Ui};
 use glium::Display;
 use nalgebra_glm::TMat4;
 use pof::{
@@ -8,12 +8,9 @@ use pof::{
     WeaponHardpoint,
 };
 
-use crate::{
-    ui::{
-        DockingSelection, Error, EyeSelection, GlowSelection, InsigniaSelection, PathSelection, PofToolsGui, Set::*, SpecialPointSelection,
-        SubObjectSelection, TextureSelection, ThrusterSelection, TreeSelection, TurretSelection, UiState, Warning, WeaponSelection,
-    },
-    GlBufferedObject,
+use crate::ui::{
+    DockingSelection, Error, EyeSelection, GlowSelection, InsigniaSelection, PathSelection, PofToolsGui, Set::*, SpecialPointSelection,
+    SubObjectSelection, TextureSelection, ThrusterSelection, TreeSelection, TurretSelection, UiState, Warning, WeaponSelection,
 };
 
 enum IndexingButtonsResponse {
@@ -811,6 +808,7 @@ impl PofToolsGui {
     pub(crate) fn do_properties_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, display: &Display) {
         let mut reload_textures = false;
         let mut properties_panel_dirty = false;
+        let mut buffer_ids_to_rebuild = vec![];
 
         // this is needed for blank string fields when the properties panel can't display
         // anything for that field due to an invalid tree selection
@@ -961,16 +959,9 @@ impl PofToolsGui {
                             self.model.apply_transform(ObjectId(i as u32), &matrix, true);
                             self.ui_state.viewport_3d_dirty = true;
                             properties_panel_dirty = true;
-
-                            for buf in &mut self.buffer_objects {
-                                if buf.obj_id == ObjectId(i as u32) || self.model.is_obj_id_ancestor(buf.obj_id, ObjectId(i as u32)) {
-                                    let new_buf = GlBufferedObject::new(display, &self.model.sub_objects[buf.obj_id], buf.texture_id);
-                                    if let Some(new_buf) = new_buf {
-                                        *buf = new_buf;
-                                    }
-                                }
-                            }
                         }
+
+                        buffer_ids_to_rebuild.push(ObjectId(i as u32));
                     }
 
                     self.model.recalc_bbox();
@@ -996,6 +987,8 @@ impl PofToolsGui {
                     None
                 };
 
+                // Name edit ================================================================
+
                 ui.label("Name:");
                 if let Some(id) = selected_id {
                     ui.add(egui::TextEdit::singleline(&mut self.model.sub_objects[id].name));
@@ -1004,6 +997,8 @@ impl PofToolsGui {
                 }
 
                 ui.add_space(5.0);
+
+                // Is Debris Object Checkbox ================================================================
 
                 let num_debris = self.model.num_debris_objects();
                 let cannot_be_debris =
@@ -1039,6 +1034,8 @@ impl PofToolsGui {
                 );
 
                 ui.add_space(5.0);
+
+                // Bounding Box edit ================================================================
 
                 let mut bbox_changed = false;
                 let mut display_bbox = false;
@@ -1092,16 +1089,57 @@ impl PofToolsGui {
                     PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::BBoxTooSmall(selected_id)));
                 }
 
-                ui.label("Offset:");
-                let response = UiState::model_value_edit(
-                    &mut self.ui_state.viewport_3d_dirty,
-                    ui,
-                    false,
-                    selected_id.map(|id| &mut self.model.sub_objects[id].offset),
-                    offset_string,
-                );
+                ui.add_space(5.0);
 
-                self.ui_state.display_origin = response.hovered() || response.has_focus();
+                // Offset edit ================================================================
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Offset:");
+                    let response = ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate"));
+
+                    if response.clicked() {
+                        self.model.recalc_subobj_offset(selected_id.unwrap());
+
+                        self.ui_state.viewport_3d_dirty = true;
+                        buffer_ids_to_rebuild.push(selected_id.unwrap());
+                        properties_panel_dirty = true;
+                    }
+                    self.ui_state.display_origin |= response.hovered() || response.has_focus();
+                });
+
+                if let Some(id) = selected_id {
+                    if offset_string.parse::<Vec3d>().is_err() {
+                        ui.visuals_mut().override_text_color = Some(Color32::RED);
+                    }
+                    let response = ui.text_edit_singleline(offset_string);
+                    if response.changed() {
+                        if let Ok(parsed_string) = offset_string.parse() {
+                            if self.ui_state.move_only_offset {
+                                self.model.subobj_move_only_offset(id, parsed_string);
+                                buffer_ids_to_rebuild.push(selected_id.unwrap());
+                            } else {
+                                self.model.sub_objects[id].offset = parsed_string;
+                            }
+                            self.ui_state.viewport_3d_dirty = true;
+                        }
+                    }
+                    self.ui_state.display_origin |= response.hovered() || response.has_focus();
+                    ui.visuals_mut().override_text_color = None;
+                } else {
+                    ui.add_enabled(false, TextEdit::singleline(offset_string));
+                }
+
+                let response = ui
+                    .add_enabled(selected_id.is_some(), egui::Checkbox::new(&mut self.ui_state.move_only_offset, "Modify Offset Only"))
+                    .on_hover_text(
+                        "Changes will affect only the offset/center of this subobject, all other geometry remains in place.\nThe radius will be recalculated.",
+                    );
+
+                self.ui_state.display_origin |= response.hovered() || response.has_focus();
+
+                ui.add_space(5.0);
+
+                // Radius edit ================================================================
 
                 let mut radius_changed = false;
                 let mut display_radius = false;
@@ -1136,6 +1174,8 @@ impl PofToolsGui {
 
                 ui.separator();
 
+                // Transform Mesh button ================================================================
+
                 if ui
                     .add_enabled(matches!(selected_id, Some(_)), egui::Button::new("Transform Mesh"))
                     .clicked()
@@ -1147,17 +1187,11 @@ impl PofToolsGui {
                         self.model.apply_transform(id, &matrix, false);
                         self.ui_state.viewport_3d_dirty = true;
                         properties_panel_dirty = true;
-
-                        for buf in &mut self.buffer_objects {
-                            if buf.obj_id == id || self.model.is_obj_id_ancestor(buf.obj_id, id) {
-                                let new_buf = GlBufferedObject::new(display, &self.model.sub_objects[buf.obj_id], buf.texture_id);
-                                if let Some(new_buf) = new_buf {
-                                    *buf = new_buf;
-                                }
-                            }
-                        }
+                        buffer_ids_to_rebuild.push(id);
                     }
                 }
+
+                // Parent subobject combo box ================================================================
 
                 // first index is none
                 let mut subobj_names_list = vec![format!("None")];
@@ -1194,12 +1228,16 @@ impl PofToolsGui {
                     PofToolsGui::recheck_errors(&mut self.errors, &self.model, All);
                 }
 
+                // Properties edit ================================================================
+
                 ui.label("Properties:");
                 if let Some(id) = selected_id {
                     ui.add(egui::TextEdit::multiline(&mut self.model.sub_objects[id].properties).desired_rows(2));
                 } else {
                     ui.add_enabled(false, egui::TextEdit::multiline(&mut blank_string).desired_rows(2));
                 }
+
+                // Rot axis radio buttons ================================================================
 
                 ui.label("Rotation Axis:");
                 let old_val = *rot_axis;
@@ -2113,5 +2151,7 @@ impl PofToolsGui {
         if properties_panel_dirty {
             self.ui_state.refresh_properties_panel(&self.model);
         }
+
+        self.rebuild_subobj_buffers(display, buffer_ids_to_rebuild);
     }
 }

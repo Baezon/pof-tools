@@ -495,6 +495,17 @@ impl PofToolsGui {
             let _ = sender.send(None);
         });
     }
+
+    pub fn rebuild_subobj_buffers(&mut self, display: &Display, ids: Vec<ObjectId>) {
+        for buf in &mut self.buffer_objects {
+            if ids.contains(&buf.obj_id) {
+                let new_buf = GlBufferedObject::new(display, &self.model.sub_objects[buf.obj_id], buf.texture_id);
+                if let Some(new_buf) = new_buf {
+                    *buf = new_buf;
+                }
+            }
+        }
+    }
 }
 
 const POF_TOOLS_VERSION: &str = "1.1.1";

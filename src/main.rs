@@ -18,7 +18,9 @@ use glium::{
     BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer,
 };
 use native_dialog::FileDialog;
-use pof::{Insignia, Model, ObjVec, ObjectId, Parser, ShieldData, SubObject, TextureId, Texturing, Vec3d};
+use pof::{
+    BspData, Insignia, Model, NormalId, ObjVec, ObjectId, Parser, PolyVertex, Polygon, ShieldData, SubObject, TextureId, Texturing, Vec3d, VertexId,
+};
 use simplelog::*;
 use std::{
     collections::HashMap,
@@ -195,88 +197,139 @@ impl GlBufferedInsignia {
     }
 }
 
-struct GlBufferedObject {
-    obj_id: ObjectId,
+#[derive(Default)]
+struct GlObjectBuilder {
+    vertices: Vec<Vertex>,
+    normals: Vec<Normal>,
+    map: HashMap<(VertexId, NormalId, u32, u32), u32>,
+}
+
+impl GlObjectBuilder {
+    fn get_index(&mut self, bsp_data: &BspData, vert: &PolyVertex) -> u32 {
+        *self
+            .map
+            .entry((vert.vertex_id, vert.normal_id, vert.uv.0.to_bits(), vert.uv.1.to_bits()))
+            .or_insert_with(|| {
+                let n = self.vertices.len();
+                self.vertices.push(Vertex {
+                    position: bsp_data.verts[vert.vertex_id.0 as usize].to_tuple(),
+                    uv: vert.uv,
+                });
+                self.normals.push(Normal { normal: bsp_data.norms[vert.normal_id.0 as usize].to_tuple() });
+                n.try_into().unwrap()
+            })
+    }
+}
+
+#[derive(Default)]
+struct GlObjectsBuilder {
+    inner: GlObjectBuilder,
+    indices: Vec<u32>,
+    wireframe_indices: Vec<u32>,
+}
+
+impl GlObjectsBuilder {
+    fn push(&mut self, bsp_data: &BspData, poly: &Polygon) {
+        // need to triangulate possibly
+        // we'll make tris like this 0,1,2 .. 0,2,3 .. 0,3,4... etc
+        if let [v0, v1, v2, remainder @ ..] = &*poly.verts {
+            // get indices for v0, v1, v2
+            let index0 = self.inner.get_index(bsp_data, v0);
+            let index1 = self.inner.get_index(bsp_data, v1);
+            let mut index = self.inner.get_index(bsp_data, v2);
+
+            if remainder.is_empty() {
+                // special case for tris which are common
+                // triangle is v0-v1-v2
+                self.indices.extend_from_slice(&[index0, index1, index]);
+                // don't create wireframe unless we have previously encountered a quad
+                if !self.wireframe_indices.is_empty() {
+                    // wireframe is [v0-v1, v1-v2, v2-v0]
+                    self.wireframe_indices.extend_from_slice(&[index0, index1, index1, index, index, index0]);
+                }
+            } else {
+                // if this is not a tri
+                if self.wireframe_indices.is_empty() {
+                    // lazy initialization of wireframe object
+                    for vs in self.indices.chunks_exact(3) {
+                        // everything prior is a tri, so wireframe is [v0-v1, v1-v2, v2-v0]
+                        self.wireframe_indices.extend_from_slice(&[vs[0], vs[1], vs[1], vs[2], vs[2], vs[0]]);
+                    }
+                }
+                // first tri is v0-v1-v2
+                self.indices.extend_from_slice(&[index0, index1, index]);
+                // start drawing the outline with [v0-v1, v1-v2]
+                self.wireframe_indices.extend_from_slice(&[index0, index1, index1, index]);
+                // for each pair of verts in the remainder make a tri of [v0, v(i-1), vi]
+                for vi in remainder {
+                    let index2 = self.inner.get_index(bsp_data, vi);
+                    // tri is v0-v(i-1)-vi
+                    self.indices.extend_from_slice(&[index0, index, index2]);
+                    // wireframe gets an extra line v(i-1)-vi
+                    self.wireframe_indices.extend_from_slice(&[index, index2]);
+                    index = index2;
+                }
+                // finish the wireframe polygon with vn-v0
+                self.wireframe_indices.extend_from_slice(&[index, index0]);
+            }
+        }
+    }
+
+    fn finish(self, display: &Display, object: &SubObject, texture_id: Option<TextureId>, out: &mut Vec<GlObjectBuffer>) {
+        if !self.indices.is_empty() {
+            info!("Built buffer for subobj {}", object.name);
+            out.push(GlObjectBuffer {
+                texture_id,
+                vertices: glium::VertexBuffer::new(display, &self.inner.vertices).unwrap(),
+                normals: glium::VertexBuffer::new(display, &self.inner.normals).unwrap(),
+                indices: glium::IndexBuffer::new(display, glium::index::PrimitiveType::TrianglesList, &self.indices).unwrap(),
+                wireframe_indices: if self.wireframe_indices.is_empty() {
+                    None
+                } else {
+                    Some(glium::IndexBuffer::new(display, glium::index::PrimitiveType::LinesList, &self.wireframe_indices).unwrap())
+                },
+                tint_val: 0.0,
+            })
+        }
+    }
+}
+
+struct GlObjectBuffer {
     texture_id: Option<TextureId>,
     vertices: VertexBuffer<Vertex>,
     normals: VertexBuffer<Normal>,
     indices: IndexBuffer<u32>,
+    wireframe_indices: Option<IndexBuffer<u32>>,
     tint_val: f32,
 }
-impl GlBufferedObject {
-    // TODO DONT TRINAGULATE FOR WIREFRAMES
-    fn new(display: &Display, object: &SubObject, tmap: Option<TextureId>) -> Option<GlBufferedObject> {
-        let mut vertices = vec![];
-        let mut normals = vec![];
-        let mut indices = vec![];
 
-        let mut map = HashMap::new();
+struct GlObjectBuffers {
+    obj_id: ObjectId,
+    buffers: Vec<GlObjectBuffer>,
+}
+
+impl GlObjectBuffers {
+    fn new(display: &Display, object: &SubObject, num_textures: usize) -> Self {
+        let mut textures = Vec::from_iter(std::iter::repeat_with(GlObjectsBuilder::default).take(num_textures));
+        let mut no_texture = GlObjectsBuilder::default();
 
         let bsp_data = &object.bsp_data;
 
         for (_, poly_list) in bsp_data.collision_tree.leaves() {
             for poly in poly_list {
-                match (tmap, poly.texture) {
-                    (Some(tmap), Texturing::Texture(tex)) if tmap == tex => {}
-                    (None, Texturing::Flat(_)) => {}
-                    _ => continue,
-                }
-
-                // need to triangulate possibly
-                // we'll make tris like this 0,1,2 .. 0,2,3 .. 0,3,4... etc
-                if let [first, remainder @ ..] = &*poly.verts {
-                    // split the first vertex off from the rest of them
-                    for vertpair in remainder.windows(2) {
-                        // for each pair of verts in the remainder make a tri of them, [first, vertpair[0], vertpair[1]],
-                        let index = *map
-                            .entry((first.vertex_id, first.normal_id, first.uv.0.to_bits(), first.uv.1.to_bits()))
-                            .or_insert_with(|| {
-                                let n = vertices.len();
-                                vertices.push(Vertex {
-                                    position: bsp_data.verts[first.vertex_id.0 as usize].to_tuple(),
-                                    uv: first.uv,
-                                });
-                                normals.push(Normal {
-                                    normal: bsp_data.norms[first.normal_id.0 as usize].to_tuple(),
-                                });
-                                n.try_into().unwrap()
-                            });
-                        indices.push(index);
-
-                        for polyvert in vertpair {
-                            let index = *map
-                                .entry((polyvert.vertex_id, polyvert.normal_id, first.uv.0.to_bits(), first.uv.1.to_bits()))
-                                .or_insert_with(|| {
-                                    let n = vertices.len();
-                                    vertices.push(Vertex {
-                                        position: bsp_data.verts[polyvert.vertex_id.0 as usize].to_tuple(),
-                                        uv: polyvert.uv,
-                                    });
-                                    normals.push(Normal {
-                                        normal: bsp_data.norms[polyvert.normal_id.0 as usize].to_tuple(),
-                                    });
-                                    n.try_into().unwrap()
-                                });
-                            indices.push(index);
-                        }
-                    }
+                match poly.texture {
+                    Texturing::Texture(tex) => textures[tex.0 as usize].push(bsp_data, poly),
+                    Texturing::Flat(_) => no_texture.push(bsp_data, poly),
                 }
             }
         }
 
-        if vertices.is_empty() {
-            None
-        } else {
-            info!("Built buffer for subobj {}", object.name);
-            Some(GlBufferedObject {
-                obj_id: object.obj_id,
-                texture_id: tmap,
-                vertices: glium::VertexBuffer::new(display, &vertices).unwrap(),
-                normals: glium::VertexBuffer::new(display, &normals).unwrap(),
-                indices: glium::IndexBuffer::new(display, glium::index::PrimitiveType::TrianglesList, &indices).unwrap(),
-                tint_val: 0.0,
-            })
+        let mut buffers = vec![];
+        for (i, builder) in textures.into_iter().enumerate() {
+            builder.finish(display, object, Some(TextureId(i as u32)), &mut buffers)
         }
+        no_texture.finish(display, object, None, &mut buffers);
+        Self { obj_id: object.obj_id, buffers }
     }
 }
 
@@ -391,17 +444,8 @@ impl PofToolsGui {
         self.buffer_insignias.clear();
 
         for subobject in &self.model.sub_objects {
-            for i in 0..self.model.textures.len() {
-                let buf = GlBufferedObject::new(display, subobject, Some(TextureId(i as u32)));
-                if let Some(buf) = buf {
-                    self.buffer_objects.push(buf);
-                }
-            }
-
-            let buf = GlBufferedObject::new(display, subobject, None);
-            if let Some(buf) = buf {
-                self.buffer_objects.push(buf);
-            }
+            self.buffer_objects
+                .push(GlObjectBuffers::new(display, subobject, self.model.textures.len()));
         }
 
         for insignia in &self.model.insignias {
@@ -499,10 +543,7 @@ impl PofToolsGui {
     pub fn rebuild_subobj_buffers(&mut self, display: &Display, ids: Vec<ObjectId>) {
         for buf in &mut self.buffer_objects {
             if ids.contains(&buf.obj_id) {
-                let new_buf = GlBufferedObject::new(display, &self.model.sub_objects[buf.obj_id], buf.texture_id);
-                if let Some(new_buf) = new_buf {
-                    *buf = new_buf;
-                }
+                *buf = GlObjectBuffers::new(display, &self.model.sub_objects[buf.obj_id], self.model.textures.len());
             }
         }
     }
@@ -742,63 +783,71 @@ fn main() {
                     let light_vec = glm::vec3(0.5, 1.0, -1.0);
 
                     // draw the actual subobjects of the model
-                    for buffer_obj in &pt_gui.buffer_objects {
+                    for buffer_objs in &pt_gui.buffer_objects {
                         // only render if its currently being displayed
-                        if displayed_subobjects[buffer_obj.obj_id] {
+                        if displayed_subobjects[buffer_objs.obj_id] {
                             let mut mat = glm::identity::<f32, 4>();
-                            mat.append_translation_mut(&pt_gui.model.get_total_subobj_offset(buffer_obj.obj_id).into());
-                            if let Some(texture) = buffer_obj
-                                .texture_id
-                                // if the buffer has a tex id assigned...
-                                .filter(|_| pt_gui.display_mode == DisplayMode::Textured)
-                                // if we're displaying textures...
-                                .and_then(|tex_id| pt_gui.buffer_textures.get(&tex_id))
-                            //     and we have a texture loaded, then display
-                            {
-                                // draw textured
-                                let uniforms = glium::uniform! {
-                                    model: <[[f32; 4]; 4]>::from(mat),
-                                    view: view_mat,
-                                    perspective: perspective_matrix,
-                                    u_light: <[f32; 3]>::from(light_vec),
-                                    dark_color: dark_color,
-                                    light_color: light_color,
-                                    tint_color: [0.0, 0.0, 1.0f32],
-                                    tint_val: buffer_obj.tint_val,
-                                    tex: texture,
+                            mat.append_translation_mut(&pt_gui.model.get_total_subobj_offset(buffer_objs.obj_id).into());
+                            for buffer_obj in &buffer_objs.buffers {
+                                let indices = if pt_gui.display_mode == DisplayMode::Wireframe {
+                                    buffer_obj.wireframe_indices.as_ref().unwrap_or(&buffer_obj.indices)
+                                } else {
+                                    &buffer_obj.indices
                                 };
 
-                                target
-                                    .draw(
-                                        (&buffer_obj.vertices, &buffer_obj.normals),
-                                        &buffer_obj.indices,
-                                        &textured_material_shader,
-                                        &uniforms,
-                                        &default_material_draw_params,
-                                    )
-                                    .unwrap();
-                            } else {
-                                // draw untextured
-                                let uniforms = glium::uniform! {
-                                    model: <[[f32; 4]; 4]>::from(mat),
-                                    view: view_mat,
-                                    perspective: perspective_matrix,
-                                    u_light: <[f32; 3]>::from(light_vec),
-                                    dark_color: dark_color,
-                                    light_color: light_color,
-                                    tint_color: [0.0, 0.0, 1.0f32],
-                                    tint_val: buffer_obj.tint_val,
-                                };
+                                if let Some(texture) = buffer_obj
+                                    .texture_id
+                                    // if the buffer has a tex id assigned...
+                                    .filter(|_| pt_gui.display_mode == DisplayMode::Textured)
+                                    // if we're displaying textures...
+                                    .and_then(|tex_id| pt_gui.buffer_textures.get(&tex_id))
+                                //     and we have a texture loaded, then display
+                                {
+                                    // draw textured
+                                    let uniforms = glium::uniform! {
+                                        model: <[[f32; 4]; 4]>::from(mat),
+                                        view: view_mat,
+                                        perspective: perspective_matrix,
+                                        u_light: <[f32; 3]>::from(light_vec),
+                                        dark_color: dark_color,
+                                        light_color: light_color,
+                                        tint_color: [0.0, 0.0, 1.0f32],
+                                        tint_val: buffer_obj.tint_val,
+                                        tex: texture,
+                                    };
 
-                                target
-                                    .draw(
-                                        (&buffer_obj.vertices, &buffer_obj.normals),
-                                        &buffer_obj.indices,
-                                        &default_material_shader,
-                                        &uniforms,
-                                        &default_material_draw_params,
-                                    )
-                                    .unwrap();
+                                    target
+                                        .draw(
+                                            (&buffer_obj.vertices, &buffer_obj.normals),
+                                            indices,
+                                            &textured_material_shader,
+                                            &uniforms,
+                                            &default_material_draw_params,
+                                        )
+                                        .unwrap();
+                                } else {
+                                    // draw untextured
+                                    let uniforms = glium::uniform! {
+                                        model: <[[f32; 4]; 4]>::from(mat),
+                                        view: view_mat,
+                                        perspective: perspective_matrix,
+                                        u_light: <[f32; 3]>::from(light_vec),
+                                        dark_color: dark_color,
+                                        light_color: light_color,
+                                        tint_color: [0.0, 0.0, 1.0f32],
+                                        tint_val: buffer_obj.tint_val,
+                                    };
+
+                                    target
+                                        .draw(
+                                            (&buffer_obj.vertices, &buffer_obj.normals),
+                                            indices,
+                                            &default_material_shader,
+                                            &uniforms,
+                                            &default_material_draw_params,
+                                        )
+                                        .unwrap();
+                                }
                             }
                         }
                     }
@@ -1201,8 +1250,10 @@ impl PofToolsGui {
             return;
         }
 
-        for buffer in self.buffer_objects.iter_mut() {
-            buffer.tint_val = 0.0;
+        for buffers in &mut self.buffer_objects {
+            for buffer in &mut buffers.buffers {
+                buffer.tint_val = 0.0;
+            }
         }
 
         self.lollipops.clear();
@@ -1218,9 +1269,11 @@ impl PofToolsGui {
         // push into 3 separate vectors, for 3 separate colors depending on selection state
         match self.ui_state.tree_view_selection {
             TreeSelection::SubObjects(SubObjectSelection::SubObject(obj_id)) => {
-                for buffer in &mut self.buffer_objects {
-                    if buffer.obj_id == obj_id {
-                        buffer.tint_val = 0.2;
+                for buffers in &mut self.buffer_objects {
+                    if buffers.obj_id == obj_id {
+                        for buffer in &mut buffers.buffers {
+                            buffer.tint_val = 0.2;
+                        }
                     }
 
                     let size = 0.05 * model.sub_objects[obj_id].radius;
@@ -1233,9 +1286,11 @@ impl PofToolsGui {
                 }
             }
             TreeSelection::Textures(TextureSelection::Texture(tex)) => {
-                for buffer in &mut self.buffer_objects {
-                    if buffer.texture_id == Some(tex) {
-                        buffer.tint_val = 0.3;
+                for buffers in &mut self.buffer_objects {
+                    for buffer in &mut buffers.buffers {
+                        if buffer.texture_id == Some(tex) {
+                            buffer.tint_val = 0.3;
+                        }
                     }
                 }
             }

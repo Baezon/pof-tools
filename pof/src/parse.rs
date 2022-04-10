@@ -1,9 +1,7 @@
 use core::panic;
 use std::collections::HashMap;
 use std::convert::TryInto;
-use std::f32::consts::PI;
-use std::io::{self};
-use std::io::{ErrorKind, Read, Seek, SeekFrom};
+use std::io::{self, ErrorKind, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
 fn parse_subsys_mov_type(val: i32) -> SubsysMovementType {
@@ -746,7 +744,7 @@ use crate::*;
 use byteorder::{ReadBytesExt, LE};
 use dae_parser::source::{SourceReader, ST, XYZ};
 use dae_parser::{Document, LocalMaps, Material, Node};
-use glm::{Mat4x4, Vec3};
+use glm::Mat4x4;
 use nalgebra::Point3;
 extern crate nalgebra_glm as glm;
 
@@ -773,45 +771,17 @@ impl<'a> dae_parser::geom::VertexLoad<'a, VertexContext> for PolyVertex {
     }
 }
 
-// intentional swizzle
-fn flip_y_z(vec: Vec3d) -> Vec3d {
-    Vec3d { x: vec.x, y: vec.z, z: vec.y }
-}
-
 // given a node, using its transforms return a position, normal and radius
 // things commonly needed by various pof points
-fn dae_parse_point(node: &Node, parent_transform: Mat4x4) -> (Vec3d, Vec3d, f32) {
-    let mut pos = Vec3d::ZERO;
-    let mut norm = Vec3d::ZERO;
-    let mut radius = 0.0;
-    for transform in &node.transforms {
-        match transform {
-            dae_parser::Transform::Translate(vec) => pos = flip_y_z(Vec3d::from(*vec.0)),
-            dae_parser::Transform::Rotate(rot) => {
-                norm = {
-                    let vec = Vec3::from([0.0, 1.0, 0.0]); // intentional swizzle
-                    if rot.angle() == 180.0 {
-                        Vec3d::new(0.0, 0.0, -1.0)
-                    } else {
-                        flip_y_z(glm::rotate_vec3(&vec, rot.angle() / (180.0 / PI), &Vec3::from(*rot.axis())).into())
-                    }
-                }
-            }
-            dae_parser::Transform::Scale(scale) => radius = scale.0[0],
-            dae_parser::Transform::Matrix(_) => {
-                let transform = parent_transform * node.transform_as_matrix();
-                let zero = Vec3d::ZERO.into();
-                let offset = transform.transform_point(&zero) - zero;
-                let transform = transform.append_translation(&(-offset));
-                pos = offset.into();
-                pos = pos.flip_y_z();
-                let vector: Vec3d = transform.transform_point(&Point3::from_slice(&[0.0, 1.0, 0.0])).into();
-                radius = vector.magnitude();
-                norm = vector.normalize().flip_y_z();
-            }
-            _ => (),
-        }
-    }
+fn dae_parse_point(node: &Node, mut transform: Mat4x4) -> (Vec3d, Vec3d, f32) {
+    node.prepend_transforms(&mut transform);
+    let zero = Vec3d::ZERO.into();
+    let offset = transform.transform_point(&zero) - zero;
+    let transform = transform.append_translation(&(-offset));
+    let pos = Vec3d::from(offset).flip_y_z();
+    let vector: Vec3d = transform.transform_point(&Point3::from_slice(&[0.0, 1.0, 0.0])).into();
+    let radius = vector.magnitude();
+    let norm = vector.normalize().flip_y_z();
     (pos, norm, radius)
 }
 
@@ -845,7 +815,7 @@ fn dae_parse_geometry(
         let mut vert_ctx = VertexContext { vertex_offset: vertices_out.len() as u32, normal_ids: vec![] };
 
         for position in Clone::clone(verts.position_importer().unwrap()) {
-            vertices_out.push(flip_y_z(&transform * Vec3d::from(position)));
+            vertices_out.push((&transform * Vec3d::from(position)).flip_y_z());
         }
 
         for prim_elem in &geo.elements {
@@ -864,7 +834,7 @@ fn dae_parse_geometry(
                         for normal in Clone::clone(normal_importer) {
                             vert_ctx.normal_ids.push(*normals_map.entry(normal.into()).or_insert_with(|| {
                                 let id = NormalId(normals_out.len().try_into().unwrap());
-                                normals_out.push(flip_y_z(&transform * Vec3d::from(normal)));
+                                normals_out.push((&transform * Vec3d::from(normal)).flip_y_z());
                                 id
                             }));
                         }
@@ -890,7 +860,7 @@ fn dae_parse_geometry(
                         for normal in Clone::clone(normal_importer) {
                             vert_ctx.normal_ids.push(*normals_map.entry(normal.into()).or_insert_with(|| {
                                 let id = NormalId(normals_out.len().try_into().unwrap());
-                                normals_out.push(flip_y_z(&transform * Vec3d::from(normal)));
+                                normals_out.push((&transform * Vec3d::from(normal)).flip_y_z());
                                 id
                             }));
                         }
@@ -956,7 +926,7 @@ fn dae_parse_subobject_recursive(
         insignias.push(Insignia {
             detail_level: detail_level.unwrap_or(0),
             vertices: vertices_out,
-            offset: flip_y_z(center.into()),
+            offset: Vec3d::from(center).flip_y_z(),
             faces,
         });
     } else {
@@ -971,8 +941,8 @@ fn dae_parse_subobject_recursive(
             obj_id,
             radius: Default::default(),
             parent: Some(parent),
-            offset: flip_y_z(center.into()),
-            geo_center: flip_y_z(center.into()),
+            offset: Vec3d::from(center).flip_y_z(),
+            geo_center: Vec3d::from(center).flip_y_z(),
             bbox: Default::default(),
             name: name.clone(),
             properties: Default::default(),
@@ -1163,7 +1133,7 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
                 insignias.push(Insignia {
                     detail_level: 0,
                     vertices: vertices_out,
-                    offset: flip_y_z(center.into()),
+                    offset: Vec3d::from(center).flip_y_z(),
                     faces,
                 });
             } else {
@@ -1191,7 +1161,7 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
                     obj_id,
                     radius: Default::default(),
                     parent: None,
-                    offset: flip_y_z(center.into()),
+                    offset: Vec3d::from(center).flip_y_z(),
                     geo_center: Default::default(),
                     bbox: Default::default(),
                     name: name.clone(),

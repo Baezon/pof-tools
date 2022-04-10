@@ -24,3 +24,5 @@ backtrace = "0.3.64"
 once_cell = "1.10"
 # for display starup log date/time
 chrono = "0.4.19"
+# for... gltf
+gltf = "1.0"

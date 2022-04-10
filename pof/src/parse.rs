@@ -768,7 +768,9 @@ use crate::*;
 use byteorder::{ReadBytesExt, LE};
 use dae_parser::source::{SourceReader, ST, XYZ};
 use dae_parser::{Document, LocalMaps, Material, Node};
-use glm::Mat4x4;
+use glm::{Mat4x4, Vec3};
+use gltf::mesh::Mode;
+use gltf::{Gltf, Mesh, Buffer};
 use nalgebra::Point3;
 extern crate nalgebra_glm as glm;
 
@@ -1468,6 +1470,491 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
         shield_data,
         path_to_file: path.canonicalize().unwrap_or(path),
         untextured_idx,
+    };
+
+    model.recalc_radius();
+    model.recalc_bbox();
+    model.recalc_mass();
+    model.recalc_moi();
+
+    Box::new(model)
+}
+
+fn gltf_parse_geometry(mesh: &Mesh, buffer: Buffer, transform: Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(Texturing, Vec<PolyVertex>)>) {
+    let mut vertices_out: Vec<Vec3d> = vec![];
+    let mut normals_out: Vec<Vec3d> = vec![];
+    let mut normals_map: HashMap<Vec3d, NormalId> = HashMap::new();
+    let mut polygons_out = vec![];
+
+    for primitive in mesh.primitives() {
+        let verts = geo.vertices.as_ref().unwrap().importer(local_maps).unwrap();
+
+        let reader = primitive.reader(|b| Some(&buffer));
+
+        let mut vert_ctx = VertexContext { vertex_offset: vertices_out.len() as u32, normal_ids: vec![] };
+
+        for position in Clone::clone(verts.position_importer().unwrap()) {
+            vertices_out.push(flip_y_z(&transform * Vec3d::from(position)));
+        }
+        let texture = match primitive.material().index() {
+            Some(idx) => Texturing::Texture(TextureId(idx as u32)),
+            None => Texturing::Flat(Color::default()),
+        };
+        let vertex_accessor = primitive.attributes().find(|attr| attr.0 == gltf::Semantic::Positions).unwrap().1;
+        let normals_accessor = primitive.attributes().find(|attr| attr.0 == gltf::Semantic::Normals).unwrap().1;
+        let uv_accessor = primitive
+            .attributes()
+            .find(|attr| attr.0 == gltf::Semantic::TexCoords(0))
+            .map(|attr| attr.1);
+
+        vertex_accessor.view().unwrap().
+
+        for attribute in primitive.attributes() {
+            match attribute.0 {
+                gltf::Semantic::Positions => attribute.1,
+                gltf::Semantic::Normals => todo!(),
+                gltf::Semantic::TexCoords(_) => todo!(),
+                _ => {}
+            }
+        }
+        match primitive.mode() {
+            Mode::Triangles => {
+                let importer = tris.importer(local_maps, verts.clone()).unwrap();
+
+                vert_ctx.normal_ids = vec![];
+                if let Some(normal_importer) = importer.normal_importer() {
+                    for normal in Clone::clone(normal_importer) {
+                        vert_ctx.normal_ids.push(*normals_map.entry(normal.into()).or_insert_with(|| {
+                            let id = NormalId(normals_out.len().try_into().unwrap());
+                            normals_out.push(flip_y_z(&transform * Vec3d::from(normal)));
+                            id
+                        }));
+                    }
+                }
+
+                let mut iter = importer.read::<_, PolyVertex>(&vert_ctx, tris.data.prim.as_ref().unwrap());
+                while let Some(vert1) = iter.next() {
+                    polygons_out.push((texture, vec![vert1, iter.next().unwrap(), iter.next().unwrap()]));
+                }
+            }
+            _ => {
+                unreachable!()
+            }
+        }
+    }
+
+    for poly in &mut polygons_out {
+        poly.1.reverse(); // normal facing (which is determined by winding order) is inverted for FSO
+    }
+
+    (vertices_out, normals_out, polygons_out)
+}
+
+pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
+    let gltf = Gltf::open(path).unwrap();
+    // use std::io::Write;
+    // write!(std::fs::File::create("output.log").unwrap(), "{:#?}", document).unwrap();
+    let mut sub_objects = ObjVec(vec![]);
+    let scene = gltf.default_scene().unwrap();
+    let mut details = vec![];
+    let mut shield_data = None;
+    let mut thruster_banks = vec![];
+    let mut paths = vec![];
+    let mut primary_weps = vec![];
+    let mut secondary_weps = vec![];
+    let mut docking_bays = vec![];
+    let mut glow_banks = vec![];
+    let mut special_points = vec![];
+    let mut eye_points = vec![];
+    let mut insignias = vec![];
+    let mut turrets = vec![];
+    let mut visual_center = Vec3d::ZERO;
+
+    for node in scene.nodes() {
+        let mut local_transform: Mat4x4 = node.transform().matrix().into();
+        let zero = Vec3d::ZERO.into();
+        let center = local_transform.transform_point(&zero) - zero;
+        local_transform = local_transform.append_translation(&(-center));
+
+        let name = node.name().unwrap();
+
+        if let Some(mesh) = node.mesh() {
+            let (vertices_out, normals_out, polygons_out) = dae_parse_geometry(node, &gltf.buffers().next().unwrap(), &material_map, local_transform);
+
+            if name.to_lowercase() == "shield" {
+                let mut polygons = vec![];
+                for (_, verts) in polygons_out {
+                    let verts = verts.into_iter().map(|poly| poly.vertex_id).collect::<Vec<_>>();
+                    // triangulate, just to be sure
+                    if let [vert1, ref rest @ ..] = *verts {
+                        for slice in rest.windows(2) {
+                            if let [vert2, vert3] = *slice {
+                                let [v1, v2, v3] = [vert1, vert2, vert3].map(|i| nalgebra_glm::Vec3::from(vertices_out[i.0 as usize]));
+                                polygons.push(ShieldPolygon {
+                                    normal: (v2 - v1).cross(&(v3 - v1)).normalize().into(),
+                                    verts: (vert1, vert2, vert3),
+                                    neighbors: Default::default(),
+                                })
+                            }
+                        }
+                    }
+                }
+
+                // assign shield neighbors
+                // create a map keyed on each vertex pair, based on winding order, where the value is the polygon id
+                let mut map: HashMap<(VertexId, VertexId), PolygonId> = HashMap::new();
+                for (i, poly) in polygons.iter().enumerate() {
+                    map.insert((poly.verts.0, poly.verts.1), PolygonId(i as u32));
+                    map.insert((poly.verts.1, poly.verts.2), PolygonId(i as u32));
+                    map.insert((poly.verts.2, poly.verts.0), PolygonId(i as u32));
+                }
+
+                // for each polygon then, by swapping its vertex pairs, you can grab each adjacent polygon
+                for poly in &mut polygons {
+                    let neighbor1 = map.get(&(poly.verts.1, poly.verts.0)).unwrap_or(&PolygonId(0));
+                    let neighbor2 = map.get(&(poly.verts.2, poly.verts.1)).unwrap_or(&PolygonId(0));
+                    let neighbor3 = map.get(&(poly.verts.0, poly.verts.2)).unwrap_or(&PolygonId(0));
+                    poly.neighbors = (*neighbor1, *neighbor2, *neighbor3);
+                }
+                // a map insertion where an entry already exists or a failure to get from the map indicate non-manifoldness, TODO maybe indicate that
+
+                shield_data = Some(ShieldData {
+                    collision_tree: Some(ShieldData::recalculate_tree(&vertices_out, &polygons)),
+                    verts: vertices_out,
+                    polygons,
+                });
+            } else if name.to_lowercase().contains("insig") {
+                let mut faces = vec![];
+                for (_, verts) in polygons_out {
+                    if let [vert1, ref rest @ ..] = &*verts {
+                        for slice in rest.windows(2) {
+                            if let [vert2, vert3] = slice {
+                                faces.push((
+                                    PolyVertex { vertex_id: vert1.vertex_id, normal_id: (), uv: vert1.uv },
+                                    PolyVertex { vertex_id: vert2.vertex_id, normal_id: (), uv: vert2.uv },
+                                    PolyVertex { vertex_id: vert3.vertex_id, normal_id: (), uv: vert3.uv },
+                                ))
+                            }
+                        }
+                    }
+                }
+                insignias.push(Insignia {
+                    detail_level: 0,
+                    vertices: vertices_out,
+                    offset: flip_y_z(center.into()),
+                    faces,
+                });
+            } else {
+                // must be a subobject
+
+                // this should probably be warned about...
+                if vertices_out.is_empty() || normals_out.is_empty() {
+                    continue;
+                }
+
+                let obj_id = ObjectId(sub_objects.len() as _);
+                let mut detail_level: Option<u32> = None;
+                if let Some(idx) = name.to_lowercase().find("detail") {
+                    if let Ok(level) = name[(idx + 6)..].parse::<usize>() {
+                        if level >= details.len() {
+                            details.resize(level + 1, obj_id);
+                        } else {
+                            details[level] = obj_id;
+                        }
+                        detail_level = Some(level as u32);
+                    }
+                }
+
+                let mut new_subobj = SubObject {
+                    obj_id,
+                    radius: Default::default(),
+                    parent: None,
+                    offset: flip_y_z(center.into()),
+                    geo_center: Default::default(),
+                    bbox: Default::default(),
+                    name: name.clone(),
+                    properties: Default::default(),
+                    movement_type: Default::default(),
+                    movement_axis: Default::default(),
+                    bsp_data: BspData {
+                        norms: normals_out,
+                        collision_tree: BspData::recalculate(
+                            &vertices_out,
+                            polygons_out.into_iter().map(|(texture, verts)| Polygon {
+                                normal: Default::default(),
+                                center: Default::default(),
+                                radius: Default::default(),
+                                texture,
+                                verts,
+                            }),
+                        ),
+                        verts: vertices_out,
+                    },
+                    children: Default::default(),
+                    is_debris_model: name.starts_with("debris"),
+                };
+
+                new_subobj.recalc_bbox();
+                new_subobj.recalc_radius();
+
+                sub_objects.push(new_subobj);
+
+                for node in &node.children {
+                    dae_parse_subobject_recursive(
+                        node,
+                        &mut sub_objects,
+                        obj_id,
+                        &mut insignias,
+                        detail_level,
+                        &mut turrets,
+                        &local_maps,
+                        &material_map,
+                        local_transform,
+                    );
+                }
+            }
+        } else {
+            if name == "#thrusters" {
+                for (node, _) in node_children_with_keyword(&node.children, "bank") {
+                    let mut new_bank = ThrusterBank::default();
+
+                    for (node, name) in node_children_with_keyword(&node.children, "") {
+                        if name.contains("properties") {
+                            dae_parse_properties(node, &mut new_bank.properties);
+                        } else if name.contains("point") {
+                            let mut new_point = ThrusterGlow::default();
+
+                            let (pos, norm, rad) = dae_parse_point(node, local_transform);
+                            new_point.position = pos;
+                            new_point.normal = norm;
+                            new_point.radius = rad;
+
+                            new_bank.glows.push(new_point);
+                        }
+                    }
+
+                    thruster_banks.push(new_bank);
+                }
+            } else if name == "#paths" {
+                for (node, _) in node_children_with_keyword(&node.children, "path") {
+                    let mut new_path = Path::default();
+
+                    for (node, name) in node_children_with_keyword(&node.children, "") {
+                        if name.contains("parent") {
+                            if let Some(idx) = name.find(":") {
+                                new_path.parent = format!("{}", &name[(idx + 1)..]);
+                            }
+                        } else if name.contains("name") {
+                            if let Some(idx) = name.find(":") {
+                                new_path.name = format!("{}", &name[(idx + 1)..]);
+                            }
+                        } else if name.contains("point") {
+                            let mut new_point = PathPoint::default();
+
+                            let (pos, _, rad) = dae_parse_point(node, local_transform);
+                            new_point.position = pos;
+                            new_point.radius = rad;
+
+                            new_path.points.push(new_point);
+                        }
+                    }
+
+                    paths.push(new_path);
+                }
+            } else if name.starts_with("#") && name.contains("weapons") {
+                for (node, _) in node_children_with_keyword(&node.children, "bank") {
+                    let mut new_bank = vec![];
+
+                    for (node, _) in node_children_with_keyword(&node.children, "point") {
+                        let mut new_point = WeaponHardpoint::default();
+
+                        let (pos, norm, _) = dae_parse_point(node, local_transform);
+                        new_point.position = pos;
+                        new_point.normal = norm.try_into().unwrap_or_default();
+
+                        for (_, name) in node_children_with_keyword(&node.children, "offset") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_point.offset = *val;
+                                    break;
+                                }
+                            }
+                        }
+
+                        new_bank.push(new_point);
+                    }
+
+                    if name.contains("secondary") {
+                        secondary_weps.push(new_bank);
+                    } else {
+                        primary_weps.push(new_bank);
+                    }
+                }
+            } else if name == "#docking bays" {
+                for (node, _) in node_children_with_keyword(&node.children, "bay") {
+                    let mut new_bay = Dock::default();
+
+                    let transform = node.transform_as_matrix();
+                    let zero = Vec3d::ZERO.into();
+                    new_bay.position = Vec3d::from(transform.transform_point(&zero) - zero).flip_y_z();
+                    new_bay.fvec = transform.transform_vector(&glm::vec3(0., 1., 0.)).try_into().unwrap_or_default();
+                    new_bay.fvec.0 = new_bay.fvec.0.flip_y_z();
+
+                    new_bay.uvec = transform.transform_vector(&glm::vec3(0., 0., 1.)).try_into().unwrap_or_default();
+                    new_bay.uvec.0 = new_bay.uvec.0.flip_y_z();
+
+                    for (node, name) in node_children_with_keyword(&node.children, "") {
+                        if name.contains("properties") {
+                            dae_parse_properties(node, &mut new_bay.properties);
+                        } else if name.contains("path") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bay.path = Some(PathId(*val));
+                                }
+                            }
+                        }
+                    }
+
+                    docking_bays.push(new_bay);
+                }
+            } else if name == "#glows" {
+                for (node, _) in node_children_with_keyword(&node.children, "glowbank") {
+                    let mut new_bank = GlowPointBank::default();
+
+                    for (node, name) in node_children_with_keyword(&node.children, "") {
+                        if name.contains("type") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bank.glow_type = *val;
+                                }
+                            }
+                        } else if name.contains("lod") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bank.lod = *val;
+                                }
+                            }
+                        } else if name.contains("parent") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bank.obj_parent = ObjectId(*val);
+                                }
+                            }
+                        } else if name.contains("ontime") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bank.on_time = *val;
+                                }
+                            }
+                        } else if name.contains("offtime") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bank.off_time = *val;
+                                }
+                            }
+                        } else if name.contains("disptime") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bank.disp_time = *val;
+                                }
+                            }
+                        } else if name.contains("properties") {
+                            dae_parse_properties(node, &mut new_bank.properties);
+                        } else if name.contains("point") {
+                            let mut new_point = GlowPoint::default();
+
+                            let (pos, norm, rad) = dae_parse_point(node, local_transform);
+                            new_point.position = pos;
+                            new_point.normal = if name.contains("omni") { Vec3d::ZERO } else { norm };
+                            new_point.radius = rad;
+
+                            new_bank.glow_points.push(new_point);
+                        }
+                    }
+
+                    glow_banks.push(new_bank);
+                }
+            } else if name == "#special points" {
+                for (node, name) in node_children_with_keyword(&node.children, "") {
+                    let mut new_point = SpecialPoint::default();
+
+                    if let Some(idx) = name.find(":") {
+                        new_point.name = format!("{}", &name[(idx + 1)..]);
+                    }
+
+                    let (pos, _, rad) = dae_parse_point(node, local_transform);
+                    new_point.position = pos;
+                    new_point.radius = rad;
+
+                    for (node, _) in node_children_with_keyword(&node.children, "properties") {
+                        dae_parse_properties(node, &mut new_point.properties);
+                    }
+
+                    special_points.push(new_point);
+                }
+            } else if name == "#eye points" {
+                for (node, _) in node_children_with_keyword(&node.children, "point") {
+                    let mut new_point = EyePoint::default();
+
+                    let (pos, norm, _) = dae_parse_point(node, local_transform);
+                    new_point.offset = pos;
+                    new_point.normal = norm.try_into().unwrap_or_default();
+
+                    for (_, name) in node_children_with_keyword(&node.children, "parent") {
+                        if let Some(idx) = name.find(":") {
+                            if let Ok(val) = &name[(idx + 1)..].parse() {
+                                new_point.attached_subobj = ObjectId(*val);
+                                break;
+                            }
+                        }
+                    }
+
+                    eye_points.push(new_point);
+                }
+            } else if name == "#visual-center" {
+                let (pos, _, _) = dae_parse_point(node, local_transform);
+                visual_center = pos;
+            }
+        }
+    }
+
+    for i in 0..sub_objects.len() {
+        if let Some(parent) = sub_objects[ObjectId(i as u32)].parent {
+            let id = sub_objects[ObjectId(i as u32)].obj_id;
+            sub_objects[parent].children.push(id);
+        }
+    }
+
+    if details.is_empty() && !sub_objects.is_empty() {
+        details.push(ObjectId(0));
+        // this is pretty bad, but not having any detail levels is worse
+    }
+
+    let mut textures = gltf.materials().map(|mat| mat.name().unwrap().to_string()).collect();
+
+    let mut model = Model {
+        version: Version::LATEST,
+        header: ObjHeader {
+            num_subobjects: sub_objects.len() as _,
+            detail_levels: details,
+            ..Default::default()
+        },
+        sub_objects,
+        textures,
+        paths,
+        special_points,
+        eye_points,
+        primary_weps,
+        secondary_weps,
+        turrets,
+        thruster_banks,
+        glow_banks,
+        visual_center,
+        comments: Default::default(),
+        docking_bays,
+        insignias,
+        shield_data,
+        path_to_file: path.canonicalize().unwrap_or(path),
     };
 
     model.recalc_radius();

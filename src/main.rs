@@ -386,9 +386,10 @@ impl PofToolsGui {
             let model = std::panic::catch_unwind(move || {
                 let path = filepath.or_else(|| {
                     FileDialog::new()
-                        .add_filter("All supported files", &["pof", "dae"])
+                        .add_filter("All supported files", &["pof", "dae", "gltf"])
                         .add_filter("COLLADA", &["dae"])
                         .add_filter("Parallax Object File", &["pof"])
+                        .add_filter("Parallax Object File", &["gltf"])
                         .show_open_single_file()
                         .unwrap()
                 });
@@ -399,6 +400,7 @@ impl PofToolsGui {
                     info!("Attempting to load {}", filename);
                     match ext.as_ref().and_then(|ext| ext.to_str()) {
                         Some("dae") => pof::parse_dae(path),
+                        Some("gltf") => pof::parse_gltf(path),
                         Some("pof") => {
                             let file = File::open(&path).expect("TODO invalid file or smth i dunno");
                             let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");

@@ -438,6 +438,7 @@ pub(crate) struct UiState {
 pub(crate) struct PofToolsGui {
     pub model: Box<Model>,
     pub model_loading_thread: Option<Receiver<Result<Option<Box<Model>>, String>>>,
+    #[allow(clippy::type_complexity)]
     pub texture_loading_thread: Option<Receiver<Option<(RawImage2d<'static, u8>, TextureId)>>>,
     pub glow_point_sim_start: std::time::Instant,
 

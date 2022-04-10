@@ -770,7 +770,7 @@ use dae_parser::source::{SourceReader, ST, XYZ};
 use dae_parser::{Document, LocalMaps, Material, Node};
 use glm::{Mat4x4, Vec3};
 use gltf::mesh::Mode;
-use gltf::{Gltf, Mesh, Buffer};
+use gltf::{buffer, Mesh};
 use nalgebra::Point3;
 extern crate nalgebra_glm as glm;
 
@@ -1042,7 +1042,7 @@ fn dae_parse_subobject_recursive(
     }
 }
 
-fn node_children_with_keyword<'a>(node_list: &'a [Node], keyword: &'a str) -> impl Iterator<Item = (&'a Node, &'a String)> {
+fn dae_node_children_with_keyword<'a>(node_list: &'a [Node], keyword: &'a str) -> impl Iterator<Item = (&'a Node, &'a String)> {
     node_list.iter().filter_map(move |node| {
         let name = node.name.as_ref()?;
         if name.starts_with('#') && name.contains(keyword) {
@@ -1224,10 +1224,10 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
             }
         } else {
             if name == "#thrusters" {
-                for (node, _) in node_children_with_keyword(&node.children, "bank") {
+                for (node, _) in dae_node_children_with_keyword(&node.children, "bank") {
                     let mut new_bank = ThrusterBank::default();
 
-                    for (node, name) in node_children_with_keyword(&node.children, "") {
+                    for (node, name) in dae_node_children_with_keyword(&node.children, "") {
                         if name.contains("properties") {
                             dae_parse_properties(node, &mut new_bank.properties);
                         } else if name.contains("point") {
@@ -1245,10 +1245,10 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
                     thruster_banks.push(new_bank);
                 }
             } else if name == "#paths" {
-                for (node, _) in node_children_with_keyword(&node.children, "path") {
+                for (node, _) in dae_node_children_with_keyword(&node.children, "path") {
                     let mut new_path = Path::default();
 
-                    for (node, name) in node_children_with_keyword(&node.children, "") {
+                    for (node, name) in dae_node_children_with_keyword(&node.children, "") {
                         if name.contains("parent") {
                             if let Some(idx) = name.find(":") {
                                 new_path.parent = format!("{}", &name[(idx + 1)..]);
@@ -1271,17 +1271,17 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
                     paths.push(new_path);
                 }
             } else if name.starts_with("#") && name.contains("weapons") {
-                for (node, _) in node_children_with_keyword(&node.children, "bank") {
+                for (node, _) in dae_node_children_with_keyword(&node.children, "bank") {
                     let mut new_bank = vec![];
 
-                    for (node, _) in node_children_with_keyword(&node.children, "point") {
+                    for (node, _) in dae_node_children_with_keyword(&node.children, "point") {
                         let mut new_point = WeaponHardpoint::default();
 
                         let (pos, norm, _) = dae_parse_point(node, local_transform, up);
                         new_point.position = pos;
                         new_point.normal = norm.try_into().unwrap_or_default();
 
-                        for (_, name) in node_children_with_keyword(&node.children, "offset") {
+                        for (_, name) in dae_node_children_with_keyword(&node.children, "offset") {
                             if let Some(idx) = name.find(":") {
                                 if let Ok(val) = &name[(idx + 1)..].parse() {
                                     new_point.offset = *val;
@@ -1300,7 +1300,7 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
                     }
                 }
             } else if name == "#docking bays" {
-                for (node, _) in node_children_with_keyword(&node.children, "bay") {
+                for (node, _) in dae_node_children_with_keyword(&node.children, "bay") {
                     let mut new_bay = Dock::default();
 
                     let transform = node.transform_as_matrix();
@@ -1312,7 +1312,7 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
                     new_bay.uvec = transform.transform_vector(&glm::vec3(0., 0., 1.)).try_into().unwrap_or_default();
                     new_bay.uvec.0 = new_bay.uvec.0.from_coord(up);
 
-                    for (node, name) in node_children_with_keyword(&node.children, "") {
+                    for (node, name) in dae_node_children_with_keyword(&node.children, "") {
                         if name.contains("properties") {
                             dae_parse_properties(node, &mut new_bay.properties);
                         } else if name.contains("path") {
@@ -1327,10 +1327,10 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
                     docking_bays.push(new_bay);
                 }
             } else if name == "#glows" {
-                for (node, _) in node_children_with_keyword(&node.children, "glowbank") {
+                for (node, _) in dae_node_children_with_keyword(&node.children, "glowbank") {
                     let mut new_bank = GlowPointBank::default();
 
-                    for (node, name) in node_children_with_keyword(&node.children, "") {
+                    for (node, name) in dae_node_children_with_keyword(&node.children, "") {
                         if name.contains("type") {
                             if let Some(idx) = name.find(":") {
                                 if let Ok(val) = &name[(idx + 1)..].parse() {
@@ -1384,7 +1384,7 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
                     glow_banks.push(new_bank);
                 }
             } else if name == "#special points" {
-                for (node, name) in node_children_with_keyword(&node.children, "") {
+                for (node, name) in dae_node_children_with_keyword(&node.children, "") {
                     let mut new_point = SpecialPoint::default();
 
                     if let Some(idx) = name.find(":") {
@@ -1395,21 +1395,21 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
                     new_point.position = pos;
                     new_point.radius = rad;
 
-                    for (node, _) in node_children_with_keyword(&node.children, "properties") {
+                    for (node, _) in dae_node_children_with_keyword(&node.children, "properties") {
                         dae_parse_properties(node, &mut new_point.properties);
                     }
 
                     special_points.push(new_point);
                 }
             } else if name == "#eye points" {
-                for (node, _) in node_children_with_keyword(&node.children, "point") {
+                for (node, _) in dae_node_children_with_keyword(&node.children, "point") {
                     let mut new_point = EyePoint::default();
 
                     let (pos, norm, _) = dae_parse_point(node, local_transform, up);
                     new_point.offset = pos;
                     new_point.normal = norm.try_into().unwrap_or_default();
 
-                    for (_, name) in node_children_with_keyword(&node.children, "parent") {
+                    for (_, name) in dae_node_children_with_keyword(&node.children, "parent") {
                         if let Some(idx) = name.find(":") {
                             if let Ok(val) = &name[(idx + 1)..].parse() {
                                 new_point.attached_subobj = ObjectId(*val);
@@ -1480,51 +1480,33 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
     Box::new(model)
 }
 
-fn gltf_parse_geometry(mesh: &Mesh, buffer: Buffer, transform: Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(Texturing, Vec<PolyVertex>)>) {
+fn gltf_parse_geometry(mesh: Mesh, buffers: &[buffer::Data], transform: Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(Texturing, [PolyVertex; 3])>) {
     let mut vertices_out: Vec<Vec3d> = vec![];
     let mut normals_out: Vec<Vec3d> = vec![];
     let mut normals_map: HashMap<Vec3d, NormalId> = HashMap::new();
     let mut polygons_out = vec![];
 
     for primitive in mesh.primitives() {
-        let verts = geo.vertices.as_ref().unwrap().importer(local_maps).unwrap();
+        let reader = primitive.reader(|b| Some(&buffers[b.index()]));
+        let vertex_offset = vertices_out.len() as u32;
 
-        let reader = primitive.reader(|b| Some(&buffer));
-
-        let mut vert_ctx = VertexContext { vertex_offset: vertices_out.len() as u32, normal_ids: vec![] };
-
-        for position in Clone::clone(verts.position_importer().unwrap()) {
+        for position in reader.read_positions().unwrap() {
             vertices_out.push(flip_y_z(&transform * Vec3d::from(position)));
         }
         let texture = match primitive.material().index() {
             Some(idx) => Texturing::Texture(TextureId(idx as u32)),
             None => Texturing::Flat(Color::default()),
         };
-        let vertex_accessor = primitive.attributes().find(|attr| attr.0 == gltf::Semantic::Positions).unwrap().1;
-        let normals_accessor = primitive.attributes().find(|attr| attr.0 == gltf::Semantic::Normals).unwrap().1;
-        let uv_accessor = primitive
-            .attributes()
-            .find(|attr| attr.0 == gltf::Semantic::TexCoords(0))
-            .map(|attr| attr.1);
+        let uvs = reader
+            .read_tex_coords(0)
+            .map(|iter| iter.into_f32().map(|[u, v]| (u, v)).collect::<Vec<_>>());
 
-        vertex_accessor.view().unwrap().
-
-        for attribute in primitive.attributes() {
-            match attribute.0 {
-                gltf::Semantic::Positions => attribute.1,
-                gltf::Semantic::Normals => todo!(),
-                gltf::Semantic::TexCoords(_) => todo!(),
-                _ => {}
-            }
-        }
         match primitive.mode() {
             Mode::Triangles => {
-                let importer = tris.importer(local_maps, verts.clone()).unwrap();
-
-                vert_ctx.normal_ids = vec![];
-                if let Some(normal_importer) = importer.normal_importer() {
-                    for normal in Clone::clone(normal_importer) {
-                        vert_ctx.normal_ids.push(*normals_map.entry(normal.into()).or_insert_with(|| {
+                let mut normal_ids = vec![];
+                if let Some(normal_iter) = reader.read_normals() {
+                    for normal in normal_iter {
+                        normal_ids.push(*normals_map.entry(normal.into()).or_insert_with(|| {
                             let id = NormalId(normals_out.len().try_into().unwrap());
                             normals_out.push(flip_y_z(&transform * Vec3d::from(normal)));
                             id
@@ -1532,9 +1514,13 @@ fn gltf_parse_geometry(mesh: &Mesh, buffer: Buffer, transform: Mat4x4) -> (Vec<V
                     }
                 }
 
-                let mut iter = importer.read::<_, PolyVertex>(&vert_ctx, tris.data.prim.as_ref().unwrap());
+                let mut iter = reader.read_indices().unwrap().into_u32().map(|i| PolyVertex {
+                    vertex_id: VertexId(vertex_offset + i),
+                    normal_id: normal_ids.get(i as usize).copied().unwrap_or_default(),
+                    uv: uvs.as_ref().map_or((0., 0.), |vec| vec[i as usize]),
+                });
                 while let Some(vert1) = iter.next() {
-                    polygons_out.push((texture, vec![vert1, iter.next().unwrap(), iter.next().unwrap()]));
+                    polygons_out.push((texture, [vert1, iter.next().unwrap(), iter.next().unwrap()]));
                 }
             }
             _ => {
@@ -1550,8 +1536,181 @@ fn gltf_parse_geometry(mesh: &Mesh, buffer: Buffer, transform: Mat4x4) -> (Vec<V
     (vertices_out, normals_out, polygons_out)
 }
 
+fn gltf_parse_subobject_recursive(
+    node: gltf::Node, sub_objects: &mut Vec<SubObject>, parent: ObjectId, insignias: &mut Vec<Insignia>, detail_level: Option<u32>,
+    turrets: &mut Vec<Turret>, buffers: &[buffer::Data], parent_transform: Mat4x4,
+) {
+    let mesh = match node.mesh() {
+        // ignore subobjects with no geo
+        // metadata (empties with names like #properties) are handled below directly
+        // this function must *start* with a proper subobject
+        None => return,
+        Some(mesh) => mesh,
+    };
+
+    let name = match node.name() {
+        None => return, // subobjects must have names!
+        Some(name) => name,
+    };
+
+    let local_transform = parent_transform * Mat4x4::from(node.transform().matrix());
+    let zero = Vec3d::ZERO.into();
+    let center = local_transform.transform_point(&zero) - zero;
+    let local_transform = local_transform.append_translation(&(-center));
+
+    let (vertices_out, normals_out, polygons_out) = gltf_parse_geometry(mesh, buffers, local_transform);
+
+    if name.to_lowercase().contains("insig") {
+        let mut faces = vec![];
+        for (_, [vert1, vert2, vert3]) in polygons_out {
+            faces.push((
+                PolyVertex { vertex_id: vert1.vertex_id, normal_id: (), uv: vert1.uv },
+                PolyVertex { vertex_id: vert2.vertex_id, normal_id: (), uv: vert2.uv },
+                PolyVertex { vertex_id: vert3.vertex_id, normal_id: (), uv: vert3.uv },
+            ))
+        }
+        insignias.push(Insignia {
+            detail_level: detail_level.unwrap_or(0),
+            vertices: vertices_out,
+            offset: flip_y_z(center.into()),
+            faces,
+        });
+    } else {
+        // this should probably be warned about...
+        if vertices_out.is_empty() || normals_out.is_empty() {
+            return;
+        }
+
+        let obj_id = ObjectId(sub_objects.len() as _);
+
+        let mut new_subobj = SubObject {
+            obj_id,
+            radius: Default::default(),
+            parent: Some(parent),
+            offset: flip_y_z(center.into()),
+            geo_center: flip_y_z(center.into()),
+            bbox: Default::default(),
+            name: name.to_string(),
+            properties: Default::default(),
+            movement_type: Default::default(),
+            movement_axis: Default::default(),
+            bsp_data: BspData {
+                norms: normals_out,
+                collision_tree: BspData::recalculate(
+                    &vertices_out,
+                    polygons_out.into_iter().map(|(texture, verts)| Polygon {
+                        normal: Default::default(),
+                        center: Default::default(),
+                        radius: Default::default(),
+                        texture,
+                        verts: verts.to_vec(),
+                    }),
+                ),
+                verts: vertices_out,
+            },
+            children: Default::default(),
+            is_debris_model: false,
+        };
+
+        new_subobj.recalc_bbox();
+        new_subobj.recalc_radius();
+
+        sub_objects.push(new_subobj);
+
+        for node in node.children() {
+            // make a pointer to the subobj we just pushed
+            // annoying, but the node children could be properties that modify it, or proper subobject children
+            // which will require that this subobject be already pushed into the list
+            let len = sub_objects.len() - 1;
+            let subobj = &mut sub_objects[len];
+
+            if let Some(name) = node.name() {
+                if name.starts_with('#') && name.contains("point") {
+                    let turret = {
+                        match turrets.iter().position(|turret| turret.gun_obj == obj_id) {
+                            Some(idx) => &mut turrets[idx],
+                            None => {
+                                turrets.push(Turret::default());
+                                let idx = turrets.len() - 1;
+                                &mut turrets[idx]
+                            }
+                        }
+                    };
+
+                    turret.gun_obj = obj_id;
+                    turret.base_obj = if name.contains("gun") { parent } else { obj_id };
+
+                    let (pos, norm, _) = gltf_parse_point(&node, parent_transform);
+                    turret.fire_points.push(pos);
+                    turret.normal = norm.try_into().unwrap_or_default();
+                    continue;
+                } else if name.starts_with('#') && name.contains("properties") {
+                    gltf_parse_properties(&node, &mut subobj.properties);
+                    continue;
+                } else if name.starts_with('#') && name.contains("mov-type") {
+                    if let Some(idx) = name.find(':') {
+                        if let Ok(val) = &name[(idx + 1)..].parse::<i32>() {
+                            subobj.movement_type = parse_subsys_mov_type(*val);
+                        }
+                    }
+                    continue;
+                } else if name.starts_with('#') && name.contains("mov-axis") {
+                    if let Some(idx) = name.find(':') {
+                        if let Ok(val) = &name[(idx + 1)..].parse::<i32>() {
+                            subobj.movement_axis = parse_subsys_mov_axis(*val);
+                        }
+                    }
+                    continue;
+                }
+            }
+
+            gltf_parse_subobject_recursive(node, sub_objects, obj_id, insignias, detail_level, turrets, buffers, local_transform);
+        }
+    }
+}
+
+fn gltf_node_children_with_keyword<'a>(node: &'a gltf::Node<'a>, keyword: &'a str) -> impl Iterator<Item = (gltf::Node<'a>, &'a str)> {
+    node.children().filter_map(move |node| {
+        let name = node.name()?;
+        if name.starts_with('#') && name.contains(keyword) {
+            Some((node, name))
+        } else {
+            None
+        }
+    })
+}
+
+fn gltf_parse_properties(node: &gltf::Node, properties: &mut String) {
+    for node in node.children() {
+        if let Some(name) = node.name() {
+            if let Some(idx) = name.find(":") {
+                if properties.is_empty() {
+                    *properties = format!("{}", &name[(idx + 1)..]);
+                } else {
+                    *properties = format!("{}\n{}", properties, &name[(idx + 1)..]);
+                }
+            }
+        }
+    }
+}
+
+// given a node, using its transforms return a position, normal and radius
+// things commonly needed by various pof points
+fn gltf_parse_point(node: &gltf::Node, parent_transform: Mat4x4) -> (Vec3d, Vec3d, f32) {
+    let transform = parent_transform * Mat4x4::from(node.transform().matrix());
+    let zero = Vec3d::ZERO.into();
+    let offset = transform.transform_point(&zero) - zero;
+    let transform = transform.append_translation(&(-offset));
+    let pos = Vec3d::from(offset).flip_y_z();
+    let vector: Vec3d = transform.transform_point(&Point3::from_slice(&[0.0, 1.0, 0.0])).into();
+    let radius = vector.magnitude();
+    let norm = vector.normalize().flip_y_z();
+    (pos, norm, radius)
+}
+
 pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
-    let gltf = Gltf::open(path).unwrap();
+    let (gltf, buffers, _) = gltf::import(&path).unwrap();
+
     // use std::io::Write;
     // write!(std::fs::File::create("output.log").unwrap(), "{:#?}", document).unwrap();
     let mut sub_objects = ObjVec(vec![]);
@@ -1579,7 +1738,7 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
         let name = node.name().unwrap();
 
         if let Some(mesh) = node.mesh() {
-            let (vertices_out, normals_out, polygons_out) = dae_parse_geometry(node, &gltf.buffers().next().unwrap(), &material_map, local_transform);
+            let (vertices_out, normals_out, polygons_out) = gltf_parse_geometry(mesh, &buffers, local_transform);
 
             if name.to_lowercase() == "shield" {
                 let mut polygons = vec![];
@@ -1625,18 +1784,12 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
                 });
             } else if name.to_lowercase().contains("insig") {
                 let mut faces = vec![];
-                for (_, verts) in polygons_out {
-                    if let [vert1, ref rest @ ..] = &*verts {
-                        for slice in rest.windows(2) {
-                            if let [vert2, vert3] = slice {
-                                faces.push((
-                                    PolyVertex { vertex_id: vert1.vertex_id, normal_id: (), uv: vert1.uv },
-                                    PolyVertex { vertex_id: vert2.vertex_id, normal_id: (), uv: vert2.uv },
-                                    PolyVertex { vertex_id: vert3.vertex_id, normal_id: (), uv: vert3.uv },
-                                ))
-                            }
-                        }
-                    }
+                for (_, [vert1, vert2, vert3]) in polygons_out {
+                    faces.push((
+                        PolyVertex { vertex_id: vert1.vertex_id, normal_id: (), uv: vert1.uv },
+                        PolyVertex { vertex_id: vert2.vertex_id, normal_id: (), uv: vert2.uv },
+                        PolyVertex { vertex_id: vert3.vertex_id, normal_id: (), uv: vert3.uv },
+                    ))
                 }
                 insignias.push(Insignia {
                     detail_level: 0,
@@ -1672,7 +1825,7 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
                     offset: flip_y_z(center.into()),
                     geo_center: Default::default(),
                     bbox: Default::default(),
-                    name: name.clone(),
+                    name: name.to_string(),
                     properties: Default::default(),
                     movement_type: Default::default(),
                     movement_axis: Default::default(),
@@ -1685,7 +1838,7 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
                                 center: Default::default(),
                                 radius: Default::default(),
                                 texture,
-                                verts,
+                                verts: verts.to_vec(),
                             }),
                         ),
                         verts: vertices_out,
@@ -1699,32 +1852,31 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
 
                 sub_objects.push(new_subobj);
 
-                for node in &node.children {
-                    dae_parse_subobject_recursive(
+                for node in node.children() {
+                    gltf_parse_subobject_recursive(
                         node,
                         &mut sub_objects,
                         obj_id,
                         &mut insignias,
                         detail_level,
                         &mut turrets,
-                        &local_maps,
-                        &material_map,
+                        &buffers,
                         local_transform,
                     );
                 }
             }
         } else {
             if name == "#thrusters" {
-                for (node, _) in node_children_with_keyword(&node.children, "bank") {
+                for (node, _) in gltf_node_children_with_keyword(&node, "bank") {
                     let mut new_bank = ThrusterBank::default();
 
-                    for (node, name) in node_children_with_keyword(&node.children, "") {
+                    for (node, name) in gltf_node_children_with_keyword(&node, "") {
                         if name.contains("properties") {
-                            dae_parse_properties(node, &mut new_bank.properties);
+                            gltf_parse_properties(&node, &mut new_bank.properties);
                         } else if name.contains("point") {
                             let mut new_point = ThrusterGlow::default();
 
-                            let (pos, norm, rad) = dae_parse_point(node, local_transform);
+                            let (pos, norm, rad) = gltf_parse_point(&node, local_transform);
                             new_point.position = pos;
                             new_point.normal = norm;
                             new_point.radius = rad;
@@ -1736,10 +1888,10 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
                     thruster_banks.push(new_bank);
                 }
             } else if name == "#paths" {
-                for (node, _) in node_children_with_keyword(&node.children, "path") {
+                for (node, _) in gltf_node_children_with_keyword(&node, "path") {
                     let mut new_path = Path::default();
 
-                    for (node, name) in node_children_with_keyword(&node.children, "") {
+                    for (node, name) in gltf_node_children_with_keyword(&node, "") {
                         if name.contains("parent") {
                             if let Some(idx) = name.find(":") {
                                 new_path.parent = format!("{}", &name[(idx + 1)..]);
@@ -1751,7 +1903,7 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
                         } else if name.contains("point") {
                             let mut new_point = PathPoint::default();
 
-                            let (pos, _, rad) = dae_parse_point(node, local_transform);
+                            let (pos, _, rad) = gltf_parse_point(&node, local_transform);
                             new_point.position = pos;
                             new_point.radius = rad;
 
@@ -1762,17 +1914,17 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
                     paths.push(new_path);
                 }
             } else if name.starts_with("#") && name.contains("weapons") {
-                for (node, _) in node_children_with_keyword(&node.children, "bank") {
+                for (node, _) in gltf_node_children_with_keyword(&node, "bank") {
                     let mut new_bank = vec![];
 
-                    for (node, _) in node_children_with_keyword(&node.children, "point") {
+                    for (node, _) in gltf_node_children_with_keyword(&node, "point") {
                         let mut new_point = WeaponHardpoint::default();
 
-                        let (pos, norm, _) = dae_parse_point(node, local_transform);
+                        let (pos, norm, _) = gltf_parse_point(&node, local_transform);
                         new_point.position = pos;
                         new_point.normal = norm.try_into().unwrap_or_default();
 
-                        for (_, name) in node_children_with_keyword(&node.children, "offset") {
+                        for (_, name) in gltf_node_children_with_keyword(&node, "offset") {
                             if let Some(idx) = name.find(":") {
                                 if let Ok(val) = &name[(idx + 1)..].parse() {
                                     new_point.offset = *val;
@@ -1791,10 +1943,10 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
                     }
                 }
             } else if name == "#docking bays" {
-                for (node, _) in node_children_with_keyword(&node.children, "bay") {
+                for (node, _) in gltf_node_children_with_keyword(&node, "bay") {
                     let mut new_bay = Dock::default();
 
-                    let transform = node.transform_as_matrix();
+                    let transform = Mat4x4::from(node.transform().matrix());
                     let zero = Vec3d::ZERO.into();
                     new_bay.position = Vec3d::from(transform.transform_point(&zero) - zero).flip_y_z();
                     new_bay.fvec = transform.transform_vector(&glm::vec3(0., 1., 0.)).try_into().unwrap_or_default();
@@ -1803,9 +1955,9 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
                     new_bay.uvec = transform.transform_vector(&glm::vec3(0., 0., 1.)).try_into().unwrap_or_default();
                     new_bay.uvec.0 = new_bay.uvec.0.flip_y_z();
 
-                    for (node, name) in node_children_with_keyword(&node.children, "") {
+                    for (node, name) in gltf_node_children_with_keyword(&node, "") {
                         if name.contains("properties") {
-                            dae_parse_properties(node, &mut new_bay.properties);
+                            gltf_parse_properties(&node, &mut new_bay.properties);
                         } else if name.contains("path") {
                             if let Some(idx) = name.find(":") {
                                 if let Ok(val) = &name[(idx + 1)..].parse() {
@@ -1818,10 +1970,10 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
                     docking_bays.push(new_bay);
                 }
             } else if name == "#glows" {
-                for (node, _) in node_children_with_keyword(&node.children, "glowbank") {
+                for (node, _) in gltf_node_children_with_keyword(&node, "glowbank") {
                     let mut new_bank = GlowPointBank::default();
 
-                    for (node, name) in node_children_with_keyword(&node.children, "") {
+                    for (node, name) in gltf_node_children_with_keyword(&node, "") {
                         if name.contains("type") {
                             if let Some(idx) = name.find(":") {
                                 if let Ok(val) = &name[(idx + 1)..].parse() {
@@ -1859,11 +2011,11 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
                                 }
                             }
                         } else if name.contains("properties") {
-                            dae_parse_properties(node, &mut new_bank.properties);
+                            gltf_parse_properties(&node, &mut new_bank.properties);
                         } else if name.contains("point") {
                             let mut new_point = GlowPoint::default();
 
-                            let (pos, norm, rad) = dae_parse_point(node, local_transform);
+                            let (pos, norm, rad) = gltf_parse_point(&node, local_transform);
                             new_point.position = pos;
                             new_point.normal = if name.contains("omni") { Vec3d::ZERO } else { norm };
                             new_point.radius = rad;
@@ -1875,32 +2027,32 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
                     glow_banks.push(new_bank);
                 }
             } else if name == "#special points" {
-                for (node, name) in node_children_with_keyword(&node.children, "") {
+                for (node, name) in gltf_node_children_with_keyword(&node, "") {
                     let mut new_point = SpecialPoint::default();
 
                     if let Some(idx) = name.find(":") {
                         new_point.name = format!("{}", &name[(idx + 1)..]);
                     }
 
-                    let (pos, _, rad) = dae_parse_point(node, local_transform);
+                    let (pos, _, rad) = gltf_parse_point(&node, local_transform);
                     new_point.position = pos;
                     new_point.radius = rad;
 
-                    for (node, _) in node_children_with_keyword(&node.children, "properties") {
-                        dae_parse_properties(node, &mut new_point.properties);
+                    for (node, _) in gltf_node_children_with_keyword(&node, "properties") {
+                        gltf_parse_properties(&node, &mut new_point.properties);
                     }
 
                     special_points.push(new_point);
                 }
             } else if name == "#eye points" {
-                for (node, _) in node_children_with_keyword(&node.children, "point") {
+                for (node, _) in gltf_node_children_with_keyword(&node, "point") {
                     let mut new_point = EyePoint::default();
 
-                    let (pos, norm, _) = dae_parse_point(node, local_transform);
+                    let (pos, norm, _) = gltf_parse_point(&node, local_transform);
                     new_point.offset = pos;
                     new_point.normal = norm.try_into().unwrap_or_default();
 
-                    for (_, name) in node_children_with_keyword(&node.children, "parent") {
+                    for (_, name) in gltf_node_children_with_keyword(&node, "parent") {
                         if let Some(idx) = name.find(":") {
                             if let Ok(val) = &name[(idx + 1)..].parse() {
                                 new_point.attached_subobj = ObjectId(*val);
@@ -1912,7 +2064,7 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
                     eye_points.push(new_point);
                 }
             } else if name == "#visual-center" {
-                let (pos, _, _) = dae_parse_point(node, local_transform);
+                let (pos, _, _) = gltf_parse_point(&node, local_transform);
                 visual_center = pos;
             }
         }
@@ -1930,7 +2082,7 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
         // this is pretty bad, but not having any detail levels is worse
     }
 
-    let mut textures = gltf.materials().map(|mat| mat.name().unwrap().to_string()).collect();
+    let textures = gltf.materials().map(|mat| mat.name().unwrap().to_string()).collect();
 
     let mut model = Model {
         version: Version::LATEST,

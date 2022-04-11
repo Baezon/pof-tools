@@ -244,7 +244,7 @@ impl Vec3d {
     /// Swizzle coordinates from POF (Right: `+x`, Up: `+y`, In: `-z`) to specified DAE convention
     pub fn from_coord(&self, up: UpAxis) -> Vec3d {
         match up {
-            UpAxis::XUp => Vec3d { x: -self.y, y: self.x, z: -self.z },
+            UpAxis::XUp => Vec3d { x: -self.z, y: self.x, z: self.y },
             UpAxis::YUp => Vec3d { x: self.x, y: self.y, z: -self.z },
             UpAxis::ZUp => Vec3d { x: self.x, y: self.z, z: self.y },
         }
@@ -253,7 +253,7 @@ impl Vec3d {
     /// Swizzle coordinates from specified DAE convention to POF (Right: `+x`, Up: `+y`, In: `-z`)
     pub fn to_coord(&self, up: UpAxis) -> Vec3d {
         match up {
-            UpAxis::XUp => Vec3d { x: self.y, y: -self.x, z: -self.z },
+            UpAxis::XUp => Vec3d { x: self.y, y: self.z, z: -self.x },
             UpAxis::YUp => Vec3d { x: self.x, y: self.y, z: -self.z },
             UpAxis::ZUp => Vec3d { x: self.x, y: self.z, z: self.y },
         }

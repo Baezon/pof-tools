@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use byteorder::{WriteBytesExt, LE};
+pub use dae_parser::UpAxis;
 use glm::{Mat3x3, TMat4, Vec3};
 use nalgebra_glm::Mat4;
 extern crate nalgebra_glm as glm;
@@ -240,9 +241,22 @@ impl Vec3d {
         out
     }
 
-    // intentional swizzle
-    pub fn flip_y_z(&self) -> Vec3d {
-        Vec3d { x: self.x, y: self.z, z: self.y }
+    /// Swizzle coordinates from POF (Right: `+x`, Up: `+y`, In: `-z`) to specified DAE convention
+    pub fn from_coord(&self, up: UpAxis) -> Vec3d {
+        match up {
+            UpAxis::XUp => Vec3d { x: -self.z, y: self.x, z: self.y },
+            UpAxis::YUp => Vec3d { x: self.x, y: self.y, z: -self.z },
+            UpAxis::ZUp => Vec3d { x: self.x, y: self.z, z: self.y },
+        }
+    }
+
+    /// Swizzle coordinates from specified DAE convention to POF (Right: `+x`, Up: `+y`, In: `-z`)
+    pub fn to_coord(&self, up: UpAxis) -> Vec3d {
+        match up {
+            UpAxis::XUp => Vec3d { x: self.y, y: self.z, z: -self.x },
+            UpAxis::YUp => Vec3d { x: self.x, y: self.y, z: -self.z },
+            UpAxis::ZUp => Vec3d { x: self.x, y: self.z, z: self.y },
+        }
     }
 }
 impl Add for Vec3d {

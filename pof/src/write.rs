@@ -433,15 +433,15 @@ use dae_parser::*;
 
 // turns a direction vector into a dae Rotate struct
 // mostly for the purposes of storing a normal into a node's transform
-fn vec_to_rotation(vec: &Vec3d) -> Rotate {
+fn vec_to_rotation(vec: &Vec3d, up: UpAxis) -> Rotate {
     let v1 = glm::Vec3::from(*vec).normalize();
     let v2 = glm::Vec3::z_axis();
     let mut cross = v1.cross(&v2);
     if cross.magnitude() < 0.001 {
         cross = *glm::Vec3::y_axis() // forward for DAE
     }
-    let [x, y, z]: [f32; 3] = cross.normalize().into();
-    Rotate::new([x, z, y], v1.dot(&v2).acos() * (180.0 / PI)) // intentional swizzle
+    let axis = Vec3d::from(cross.normalize()).to_coord(up);
+    Rotate::new(axis.into(), v1.dot(&v2).acos() * (180.0 / PI))
 }
 
 // turns properties into a series of dae nodes
@@ -457,7 +457,7 @@ fn make_properties_node(properties: &String, id: String) -> Node {
     node
 }
 
-fn make_thrusters_node(thruster_banks: &[ThrusterBank]) -> Node {
+fn make_thrusters_node(thruster_banks: &[ThrusterBank], up: UpAxis) -> Node {
     let mut node = Node::new("#thrusters", Some(format!("#thrusters")));
 
     for (i, bank) in thruster_banks.iter().enumerate() {
@@ -466,9 +466,9 @@ fn make_thrusters_node(thruster_banks: &[ThrusterBank]) -> Node {
         for (j, point) in bank.glows.iter().enumerate() {
             let mut point_node = Node::new(format!("#tb{}-point{}", i, j), Some(format!("#tb{}-point{}", i, j)));
             let radius = point.radius;
-            let pos = point.position;
-            point_node.push_transform(Translate::new([pos.x, pos.z, pos.y])); // itentional swizzle
-            point_node.push_transform(vec_to_rotation(&point.normal));
+            let pos = point.position.to_coord(up);
+            point_node.push_transform(Translate::new(pos.into()));
+            point_node.push_transform(vec_to_rotation(&point.normal, up));
             point_node.push_transform(Scale::new([radius, radius, radius]));
 
             bank_node.children.push(point_node);
@@ -484,7 +484,7 @@ fn make_thrusters_node(thruster_banks: &[ThrusterBank]) -> Node {
     node
 }
 
-fn make_paths_node(paths: &[Path]) -> Node {
+fn make_paths_node(paths: &[Path], up: UpAxis) -> Node {
     let mut node = Node::new("#paths", Some(format!("#paths")));
 
     for (i, path) in paths.iter().enumerate() {
@@ -493,8 +493,8 @@ fn make_paths_node(paths: &[Path]) -> Node {
         for (j, point) in path.points.iter().enumerate() {
             let mut point_node = Node::new(format!("#path{}-{}", i, j), Some(format!("#p{}-point{}", i, j)));
             let radius = point.radius;
-            let pos = point.position;
-            point_node.push_transform(Translate::new([pos.x, pos.z, pos.y])); // itentional swizzle
+            let pos = point.position.to_coord(up);
+            point_node.push_transform(Translate::new(pos.into()));
             point_node.push_transform(Scale::new([radius, radius, radius]));
 
             path_node.children.push(point_node);
@@ -514,7 +514,7 @@ fn make_paths_node(paths: &[Path]) -> Node {
     node
 }
 
-fn make_weapons_node(weapons: &[Vec<WeaponHardpoint>], kind: &str) -> Node {
+fn make_weapons_node(weapons: &[Vec<WeaponHardpoint>], kind: &str, up: UpAxis) -> Node {
     let mut node = Node::new(format!("#{} weapons", kind), Some(format!("#{} weapons", kind)));
 
     for (i, bank) in weapons.iter().enumerate() {
@@ -522,9 +522,9 @@ fn make_weapons_node(weapons: &[Vec<WeaponHardpoint>], kind: &str) -> Node {
 
         for (j, point) in bank.iter().enumerate() {
             let mut point_node = Node::new(format!("#w{}b{}-point{}", &kind[0..1], i, j), Some(format!("#w{}b{}-point{}", &kind[0..1], i, j)));
-            let pos = point.position;
-            point_node.push_transform(Translate::new([pos.x, pos.z, pos.y])); // itentional swizzle
-            point_node.push_transform(vec_to_rotation(&point.normal.0));
+            let pos = point.position.to_coord(up);
+            point_node.push_transform(Translate::new(pos.into()));
+            point_node.push_transform(vec_to_rotation(&point.normal.0, up));
 
             if point.offset != 0.0 {
                 point_node.children.push(Node::new(
@@ -542,17 +542,17 @@ fn make_weapons_node(weapons: &[Vec<WeaponHardpoint>], kind: &str) -> Node {
     node
 }
 
-fn make_docking_bays_node(docks: &[Dock]) -> Node {
+fn make_docking_bays_node(docks: &[Dock], up: UpAxis) -> Node {
     let mut node = Node::new(format!("#docking bays"), Some(format!("#docking bays")));
 
     for (i, dock) in docks.iter().enumerate() {
         let mut bay_node = Node::new(format!("#bay{}", i), Some(format!("#bay{}", i)));
 
-        let fvec: Vec3 = dock.fvec.0.flip_y_z().into();
-        let uvec = dock.uvec.0.flip_y_z().into();
+        let fvec: Vec3 = dock.fvec.0.to_coord(up).into();
+        let uvec = dock.uvec.0.to_coord(up).into();
         let mat = nalgebra::Matrix::from_columns(&[fvec.cross(&uvec), fvec, uvec]);
         let mut mat: Mat4x4 = glm::mat3_to_mat4(&mat);
-        mat.append_translation_mut(&dock.position.flip_y_z().into());
+        mat.append_translation_mut(&dock.position.to_coord(up).into());
         bay_node.push_transform(mat);
 
         if dock.path.is_some() {
@@ -571,7 +571,7 @@ fn make_docking_bays_node(docks: &[Dock]) -> Node {
     node
 }
 
-fn make_glows_node(glows: &[GlowPointBank]) -> Node {
+fn make_glows_node(glows: &[GlowPointBank], up: UpAxis) -> Node {
     let mut node = Node::new("#glows", Some(format!("#glows")));
 
     for (i, glow_bank) in glows.iter().enumerate() {
@@ -580,12 +580,12 @@ fn make_glows_node(glows: &[GlowPointBank]) -> Node {
         for (j, point) in glow_bank.glow_points.iter().enumerate() {
             let mut point_node = Node::new(format!("#g{}-{}", i, j), Some(format!("#g{}-point{}", i, j)));
             let radius = point.radius;
-            let pos = point.position;
-            point_node.push_transform(Translate::new([pos.x, pos.z, pos.y])); // itentional swizzle
+            let pos = point.position.to_coord(up);
+            point_node.push_transform(Translate::new(pos.into()));
             if point.normal.is_null() {
                 point_node.name = Some(format!("#g{}-omnipoint{}", i, j));
             } else {
-                point_node.push_transform(vec_to_rotation(&point.normal));
+                point_node.push_transform(vec_to_rotation(&point.normal, up));
             }
             point_node.push_transform(Scale::new([radius, radius, radius]));
 
@@ -626,15 +626,15 @@ fn make_glows_node(glows: &[GlowPointBank]) -> Node {
     node
 }
 
-fn make_specials_node(special_points: &[SpecialPoint]) -> Node {
+fn make_specials_node(special_points: &[SpecialPoint], up: UpAxis) -> Node {
     let mut node = Node::new(format!("#special points"), Some(format!("#special points")));
 
     for (i, point) in special_points.iter().enumerate() {
         let mut point_node = Node::new(format!("#s{}", i), Some(format!("#s{}:{}", i, point.name)));
 
         let radius = point.radius;
-        let pos = point.position;
-        point_node.push_transform(Translate::new([pos.x, pos.z, pos.y])); // itentional swizzle
+        let pos = point.position.to_coord(up);
+        point_node.push_transform(Translate::new(pos.into()));
         point_node.push_transform(Scale::new([radius, radius, radius]));
 
         if !point.properties.is_empty() {
@@ -647,15 +647,15 @@ fn make_specials_node(special_points: &[SpecialPoint]) -> Node {
     node
 }
 
-fn make_eyes_node(eye_points: &[EyePoint]) -> Node {
+fn make_eyes_node(eye_points: &[EyePoint], up: UpAxis) -> Node {
     let mut node = Node::new(format!("#eye points"), Some(format!("#eye points")));
 
     for (i, point) in eye_points.iter().enumerate() {
         let mut point_node = Node::new(format!("#e{}", i), Some(format!("#e-point{}", i)));
 
-        let pos = point.offset;
-        point_node.push_transform(Translate::new([pos.x, pos.z, pos.y])); // itentional swizzle
-        point_node.push_transform(vec_to_rotation(&point.normal.0));
+        let pos = point.offset.to_coord(up);
+        point_node.push_transform(Translate::new(pos.into()));
+        point_node.push_transform(vec_to_rotation(&point.normal.0, up));
 
         point_node
             .children
@@ -667,15 +667,15 @@ fn make_eyes_node(eye_points: &[EyePoint]) -> Node {
     node
 }
 
-fn make_visual_center_node(visual_center: &Vec3d) -> Node {
+fn make_visual_center_node(visual_center: &Vec3d, up: UpAxis) -> Node {
     let mut node = Node::new(format!("#visual-center"), Some(format!("#visual-center")));
 
-    node.push_transform(Translate::new([visual_center.x, visual_center.z, visual_center.y]));
+    node.push_transform(Translate::new(visual_center.to_coord(up).into()));
 
     node
 }
 
-fn make_insignia_node(insignia: &Insignia, geometries: &mut Vec<Geometry>, id: usize) -> Node {
+fn make_insignia_node(insignia: &Insignia, geometries: &mut Vec<Geometry>, id: usize, up: UpAxis) -> Node {
     let geo_id = format!("insig{}-geometry", id);
     let pos_id = format!("insig{}-geometry-position", id);
     let vert_id = format!("insig{}-geometry-vertex", id);
@@ -683,10 +683,7 @@ fn make_insignia_node(insignia: &Insignia, geometries: &mut Vec<Geometry>, id: u
 
     let mut positions = vec![];
     for vert in &insignia.vertices {
-        // intentional swizzle
-        positions.push(vert.x);
-        positions.push(vert.z);
-        positions.push(vert.y);
+        positions.extend_from_slice(&<[_; 3]>::from(vert.to_coord(up)));
     }
 
     let mut tricount = 0;
@@ -724,12 +721,12 @@ fn make_insignia_node(insignia: &Insignia, geometries: &mut Vec<Geometry>, id: u
     let mut node = Node::new(format!("insig{}", id), Some(format!("insignia {}", id)));
 
     node.instance_geometry.push(instance);
-    node.push_transform(Translate::new([insignia.offset.x, insignia.offset.z, insignia.offset.y]));
+    node.push_transform(Translate::new(insignia.offset.to_coord(up).into()));
 
     node
 }
 
-fn make_shield_node(shield: &ShieldData, geometries: &mut Vec<Geometry>) -> Node {
+fn make_shield_node(shield: &ShieldData, geometries: &mut Vec<Geometry>, up: UpAxis) -> Node {
     let geo_id = format!("shield-geometry");
     let pos_id = format!("shield-geometry-position");
     let vert_id = format!("shield-geometry-vertex");
@@ -739,10 +736,7 @@ fn make_shield_node(shield: &ShieldData, geometries: &mut Vec<Geometry>) -> Node
 
     let mut positions = vec![];
     for vert in &shield.verts {
-        // intentional swizzle
-        positions.push(vert.x);
-        positions.push(vert.z);
-        positions.push(vert.y);
+        positions.extend_from_slice(&<[_; 3]>::from(vert.to_coord(up)));
     }
 
     let mut normals = vec![];
@@ -750,9 +744,7 @@ fn make_shield_node(shield: &ShieldData, geometries: &mut Vec<Geometry>) -> Node
     let mut indices = vec![];
 
     for poly in &shield.polygons {
-        normals.push(poly.normal.x);
-        normals.push(poly.normal.z);
-        normals.push(poly.normal.y);
+        normals.extend_from_slice(&<[_; 3]>::from(poly.normal.to_coord(up)));
 
         indices.push(poly.verts.0 .0 as _);
         indices.push(tricount as _);
@@ -799,7 +791,7 @@ fn make_shield_node(shield: &ShieldData, geometries: &mut Vec<Geometry>) -> Node
 }
 
 fn make_subobj_node(
-    subobjs: &ObjVec<SubObject>, subobj: &SubObject, turrets: &[Turret], geometries: &mut Vec<Geometry>, materials: &[String],
+    up: UpAxis, subobjs: &ObjVec<SubObject>, subobj: &SubObject, turrets: &[Turret], geometries: &mut Vec<Geometry>, materials: &[String],
 ) -> Node {
     let geo_id = format!("{}-geometry", subobj.name);
     let pos_id = format!("{}-geometry-position", subobj.name);
@@ -812,18 +804,12 @@ fn make_subobj_node(
 
     let mut positions = vec![];
     for vert in &subobj.bsp_data.verts {
-        // intentional swizzle
-        positions.push(vert.x);
-        positions.push(vert.z);
-        positions.push(vert.y);
+        positions.extend_from_slice(&<[_; 3]>::from(vert.to_coord(up)));
     }
 
     let mut normals = vec![];
     for norm in &subobj.bsp_data.norms {
-        // intentional swizzle
-        normals.push(norm.x);
-        normals.push(norm.z);
-        normals.push(norm.y);
+        normals.extend_from_slice(&<[_; 3]>::from(norm.to_coord(up)));
     }
 
     let mut uv_coords = vec![];
@@ -892,7 +878,7 @@ fn make_subobj_node(
     ));
 
     let mut node = Node::new(subobj.name.clone(), Some(subobj.name.clone()));
-    node.push_transform(Translate::new([subobj.offset.x, subobj.offset.z, subobj.offset.y]));
+    node.push_transform(Translate::new(subobj.offset.to_coord(up).into()));
 
     // kind of expensive to do per subobj?
     for (i, turret) in turrets.iter().enumerate() {
@@ -905,8 +891,8 @@ fn make_subobj_node(
                 };
 
                 let mut gunpoint_node = Node::new(name.clone(), Some(name));
-                gunpoint_node.push_transform(Translate::new([point.x, point.z, point.y]));
-                gunpoint_node.push_transform(vec_to_rotation(&turret.normal.0));
+                gunpoint_node.push_transform(Translate::new(point.to_coord(up).into()));
+                gunpoint_node.push_transform(vec_to_rotation(&turret.normal.0, up));
                 node.children.push(gunpoint_node);
             }
         }
@@ -931,7 +917,7 @@ fn make_subobj_node(
         subobj
             .children
             .iter()
-            .map(|&id| make_subobj_node(subobjs, &subobjs[id], turrets, geometries, materials)),
+            .map(|&id| make_subobj_node(up, subobjs, &subobjs[id], turrets, geometries, materials)),
     );
 
     node
@@ -944,13 +930,15 @@ impl Model {
         let mut nodes = vec![];
         let materials: Vec<String> = self.textures.iter().map(|tex| format!("{}-material", tex)).collect();
 
+        let up = UpAxis::YUp;
+
         for subobj in &self.sub_objects {
             if subobj.parent.is_none() {
-                let mut top_level_node = make_subobj_node(&self.sub_objects, subobj, &self.turrets, &mut geometries, &materials);
+                let mut top_level_node = make_subobj_node(up, &self.sub_objects, subobj, &self.turrets, &mut geometries, &materials);
 
                 for (i, insignia) in self.insignias.iter().enumerate() {
                     if self.get_detail_level(subobj.obj_id) == Some(insignia.detail_level) {
-                        top_level_node.children.push(make_insignia_node(insignia, &mut geometries, i))
+                        top_level_node.children.push(make_insignia_node(insignia, &mut geometries, i, up))
                     }
                 }
 
@@ -959,43 +947,43 @@ impl Model {
         }
 
         if self.shield_data.is_some() {
-            nodes.push(make_shield_node((self.shield_data.as_ref()).unwrap(), &mut geometries));
+            nodes.push(make_shield_node((self.shield_data.as_ref()).unwrap(), &mut geometries, up));
         }
 
         if !self.thruster_banks.is_empty() {
-            nodes.push(make_thrusters_node(&self.thruster_banks));
+            nodes.push(make_thrusters_node(&self.thruster_banks, up));
         }
 
         if !self.paths.is_empty() {
-            nodes.push(make_paths_node(&self.paths));
+            nodes.push(make_paths_node(&self.paths, up));
         }
 
         if !self.primary_weps.is_empty() {
-            nodes.push(make_weapons_node(&self.primary_weps, "primary"));
+            nodes.push(make_weapons_node(&self.primary_weps, "primary", up));
         }
 
         if !self.secondary_weps.is_empty() {
-            nodes.push(make_weapons_node(&self.secondary_weps, "secondary"));
+            nodes.push(make_weapons_node(&self.secondary_weps, "secondary", up));
         }
 
         if !self.docking_bays.is_empty() {
-            nodes.push(make_docking_bays_node(&self.docking_bays));
+            nodes.push(make_docking_bays_node(&self.docking_bays, up));
         }
 
         if !self.glow_banks.is_empty() {
-            nodes.push(make_glows_node(&self.glow_banks));
+            nodes.push(make_glows_node(&self.glow_banks, up));
         }
 
         if !self.special_points.is_empty() {
-            nodes.push(make_specials_node(&self.special_points));
+            nodes.push(make_specials_node(&self.special_points, up));
         }
 
         if !self.eye_points.is_empty() {
-            nodes.push(make_eyes_node(&self.eye_points));
+            nodes.push(make_eyes_node(&self.eye_points, up));
         }
 
         if !self.visual_center.is_null() {
-            nodes.push(make_visual_center_node(&self.visual_center));
+            nodes.push(make_visual_center_node(&self.visual_center, up));
         }
 
         let mut doc = Document::create_now();
@@ -1021,7 +1009,7 @@ impl Model {
 
         doc.scene = Some(Scene::new(Instance::new(Url::Fragment("Scene".to_string()))));
 
-        doc.asset.up_axis = UpAxis::ZUp;
+        doc.asset.up_axis = up;
 
         doc.write_to(w)
     }

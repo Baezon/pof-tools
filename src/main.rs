@@ -430,7 +430,7 @@ impl PofToolsGui {
                 }
                 Err(TryRecvError::Disconnected) => self.model_loading_thread = None,
                 Ok(Ok(None)) => self.model_loading_thread = None,
-                Ok(Err(panic_msg)) => self.model_loading_thread = None,
+                Ok(Err(_)) => self.model_loading_thread = None,
 
                 Err(TryRecvError::Empty) => {}
             }

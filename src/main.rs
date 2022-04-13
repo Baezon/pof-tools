@@ -17,6 +17,7 @@ use glium::{
     texture::SrgbTexture2d,
     BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer,
 };
+use glm::Mat4x4;
 use native_dialog::FileDialog;
 use pof::{
     BspData, Insignia, Model, NormalId, ObjVec, ObjectId, Parser, PolyVertex, Polygon, ShieldData, SubObject, TextureId, Texturing, Vec3d, VertexId,
@@ -724,8 +725,6 @@ fn main() {
                     view_mat.prepend_translation_mut(&glm::vec3(-pt_gui.camera_offset.x, -pt_gui.camera_offset.y, -pt_gui.camera_offset.z));
                     view_mat.prepend_translation_mut(&glm::vec3(-model.visual_center.x, -model.visual_center.y, -model.visual_center.z));
 
-                    let view_mat: [[f32; 4]; 4] = view_mat.into(); // the final matrix used by the graphics
-
                     let displayed_subobjects =
                         get_list_of_display_subobjects(model, pt_gui.ui_state.tree_view_selection, pt_gui.ui_state.last_selected_subobj);
 
@@ -772,12 +771,12 @@ fn main() {
 
                         let f = 1.0 / (fov / 2.0).tan();
 
-                        [
+                        Mat4x4::from([
                             [f * aspect_ratio, 0.0, 0.0, 0.0],
                             [0.0, f, 0.0, 0.0],
                             [0.0, 0.0, (zfar + znear) / (zfar - znear), 1.0],
                             [0.0, 0.0, -(2.0 * zfar * znear) / (zfar - znear), 0.0],
-                        ]
+                        ])
                     };
 
                     let light_vec = glm::vec3(0.5, 1.0, -1.0);
@@ -788,6 +787,11 @@ fn main() {
                         if displayed_subobjects[buffer_objs.obj_id] {
                             let mut mat = glm::identity::<f32, 4>();
                             mat.append_translation_mut(&pt_gui.model.get_total_subobj_offset(buffer_objs.obj_id).into());
+
+                            let matrix = view_mat * mat;
+                            let norm_matrix: [[f32; 3]; 3] = glm::mat4_to_mat3(&matrix).try_inverse().unwrap().transpose().into();
+                            let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * matrix).into();
+
                             for buffer_obj in &buffer_objs.buffers {
                                 let indices = if pt_gui.display_mode == DisplayMode::Wireframe {
                                     buffer_obj.wireframe_indices.as_ref().unwrap_or(&buffer_obj.indices)
@@ -805,9 +809,8 @@ fn main() {
                                 {
                                     // draw textured
                                     let uniforms = glium::uniform! {
-                                        model: <[[f32; 4]; 4]>::from(mat),
-                                        view: view_mat,
-                                        perspective: perspective_matrix,
+                                        norm_matrix: norm_matrix,
+                                        vert_matrix: vert_matrix,
                                         u_light: <[f32; 3]>::from(light_vec),
                                         dark_color: dark_color,
                                         light_color: light_color,
@@ -828,9 +831,8 @@ fn main() {
                                 } else {
                                     // draw untextured
                                     let uniforms = glium::uniform! {
-                                        model: <[[f32; 4]; 4]>::from(mat),
-                                        view: view_mat,
-                                        perspective: perspective_matrix,
+                                        norm_matrix: norm_matrix,
+                                        vert_matrix: vert_matrix,
                                         u_light: <[f32; 3]>::from(light_vec),
                                         dark_color: dark_color,
                                         light_color: light_color,
@@ -864,6 +866,9 @@ fn main() {
                             if insignia.detail_level == current_detail_level {
                                 let mut mat = glm::identity::<f32, 4>();
                                 mat.append_translation_mut(&insignia.offset.into());
+                                let matrix = view_mat * mat;
+                                let norm_matrix: [[f32; 3]; 3] = glm::mat4_to_mat3(&matrix).try_inverse().unwrap().transpose().into();
+                                let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * matrix).into();
 
                                 let color = if current_insignia_idx == Some(i) {
                                     [1.0, 0.0, 0.0f32]
@@ -873,9 +878,8 @@ fn main() {
 
                                 // only render if its currently being displayed
                                 let uniforms = glium::uniform! {
-                                    model: <[[f32; 4]; 4]>::from(mat),
-                                    view: view_mat,
-                                    perspective: perspective_matrix,
+                                    norm_matrix: norm_matrix,
+                                    vert_matrix: vert_matrix,
                                     u_light: <[f32; 3]>::from(light_vec),
                                     dark_color: dark_color,
                                     light_color: light_color,
@@ -899,10 +903,13 @@ fn main() {
                     // maybe draw the shield
                     if let TreeSelection::Shield = pt_gui.tree_view_selection {
                         if let Some(shield) = &pt_gui.buffer_shield {
+                            let matrix = view_mat;
+                            let norm_matrix: [[f32; 3]; 3] = glm::mat4_to_mat3(&matrix).try_inverse().unwrap().transpose().into();
+                            let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * matrix).into();
+
                             let uniforms = glium::uniform! {
-                                model: <[[f32; 4]; 4]>::from(glm::identity::<f32, 4>()),
-                                view: view_mat,
-                                perspective: perspective_matrix,
+                                norm_matrix: norm_matrix,
+                                vert_matrix: vert_matrix,
                                 u_light: [0.0, 0.0, -1.0f32],
                                 dark_color: [0.0, 0.0, 0.0f32],
                                 light_color: [0.2, 0.3, 0.9f32],
@@ -999,10 +1006,12 @@ fn main() {
                             Vec3d::ZERO
                         };
                         mat.append_translation_mut(&(bbox.min + offset).into());
+
+                        let matrix = view_mat * mat;
+                        let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * matrix).into();
+
                         let uniforms = glium::uniform! {
-                            model: <[[f32; 4]; 4]>::from(mat),
-                            view: view_mat,
-                            perspective: perspective_matrix,
+                            vert_matrix: vert_matrix
                         };
 
                         target
@@ -1032,11 +1041,11 @@ fn main() {
                                 Vec3d::ZERO
                             };
                             mat.append_translation_mut(&offset.into());
+                            let matrix = view_mat * mat;
+                            let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * matrix).into();
 
                             let uniforms = glium::uniform! {
-                                model: <[[f32; 4]; 4]>::from(mat),
-                                view: view_mat,
-                                perspective: perspective_matrix,
+                                vert_matrix: vert_matrix
                             };
 
                             target
@@ -1057,11 +1066,10 @@ fn main() {
                             } else {
                                 lollipop_params.blend = ADDITIVE_BLEND;
                             }
+                            let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * view_mat).into();
 
                             let uniforms = glium::uniform! {
-                                model: <[[f32; 4]; 4]>::from(glm::identity::<f32, 4>()),
-                                view: view_mat,
-                                perspective: perspective_matrix,
+                                vert_matrix: vert_matrix,
                                 lollipop_color: lollipop_group.color,
                             };
 
@@ -1091,10 +1099,10 @@ fn main() {
 
                                 // same uniforms as above, but darkened
                                 // i cant just modify the previous uniforms variable, the uniforms! macro is doing some crazy shit
+                                let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * view_mat).into();
+
                                 let uniforms = glium::uniform! {
-                                    model: <[[f32; 4]; 4]>::from(glm::identity::<f32, 4>()),
-                                    view: view_mat,
-                                    perspective: perspective_matrix,
+                                    vert_matrix: vert_matrix,
                                     lollipop_color: lollipop_group.color.map(|col| col * 0.15 ), // <<< THIS IS DIFFERENT FROM ABOVE
                                 };
 
@@ -1660,15 +1668,13 @@ in vec2 uv;
 out vec2 v_uv;
 out vec3 v_normal;
 
-uniform mat4 perspective;
-uniform mat4 view;
-uniform mat4 model;
+uniform mat4 vert_matrix;
+uniform mat3 norm_matrix;
 
 void main() {
     v_uv = uv;
-    mat4 modelview = view * model;
-    v_normal = transpose(inverse(mat3(modelview))) * normal;
-    gl_Position = perspective * modelview * vec4(position, 1.0);
+    v_normal = norm_matrix * normal;
+    gl_Position = vert_matrix * vec4(position, 1.0);
 }
 "#;
 
@@ -1677,13 +1683,10 @@ const NO_NORMS_VERTEX_SHADER: &str = r#"
 
 in vec3 position;
 
-uniform mat4 perspective;
-uniform mat4 view;
-uniform mat4 model;
+uniform mat4 vert_matrix;
 
 void main() {
-    mat4 modelview = view * model;
-    gl_Position = perspective * modelview * vec4(position, 1.0);
+    gl_Position = vert_matrix * vec4(position, 1.0);
 }
 "#;
 
@@ -1771,13 +1774,10 @@ const LOLLIPOP_VERTEX_SHADER: &str = r#"
 in mat4 world_matrix;
 in vec3 position;
 
-uniform mat4 perspective;
-uniform mat4 view;
-uniform mat4 model;
+uniform mat4 vert_matrix;
 
 void main() {
-    mat4 modelview = view * model;
-    gl_Position = perspective * modelview * world_matrix * vec4(position, 1.0);
+    gl_Position = vert_matrix * world_matrix * vec4(position, 1.0);
 }
 "#;
 

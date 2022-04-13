@@ -560,6 +560,7 @@ fn main() {
         let backtrace = backtrace::Backtrace::new();
         let msg = panic_info.payload().downcast_ref::<String>().map_or("unknown panic", |x| x);
         let msg = format!("{},  {}", msg, panic_info.location().unwrap());
+        error!("{}", msg);
         let mut frames = vec![];
         for frame in backtrace.frames() {
             // filter out anything which doesn't have pof-tools in the path

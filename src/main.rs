@@ -430,7 +430,7 @@ impl PofToolsGui {
                 }
                 Err(TryRecvError::Disconnected) => self.model_loading_thread = None,
                 Ok(Ok(None)) => self.model_loading_thread = None,
-                Ok(Err(panic_msg)) => std::panic::panic_any(panic_msg),
+                Ok(Err(panic_msg)) => self.model_loading_thread = None,
 
                 Err(TryRecvError::Empty) => {}
             }
@@ -659,6 +659,7 @@ fn main() {
     pt_gui.camera_scale = model.header.max_radius * 2.0;
 
     let mut errored = None;
+    info!("Beginning event loop...");
 
     event_loop.run(move |event, _, control_flow| {
         let mut catch_redraw = || {
@@ -1119,12 +1120,15 @@ fn main() {
 
             // error handling (crude as it is)
             // do the whole frame, catch any panics
-            if errored.is_none() && std::panic::catch_unwind(std::panic::AssertUnwindSafe(redraw)).is_err() {
-                errored = Some(
-                    panic_data_recv
-                        .recv()
-                        .unwrap_or_else(|_| ("double panic".into(), backtrace::Backtrace::new())),
-                );
+            if errored.is_none() {
+                drop(std::panic::catch_unwind(std::panic::AssertUnwindSafe(redraw)));
+                match panic_data_recv.try_recv() {
+                    Ok((msg, backtrace)) => errored = Some((msg, backtrace)),
+                    Err(e) => match e {
+                        TryRecvError::Empty => {}
+                        TryRecvError::Disconnected => errored = Some(("double panic".into(), backtrace::Backtrace::new())),
+                    },
+                }
             }
 
             // if there was an error, do this mini event loop and display the error message

@@ -660,7 +660,7 @@ impl Serialize for ShieldNode {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         let mut buf = vec![];
 
-        crate::write::write_shield_node(&mut buf, self, get_version!() < Version::V21_18)?;
+        crate::write::write_shield_node(&mut buf, self, get_version!() < Version::V22_00)?;
 
         w.write_u32::<LE>((buf.len()) as u32)?;
         w.write_all(&buf)

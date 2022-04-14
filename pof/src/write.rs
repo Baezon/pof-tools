@@ -1,16 +1,23 @@
 use std::{
+    borrow::Cow,
     f32::consts::PI,
     io::{self, Write},
+    mem::size_of,
 };
 
 use byteorder::{WriteBytesExt, LE};
 use dae_parser::Document;
 use glm::{Mat4x4, Vec3};
+use gltf::buffer::Target;
+use gltf_json as json;
+use json::accessor::ComponentType;
+use json::validation::Checked::Valid;
+use json::Index;
 extern crate nalgebra_glm as glm;
 
 use crate::{
-    BspData, BspNode, Dock, EyePoint, GlowPointBank, Insignia, Model, ObjVec, ObjectId, Path, ShieldData, ShieldNode, SpecialPoint, SubObject,
-    ThrusterBank, Turret, Vec3d, Version, WeaponHardpoint,
+    BoundingBox, BspData, BspNode, Dock, EyePoint, GlowPointBank, Insignia, Model, ObjVec, ObjectId, Path, ShieldData, ShieldNode, SpecialPoint,
+    SubObject, ThrusterBank, Turret, Vec3d, Version, WeaponHardpoint,
 };
 
 pub(crate) trait Serialize {
@@ -460,14 +467,62 @@ impl Model {
 }
 
 // ==============================================================================
-// DAE Writing
+// DAE / glTF Writing
 // ==============================================================================
 
-use dae_parser::*;
+use dae_parser::{Node as DaeNode, UpAxis::YUp, *};
+
+trait NodeBuilder {
+    type Ctx;
+    type Node;
+    fn children(&mut self) -> &mut Vec<Self::Node>;
+    fn translate(&mut self, val: [f32; 3]);
+    fn rotate(&mut self, axis_angle: ([f32; 3], f32));
+    fn scale(&mut self, val: [f32; 3]);
+    fn matrix_transform(&mut self, mat: Mat4x4);
+    fn build(self, ctx: &mut Self::Ctx) -> Self::Node;
+}
+trait Node {
+    type Ctx;
+    type Builder: NodeBuilder<Node = Self, Ctx = Self::Ctx>;
+    fn new(id: String, name: String) -> Self::Builder;
+    fn new2(id: String) -> Self::Builder {
+        Self::new(id.clone(), id)
+    }
+}
+impl NodeBuilder for DaeNode {
+    type Ctx = ();
+    type Node = Self;
+    fn children(&mut self) -> &mut Vec<DaeNode> {
+        &mut self.children
+    }
+    fn translate(&mut self, val: [f32; 3]) {
+        self.push_transform(Translate::new(val))
+    }
+    fn rotate(&mut self, (axis, angle): ([f32; 3], f32)) {
+        self.push_transform(Rotate::new(axis, angle * (180.0 / PI)))
+    }
+    fn scale(&mut self, val: [f32; 3]) {
+        self.push_transform(Scale::new(val))
+    }
+    fn matrix_transform(&mut self, mat: Mat4x4) {
+        self.push_transform(mat)
+    }
+    fn build(self, _: &mut ()) -> DaeNode {
+        self
+    }
+}
+impl Node for DaeNode {
+    type Ctx = ();
+    type Builder = Self;
+    fn new(id: String, name: String) -> Self {
+        DaeNode::new(id, Some(name))
+    }
+}
 
 // turns a direction vector into a dae Rotate struct
 // mostly for the purposes of storing a normal into a node's transform
-fn vec_to_rotation(vec: &Vec3d, up: UpAxis) -> Rotate {
+fn vec_to_rotation(vec: &Vec3d, up: UpAxis) -> ([f32; 3], f32) {
     let v1 = glm::Vec3::from(*vec).normalize();
     let v2 = glm::Vec3::z_axis();
     let mut cross = v1.cross(&v2);
@@ -475,241 +530,240 @@ fn vec_to_rotation(vec: &Vec3d, up: UpAxis) -> Rotate {
         cross = *glm::Vec3::y_axis() // forward for DAE
     }
     let axis = Vec3d::from(cross.normalize()).to_coord(up);
-    Rotate::new(axis.into(), v1.dot(&v2).acos() * (180.0 / PI))
+    (axis.into(), v1.dot(&v2).acos())
 }
 
 // turns properties into a series of dae nodes
-fn make_properties_node(properties: &String, id: String) -> Node {
-    let mut node = Node::new(format!("#{}properties", id), Some(format!("#{}properties", id)));
+fn make_properties_node<N: Node>(ctx: &mut N::Ctx, properties: &str, id: String) -> N {
+    let mut node = N::new2(format!("#{}properties", id));
 
     for substr in properties.split('\n') {
-        node.children
-            .push(Node::new(format!("#{}:{}", id, substr), Some(format!("{}:{}", id, substr.trim_end()))));
+        node.children()
+            .push(N::new(format!("#{}:{}", id, substr), format!("{}:{}", id, substr.trim_end())).build(ctx));
         // trailing spaces can mess up parsing, so remove them
     }
 
-    node
+    node.build(ctx)
 }
 
-fn make_thrusters_node(thruster_banks: &[ThrusterBank], up: UpAxis) -> Node {
-    let mut node = Node::new("#thrusters", Some(format!("#thrusters")));
+fn make_thrusters_node<N: Node>(ctx: &mut N::Ctx, thruster_banks: &[ThrusterBank], up: UpAxis) -> N {
+    let mut node = N::new2("#thrusters".into());
 
     for (i, bank) in thruster_banks.iter().enumerate() {
-        let mut bank_node = Node::new(format!("#t-bank{}", i), Some(format!("#t-bank{}", i)));
+        let mut bank_node = N::new2(format!("#t-bank{}", i));
 
         for (j, point) in bank.glows.iter().enumerate() {
-            let mut point_node = Node::new(format!("#tb{}-point{}", i, j), Some(format!("#tb{}-point{}", i, j)));
+            let mut point_node = N::new2(format!("#tb{}-point{}", i, j));
             let radius = point.radius;
             let pos = point.position.to_coord(up);
-            point_node.push_transform(Translate::new(pos.into()));
-            point_node.push_transform(vec_to_rotation(&point.normal, up));
-            point_node.push_transform(Scale::new([radius, radius, radius]));
+            point_node.translate(pos.into());
+            point_node.rotate(vec_to_rotation(&point.normal, up));
+            point_node.scale([radius, radius, radius]);
 
-            bank_node.children.push(point_node);
+            bank_node.children().push(point_node.build(ctx));
         }
 
         if !bank.properties.is_empty() {
-            bank_node.children.push(make_properties_node(&bank.properties, format!("tb{}-", i)));
+            bank_node
+                .children()
+                .push(make_properties_node(ctx, &bank.properties, format!("tb{}-", i)));
         }
 
-        node.children.push(bank_node);
+        node.children().push(bank_node.build(ctx));
     }
 
-    node
+    node.build(ctx)
 }
 
-fn make_paths_node(paths: &[Path], up: UpAxis) -> Node {
-    let mut node = Node::new("#paths", Some(format!("#paths")));
+fn make_paths_node<N: Node>(ctx: &mut N::Ctx, paths: &[Path], up: UpAxis) -> N {
+    let mut node = N::new2("#paths".into());
 
     for (i, path) in paths.iter().enumerate() {
-        let mut path_node = Node::new(format!("#p{}", i), Some(format!("#path{}", i)));
+        let mut path_node = N::new(format!("#p{}", i), format!("#path{}", i));
 
         for (j, point) in path.points.iter().enumerate() {
-            let mut point_node = Node::new(format!("#path{}-{}", i, j), Some(format!("#p{}-point{}", i, j)));
+            let mut point_node = N::new(format!("#path{}-{}", i, j), format!("#p{}-point{}", i, j));
             let radius = point.radius;
             let pos = point.position.to_coord(up);
-            point_node.push_transform(Translate::new(pos.into()));
-            point_node.push_transform(Scale::new([radius, radius, radius]));
+            point_node.translate(pos.into());
+            point_node.scale([radius, radius, radius]);
 
-            path_node.children.push(point_node);
+            path_node.children().push(point_node.build(ctx));
         }
 
         path_node
-            .children
-            .push(Node::new(format!("#p{}-name", i), Some(format!("#p{}-name:{}", i, path.name))));
+            .children()
+            .push(N::new(format!("#p{}-name", i), format!("#p{}-name:{}", i, path.name)).build(ctx));
 
         path_node
-            .children
-            .push(Node::new(format!("#p{}-parent", i), Some(format!("#p{}-parent:{}", i, path.parent))));
+            .children()
+            .push(N::new(format!("#p{}-parent", i), format!("#p{}-parent:{}", i, path.parent)).build(ctx));
 
-        node.children.push(path_node);
+        node.children().push(path_node.build(ctx));
     }
 
-    node
+    node.build(ctx)
 }
 
-fn make_weapons_node(weapons: &[Vec<WeaponHardpoint>], kind: &str, up: UpAxis) -> Node {
-    let mut node = Node::new(format!("#{} weapons", kind), Some(format!("#{} weapons", kind)));
+fn make_weapons_node<N: Node>(ctx: &mut N::Ctx, weapons: &[Vec<WeaponHardpoint>], kind: &str, up: UpAxis) -> N {
+    let mut node = N::new2(format!("#{} weapons", kind));
 
     for (i, bank) in weapons.iter().enumerate() {
-        let mut bank_node = Node::new(format!("#w{}-bank{}", &kind[0..1], i), Some(format!("#w{}-bank{}", &kind[0..1], i)));
+        let mut bank_node = N::new2(format!("#w{}-bank{}", &kind[0..1], i));
 
         for (j, point) in bank.iter().enumerate() {
-            let mut point_node = Node::new(format!("#w{}b{}-point{}", &kind[0..1], i, j), Some(format!("#w{}b{}-point{}", &kind[0..1], i, j)));
+            let mut point_node = N::new2(format!("#w{}b{}-point{}", &kind[0..1], i, j));
             let pos = point.position.to_coord(up);
-            point_node.push_transform(Translate::new(pos.into()));
-            point_node.push_transform(vec_to_rotation(&point.normal.0, up));
+            point_node.translate(pos.into());
+            point_node.rotate(vec_to_rotation(&point.normal.0, up));
 
             if point.offset != 0.0 {
-                point_node.children.push(Node::new(
-                    format!("#w{}b{}-point{}-offset", &kind[0..1], i, j),
-                    Some(format!("#w{}b{}-point{}-offset:{}", &kind[0..1], i, j, point.offset)),
-                ));
+                point_node.children().push(
+                    N::new(
+                        format!("#w{}b{}-point{}-offset", &kind[0..1], i, j),
+                        format!("#w{}b{}-point{}-offset:{}", &kind[0..1], i, j, point.offset),
+                    )
+                    .build(ctx),
+                );
             }
 
-            bank_node.children.push(point_node);
+            bank_node.children().push(point_node.build(ctx));
         }
 
-        node.children.push(bank_node);
+        node.children().push(bank_node.build(ctx));
     }
 
-    node
+    node.build(ctx)
 }
 
-fn make_docking_bays_node(docks: &[Dock], up: UpAxis) -> Node {
-    let mut node = Node::new(format!("#docking bays"), Some(format!("#docking bays")));
+fn make_docking_bays_node<N: Node>(ctx: &mut N::Ctx, docks: &[Dock], up: UpAxis) -> N {
+    let mut node = N::new2(format!("#docking bays"));
 
     for (i, dock) in docks.iter().enumerate() {
-        let mut bay_node = Node::new(format!("#bay{}", i), Some(format!("#bay{}", i)));
+        let mut bay_node = N::new2(format!("#bay{}", i));
 
         let fvec: Vec3 = dock.fvec.0.to_coord(up).into();
         let uvec = dock.uvec.0.to_coord(up).into();
         let mat = nalgebra::Matrix::from_columns(&[fvec.cross(&uvec), fvec, uvec]);
         let mut mat: Mat4x4 = glm::mat3_to_mat4(&mat);
         mat.append_translation_mut(&dock.position.to_coord(up).into());
-        bay_node.push_transform(mat);
+        bay_node.matrix_transform(mat);
 
         if dock.path.is_some() {
             bay_node
-                .children
-                .push(Node::new(format!("#d{}-path", i), Some(format!("#d{}-path:{}", i, dock.path.unwrap().0 as u32))));
+                .children()
+                .push(N::new(format!("#d{}-path", i), format!("#d{}-path:{}", i, dock.path.unwrap().0 as u32)).build(ctx));
         }
 
         if !dock.properties.is_empty() {
-            bay_node.children.push(make_properties_node(&dock.properties, format!("d{}-", i)));
+            bay_node.children().push(make_properties_node(ctx, &dock.properties, format!("d{}-", i)));
         }
 
-        node.children.push(bay_node);
+        node.children().push(bay_node.build(ctx));
     }
 
-    node
+    node.build(ctx)
 }
 
-fn make_glows_node(glows: &[GlowPointBank], up: UpAxis) -> Node {
-    let mut node = Node::new("#glows", Some(format!("#glows")));
+fn make_glows_node<N: Node>(ctx: &mut N::Ctx, glows: &[GlowPointBank], up: UpAxis) -> N {
+    let mut node = N::new2("#glows".into());
 
     for (i, glow_bank) in glows.iter().enumerate() {
-        let mut bank_node = Node::new(format!("#g{}", i), Some(format!("#glowbank{}", i)));
+        let mut bank_node = N::new(format!("#g{}", i), format!("#glowbank{}", i));
 
         for (j, point) in glow_bank.glow_points.iter().enumerate() {
-            let mut point_node = Node::new(format!("#g{}-{}", i, j), Some(format!("#g{}-point{}", i, j)));
+            let mut point_node = N::new(
+                format!("#g{}-{}", i, j),
+                if point.normal.is_null() {
+                    format!("#g{}-omnipoint{}", i, j)
+                } else {
+                    format!("#g{}-point{}", i, j)
+                },
+            );
             let radius = point.radius;
             let pos = point.position.to_coord(up);
-            point_node.push_transform(Translate::new(pos.into()));
-            if point.normal.is_null() {
-                point_node.name = Some(format!("#g{}-omnipoint{}", i, j));
-            } else {
-                point_node.push_transform(vec_to_rotation(&point.normal, up));
+            point_node.translate(pos.into());
+            if !point.normal.is_null() {
+                point_node.rotate(vec_to_rotation(&point.normal, up));
             }
-            point_node.push_transform(Scale::new([radius, radius, radius]));
+            point_node.scale([radius, radius, radius]);
 
-            bank_node.children.push(point_node);
+            bank_node.children().push(point_node.build(ctx));
         }
 
-        bank_node
-            .children
-            .push(Node::new(format!("#g{}-type", i), Some(format!("#g{}-type:{}", i, glow_bank.glow_type))));
-
-        bank_node
-            .children
-            .push(Node::new(format!("#g{}-lod", i), Some(format!("#g{}-lod:{}", i, glow_bank.lod))));
-
-        bank_node
-            .children
-            .push(Node::new(format!("#g{}-parent", i), Some(format!("#g{}-parent:{}", i, glow_bank.obj_parent.0))));
-
-        bank_node
-            .children
-            .push(Node::new(format!("#g{}-ontime", i), Some(format!("#g{}-ontime:{}", i, glow_bank.on_time))));
-
-        bank_node
-            .children
-            .push(Node::new(format!("#g{}-offtime", i), Some(format!("#g{}-offtime:{}", i, glow_bank.off_time))));
-
-        bank_node
-            .children
-            .push(Node::new(format!("#g{}-disptime", i), Some(format!("#g{}-disptime:{}", i, glow_bank.disp_time))));
+        bank_node.children().extend([
+            N::new(format!("#g{}-type", i), format!("#g{}-type:{}", i, glow_bank.glow_type)).build(ctx),
+            N::new(format!("#g{}-lod", i), format!("#g{}-lod:{}", i, glow_bank.lod)).build(ctx),
+            N::new(format!("#g{}-parent", i), format!("#g{}-parent:{}", i, glow_bank.obj_parent.0)).build(ctx),
+            N::new(format!("#g{}-ontime", i), format!("#g{}-ontime:{}", i, glow_bank.on_time)).build(ctx),
+            N::new(format!("#g{}-offtime", i), format!("#g{}-offtime:{}", i, glow_bank.off_time)).build(ctx),
+            N::new(format!("#g{}-disptime", i), format!("#g{}-disptime:{}", i, glow_bank.disp_time)).build(ctx),
+        ]);
 
         if !glow_bank.properties.is_empty() {
-            bank_node.children.push(make_properties_node(&glow_bank.properties, format!("g{}-", i)));
+            bank_node
+                .children()
+                .push(make_properties_node(ctx, &glow_bank.properties, format!("g{}-", i)));
         }
 
-        node.children.push(bank_node);
+        node.children().push(bank_node.build(ctx));
     }
 
-    node
+    node.build(ctx)
 }
 
-fn make_specials_node(special_points: &[SpecialPoint], up: UpAxis) -> Node {
-    let mut node = Node::new(format!("#special points"), Some(format!("#special points")));
+fn make_specials_node<N: Node>(ctx: &mut N::Ctx, special_points: &[SpecialPoint], up: UpAxis) -> N {
+    let mut node = N::new2(format!("#special points"));
 
     for (i, point) in special_points.iter().enumerate() {
-        let mut point_node = Node::new(format!("#s{}", i), Some(format!("#s{}:{}", i, point.name)));
+        let mut point_node = N::new(format!("#s{}", i), format!("#s{}:{}", i, point.name));
 
         let radius = point.radius;
         let pos = point.position.to_coord(up);
-        point_node.push_transform(Translate::new(pos.into()));
-        point_node.push_transform(Scale::new([radius, radius, radius]));
+        point_node.translate(pos.into());
+        point_node.scale([radius, radius, radius]);
 
         if !point.properties.is_empty() {
-            point_node.children.push(make_properties_node(&point.properties, format!("s{}-", i)));
+            point_node
+                .children()
+                .push(make_properties_node(ctx, &point.properties, format!("s{}-", i)));
         }
 
-        node.children.push(point_node);
+        node.children().push(point_node.build(ctx));
     }
 
-    node
+    node.build(ctx)
 }
 
-fn make_eyes_node(eye_points: &[EyePoint], up: UpAxis) -> Node {
-    let mut node = Node::new(format!("#eye points"), Some(format!("#eye points")));
+fn make_eyes_node<N: Node>(ctx: &mut N::Ctx, eye_points: &[EyePoint], up: UpAxis) -> N {
+    let mut node = N::new2(format!("#eye points"));
 
     for (i, point) in eye_points.iter().enumerate() {
-        let mut point_node = Node::new(format!("#e{}", i), Some(format!("#e-point{}", i)));
+        let mut point_node = N::new(format!("#e{}", i), format!("#e-point{}", i));
 
         let pos = point.offset.to_coord(up);
-        point_node.push_transform(Translate::new(pos.into()));
-        point_node.push_transform(vec_to_rotation(&point.normal.0, up));
+        point_node.translate(pos.into());
+        point_node.rotate(vec_to_rotation(&point.normal.0, up));
 
         point_node
-            .children
-            .push(Node::new(format!("#e{}-parent", i), Some(format!("#e{}-parent:{}", i, point.attached_subobj.0))));
+            .children()
+            .push(N::new(format!("#e{}-parent", i), format!("#e{}-parent:{}", i, point.attached_subobj.0)).build(ctx));
 
-        node.children.push(point_node);
+        node.children().push(point_node.build(ctx));
     }
 
-    node
+    node.build(ctx)
 }
 
-fn make_visual_center_node(visual_center: &Vec3d, up: UpAxis) -> Node {
-    let mut node = Node::new(format!("#visual-center"), Some(format!("#visual-center")));
+fn make_visual_center_node<N: Node>(ctx: &mut N::Ctx, visual_center: &Vec3d, up: UpAxis) -> N {
+    let mut node = N::new2(format!("#visual-center"));
 
-    node.push_transform(Translate::new(visual_center.to_coord(up).into()));
+    node.translate(visual_center.to_coord(up).into());
 
-    node
+    node.build(ctx)
 }
 
-fn make_insignia_node(insignia: &Insignia, geometries: &mut Vec<Geometry>, id: usize, up: UpAxis) -> Node {
+fn make_insignia_node(insignia: &Insignia, geometries: &mut Vec<Geometry>, id: usize, up: UpAxis) -> DaeNode {
     let geo_id = format!("insig{}-geometry", id);
     let pos_id = format!("insig{}-geometry-position", id);
     let vert_id = format!("insig{}-geometry-vertex", id);
@@ -743,7 +797,7 @@ fn make_insignia_node(insignia: &Insignia, geometries: &mut Vec<Geometry>, id: u
             Param::new_xyz(),
             ArrayElement::Float(FloatArray { id: Some(pos_array_id), val: positions.into() }), // TODO make a new func
         )],
-        Vertices::new(vert_id.clone(), vec![Input::new(Semantic::Position, Url::Fragment(pos_id.clone()))]),
+        Vertices::new(vert_id.clone(), vec![Input::new(Semantic::Position, Url::Fragment(pos_id))]),
         vec![Primitive::Triangles(Triangles::new(
             None,
             vec![InputS::new(Semantic::Vertex, Url::Fragment(vert_id), 0, None)],
@@ -752,15 +806,15 @@ fn make_insignia_node(insignia: &Insignia, geometries: &mut Vec<Geometry>, id: u
         ))],
     ));
 
-    let mut node = Node::new(format!("insig{}", id), Some(format!("insignia {}", id)));
+    let mut node = DaeNode::new(format!("insig{}", id), Some(format!("insignia {}", id)));
 
     node.instance_geometry.push(instance);
-    node.push_transform(Translate::new(insignia.offset.to_coord(up).into()));
+    node.translate(insignia.offset.to_coord(up).into());
 
     node
 }
 
-fn make_shield_node(shield: &ShieldData, geometries: &mut Vec<Geometry>, up: UpAxis) -> Node {
+fn make_shield_node(shield: &ShieldData, geometries: &mut Vec<Geometry>, up: UpAxis) -> DaeNode {
     let geo_id = format!("shield-geometry");
     let pos_id = format!("shield-geometry-position");
     let vert_id = format!("shield-geometry-vertex");
@@ -817,7 +871,7 @@ fn make_shield_node(shield: &ShieldData, geometries: &mut Vec<Geometry>, up: UpA
         ))],
     ));
 
-    let mut node = Node::new("shield", Some(String::from("shield")));
+    let mut node = DaeNode::new2(String::from("shield"));
 
     node.instance_geometry.push(instance);
 
@@ -826,7 +880,7 @@ fn make_shield_node(shield: &ShieldData, geometries: &mut Vec<Geometry>, up: UpA
 
 fn make_subobj_node(
     up: UpAxis, subobjs: &ObjVec<SubObject>, subobj: &SubObject, turrets: &[Turret], geometries: &mut Vec<Geometry>, materials: &[String],
-) -> Node {
+) -> DaeNode {
     let geo_id = format!("{}-geometry", subobj.name);
     let pos_id = format!("{}-geometry-position", subobj.name);
     let vert_id = format!("{}-geometry-vertex", subobj.name);
@@ -906,8 +960,8 @@ fn make_subobj_node(
             .collect(),
     ));
 
-    let mut node = Node::new(subobj.name.clone(), Some(subobj.name.clone()));
-    node.push_transform(Translate::new(subobj.offset.to_coord(up).into()));
+    let mut node = DaeNode::new2(subobj.name.clone());
+    node.translate(subobj.offset.to_coord(up).into());
 
     // kind of expensive to do per subobj?
     for (i, turret) in turrets.iter().enumerate() {
@@ -919,26 +973,27 @@ fn make_subobj_node(
                     format!("#t{}-gun-point{}", i, j)
                 };
 
-                let mut gunpoint_node = Node::new(name.clone(), Some(name));
-                gunpoint_node.push_transform(Translate::new(point.to_coord(up).into()));
-                gunpoint_node.push_transform(vec_to_rotation(&turret.normal.0, up));
-                node.children.push(gunpoint_node);
+                let mut gunpoint_node = DaeNode::new2(name);
+                gunpoint_node.translate(point.to_coord(up).into());
+                gunpoint_node.rotate(vec_to_rotation(&turret.normal.0, up));
+                node.children().push(gunpoint_node);
             }
         }
     }
 
     if !subobj.properties.is_empty() {
-        node.children.push(make_properties_node(&subobj.properties, format!("{}-", subobj.name)));
+        node.children
+            .push(make_properties_node(&mut (), &subobj.properties, format!("{}-", subobj.name)));
     }
 
     if subobj.movement_type != Default::default() {
         node.children
-            .push(Node::new(format!("{}-mov-type", subobj.name), Some(format!("#{}-mov-type:{}", subobj.name, subobj.movement_type as i32))));
+            .push(DaeNode::new(format!("{}-mov-type", subobj.name), Some(format!("#{}-mov-type:{}", subobj.name, subobj.movement_type as i32))));
     }
 
     if subobj.movement_axis != Default::default() {
         node.children
-            .push(Node::new(format!("{}-mov-axis", subobj.name), Some(format!("#{}-mov-axis:{}", subobj.name, subobj.movement_axis as i32))));
+            .push(DaeNode::new(format!("{}-mov-axis", subobj.name), Some(format!("#{}-mov-axis:{}", subobj.name, subobj.movement_axis as i32))));
     }
 
     node.instance_geometry.push(instance);
@@ -959,7 +1014,7 @@ impl Model {
         let mut nodes = vec![];
         let materials: Vec<String> = self.textures.iter().map(|tex| format!("{}-material", tex)).collect();
 
-        let up = UpAxis::YUp;
+        let up = YUp;
 
         for subobj in &self.sub_objects {
             if subobj.parent.is_none() {
@@ -975,44 +1030,44 @@ impl Model {
             }
         }
 
-        if self.shield_data.is_some() {
-            nodes.push(make_shield_node((self.shield_data.as_ref()).unwrap(), &mut geometries, up));
+        if let Some(shield_data) = &self.shield_data {
+            nodes.push(make_shield_node(shield_data, &mut geometries, up));
         }
 
         if !self.thruster_banks.is_empty() {
-            nodes.push(make_thrusters_node(&self.thruster_banks, up));
+            nodes.push(make_thrusters_node(&mut (), &self.thruster_banks, up));
         }
 
         if !self.paths.is_empty() {
-            nodes.push(make_paths_node(&self.paths, up));
+            nodes.push(make_paths_node(&mut (), &self.paths, up));
         }
 
         if !self.primary_weps.is_empty() {
-            nodes.push(make_weapons_node(&self.primary_weps, "primary", up));
+            nodes.push(make_weapons_node(&mut (), &self.primary_weps, "primary", up));
         }
 
         if !self.secondary_weps.is_empty() {
-            nodes.push(make_weapons_node(&self.secondary_weps, "secondary", up));
+            nodes.push(make_weapons_node(&mut (), &self.secondary_weps, "secondary", up));
         }
 
         if !self.docking_bays.is_empty() {
-            nodes.push(make_docking_bays_node(&self.docking_bays, up));
+            nodes.push(make_docking_bays_node(&mut (), &self.docking_bays, up));
         }
 
         if !self.glow_banks.is_empty() {
-            nodes.push(make_glows_node(&self.glow_banks, up));
+            nodes.push(make_glows_node(&mut (), &self.glow_banks, up));
         }
 
         if !self.special_points.is_empty() {
-            nodes.push(make_specials_node(&self.special_points, up));
+            nodes.push(make_specials_node(&mut (), &self.special_points, up));
         }
 
         if !self.eye_points.is_empty() {
-            nodes.push(make_eyes_node(&self.eye_points, up));
+            nodes.push(make_eyes_node(&mut (), &self.eye_points, up));
         }
 
         if !self.visual_center.is_null() {
-            nodes.push(make_visual_center_node(&self.visual_center, up));
+            nodes.push(make_visual_center_node(&mut (), &self.visual_center, up));
         }
 
         let mut doc = Document::create_now();
@@ -1041,5 +1096,423 @@ impl Model {
         doc.asset.up_axis = up;
 
         doc.write_to(w)
+    }
+}
+
+#[derive(Default)]
+struct GltfBuilder {
+    root: json::Root,
+    buffer: Vec<u8>,
+}
+
+impl NodeBuilder for json::Node {
+    type Ctx = Vec<Self>;
+    type Node = Index<Self>;
+    fn children(&mut self) -> &mut Vec<Index<Self>> {
+        self.children.get_or_insert_with(Default::default)
+    }
+    fn translate(&mut self, val: [f32; 3]) {
+        self.translation = Some(val)
+    }
+    fn rotate(&mut self, ([x, y, z], angle): ([f32; 3], f32)) {
+        let (sin_a, cos_a) = f32::sin_cos(angle / 2.);
+        self.rotation = Some(json::scene::UnitQuaternion([x * sin_a, y * sin_a, z * sin_a, cos_a]));
+    }
+    fn scale(&mut self, val: [f32; 3]) {
+        self.scale = Some(val)
+    }
+    fn matrix_transform(&mut self, mat: Mat4x4) {
+        self.matrix = Some(*Matrix::from(mat).0)
+    }
+    fn build(self, ctx: &mut Vec<Self>) -> Index<Self> {
+        GltfBuilder::push(ctx, self)
+    }
+}
+type NodeIndex = Index<json::Node>;
+impl Node for NodeIndex {
+    type Ctx = Vec<json::Node>;
+    type Builder = json::Node;
+    fn new(_: String, name: String) -> json::Node {
+        Self::new2(name)
+    }
+    fn new2(name: String) -> json::Node {
+        json::Node {
+            camera: None,
+            children: None,
+            extensions: Default::default(),
+            extras: Default::default(),
+            matrix: None,
+            mesh: None,
+            name: Some(name),
+            rotation: None,
+            scale: None,
+            translation: None,
+            skin: None,
+            weights: None,
+        }
+    }
+}
+
+impl GltfBuilder {
+    fn push<T>(vec: &mut Vec<T>, t: T) -> Index<T> {
+        let n = vec.len();
+        vec.push(t);
+        Index::new(n.try_into().unwrap())
+    }
+
+    fn push_buffer_view(&mut self, offset: usize, size: usize, count: usize, target: Target) -> Index<json::buffer::View> {
+        Self::push(
+            &mut self.root.buffer_views,
+            json::buffer::View {
+                buffer: json::Index::new(0),
+                byte_length: (size * count) as u32,
+                byte_offset: Some(offset.try_into().unwrap()),
+                byte_stride: Some(size as u32),
+                extensions: None,
+                extras: Default::default(),
+                name: None,
+                target: Some(Valid(target)),
+            },
+        )
+    }
+
+    fn push_accessor(
+        &mut self, buffer_view: Index<json::buffer::View>, byte_offset: usize, count: usize, component_type: ComponentType,
+        type_: json::accessor::Type, bbox: Option<BoundingBox>,
+    ) -> Index<json::Accessor> {
+        Self::push(
+            &mut self.root.accessors,
+            json::Accessor {
+                buffer_view: Some(buffer_view),
+                byte_offset: byte_offset as u32,
+                count: count as u32,
+                component_type: Valid(json::accessor::GenericComponentType(component_type)),
+                extensions: Default::default(),
+                extras: Default::default(),
+                type_: Valid(type_),
+                min: bbox.map(|bbox| json::Value::from(vec![bbox.min.x, bbox.min.y, bbox.min.z])),
+                max: bbox.map(|bbox| json::Value::from(vec![bbox.max.x, bbox.max.y, bbox.max.z])),
+                name: None,
+                normalized: false,
+                sparse: None,
+            },
+        )
+    }
+
+    fn push_mesh(&mut self, primitives: Vec<json::mesh::Primitive>) -> Index<json::Mesh> {
+        Self::push(
+            &mut self.root.meshes,
+            json::Mesh {
+                extensions: Default::default(),
+                extras: Default::default(),
+                name: None,
+                primitives,
+                weights: None,
+            },
+        )
+    }
+
+    fn make_insignia_node(&mut self, insignia: &Insignia, id: usize) -> NodeIndex {
+        let start = self.buffer.len();
+        let view = self.push_buffer_view(start, size_of::<Vec3d>(), insignia.vertices.len(), Target::ArrayBuffer);
+        let bbox = BoundingBox::from_vectors(insignia.vertices.iter().map(|vert| {
+            let vert = vert.to_coord(YUp);
+            vert.write_to(&mut self.buffer).unwrap();
+            vert
+        }));
+
+        let indices = self.buffer.len();
+        let count = 3 * insignia.faces.len();
+        let indices = self.push_buffer_view(indices, size_of::<u16>(), count, Target::ArrayBuffer);
+        let indices = self.push_accessor(indices, 0, count, ComponentType::U16, json::accessor::Type::Scalar, None);
+
+        for (polyvert1, polyvert2, polyvert3) in &insignia.faces {
+            // intentional swizzle
+            (polyvert1.vertex_id.0 as u16).write_to(&mut self.buffer).unwrap();
+            (polyvert3.vertex_id.0 as u16).write_to(&mut self.buffer).unwrap();
+            (polyvert2.vertex_id.0 as u16).write_to(&mut self.buffer).unwrap();
+        }
+
+        let attributes = [(
+            Valid(json::mesh::Semantic::Positions),
+            self.push_accessor(view, 0, insignia.vertices.len(), ComponentType::F32, json::accessor::Type::Vec3, Some(bbox)),
+        )];
+
+        let mut node = NodeIndex::new2(format!("insignia {}", id));
+
+        node.mesh = Some(self.push_mesh(vec![json::mesh::Primitive {
+            attributes: attributes.into_iter().collect(),
+            extensions: Default::default(),
+            extras: Default::default(),
+            indices: Some(indices),
+            material: None,
+            mode: Valid(json::mesh::Mode::Triangles),
+            targets: None,
+        }]));
+
+        node.translate(insignia.offset.to_coord(YUp).into());
+        node.build(&mut self.root.nodes)
+    }
+
+    fn make_shield_node(&mut self, shield: &ShieldData) -> NodeIndex {
+        let start = self.buffer.len();
+        let count = 3 * shield.polygons.len();
+        let view = self.push_buffer_view(start, size_of::<(Vec3d, Vec3d)>(), count, Target::ArrayBuffer);
+
+        let mut bbox_pos = BoundingBox::EMPTY;
+        let mut bbox_norm = BoundingBox::EMPTY;
+        for poly in &shield.polygons {
+            let (v1, v2, v3) = poly.verts;
+            let v1 = shield.verts[v1.0 as usize].to_coord(YUp);
+            let v2 = shield.verts[v2.0 as usize].to_coord(YUp);
+            let v3 = shield.verts[v3.0 as usize].to_coord(YUp);
+            let normal = poly.normal.to_coord(YUp);
+
+            // intentional swizzle
+            (v1, normal).write_to(&mut self.buffer).unwrap();
+            (v2, normal).write_to(&mut self.buffer).unwrap();
+            (v3, normal).write_to(&mut self.buffer).unwrap();
+
+            bbox_pos.expand_vec(v1);
+            bbox_pos.expand_vec(v2);
+            bbox_pos.expand_vec(v3);
+            bbox_norm.expand_vec(normal);
+        }
+        let attributes = [
+            (
+                Valid(json::mesh::Semantic::Positions),
+                self.push_accessor(view, 0, count, ComponentType::F32, json::accessor::Type::Vec3, Some(bbox_pos)),
+            ),
+            (
+                Valid(json::mesh::Semantic::Normals),
+                self.push_accessor(view, size_of::<Vec3d>(), count, ComponentType::F32, json::accessor::Type::Vec3, None),
+            ),
+        ];
+
+        let mut node = NodeIndex::new2("shield".into());
+
+        node.mesh = Some(self.push_mesh(vec![json::mesh::Primitive {
+            attributes: attributes.into_iter().collect(),
+            extensions: Default::default(),
+            extras: Default::default(),
+            indices: None,
+            material: None,
+            mode: Valid(json::mesh::Mode::Triangles),
+            targets: None,
+        }]));
+
+        node.build(&mut self.root.nodes)
+    }
+
+    fn make_subobj_node(&mut self, subobjs: &ObjVec<SubObject>, subobj: &SubObject, turrets: &[Turret], materials: usize) -> json::Node {
+        let mut prim_elems = vec![vec![]; materials];
+        for (_, poly) in subobj.bsp_data.collision_tree.leaves() {
+            if let [vert1, rest @ ..] = &*poly.verts {
+                let tris = &mut prim_elems[poly.texture.0 as usize];
+                for verts in rest.windows(2) {
+                    // intentional swizzle
+                    tris.push([vert1, &verts[1], &verts[0]]);
+                }
+            }
+        }
+        let primitives = prim_elems
+            .into_iter()
+            .enumerate()
+            .filter(|(_, vcount)| !vcount.is_empty())
+            .map(|(material, prim_elem)| {
+                let start = self.buffer.len();
+                let count = 3 * prim_elem.len();
+                let view = self.push_buffer_view(start, size_of::<(Vec3d, Vec3d, [f32; 2])>(), count, Target::ArrayBuffer);
+                let mut bbox_pos = BoundingBox::EMPTY;
+                for vert in prim_elem.into_iter().flatten() {
+                    let position = subobj.bsp_data.verts[vert.vertex_id.0 as usize].to_coord(YUp);
+                    let normal = subobj.bsp_data.norms[vert.normal_id.0 as usize].to_coord(YUp);
+                    bbox_pos.expand_vec(position);
+                    (position, normal, vert.uv).write_to(&mut self.buffer).unwrap();
+                }
+                let attributes = [
+                    (
+                        Valid(json::mesh::Semantic::Positions),
+                        self.push_accessor(view, 0, count, ComponentType::F32, json::accessor::Type::Vec3, Some(bbox_pos)),
+                    ),
+                    (
+                        Valid(json::mesh::Semantic::Normals),
+                        self.push_accessor(view, size_of::<Vec3d>(), count, ComponentType::F32, json::accessor::Type::Vec3, None),
+                    ),
+                    (
+                        Valid(json::mesh::Semantic::TexCoords(0)),
+                        self.push_accessor(view, 2 * size_of::<Vec3d>(), count, ComponentType::F32, json::accessor::Type::Vec2, None),
+                    ),
+                ];
+                json::mesh::Primitive {
+                    attributes: attributes.into_iter().collect(),
+                    extensions: Default::default(),
+                    extras: Default::default(),
+                    indices: None,
+                    material: Some(Index::new(material as _)),
+                    mode: Valid(json::mesh::Mode::Triangles),
+                    targets: None,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let geo_id = self.push_mesh(primitives);
+
+        let mut node = NodeIndex::new2(subobj.name.clone());
+        node.translate(subobj.offset.to_coord(YUp).into());
+
+        // kind of expensive to do per subobj?
+        for (i, turret) in turrets.iter().enumerate() {
+            if turret.gun_obj == subobj.obj_id {
+                for (j, point) in turret.fire_points.iter().enumerate() {
+                    let name = if turret.base_obj == subobj.obj_id {
+                        format!("#t{}-point{}", i, j)
+                    } else {
+                        format!("#t{}-gun-point{}", i, j)
+                    };
+
+                    let mut gunpoint_node = NodeIndex::new2(name);
+                    gunpoint_node.translate(point.to_coord(YUp).into());
+                    gunpoint_node.rotate(vec_to_rotation(&turret.normal.0, YUp));
+                    node.children().push(gunpoint_node.build(&mut self.root.nodes));
+                }
+            }
+        }
+
+        if !subobj.properties.is_empty() {
+            node.children()
+                .push(make_properties_node(&mut self.root.nodes, &subobj.properties, format!("{}-", subobj.name)));
+        }
+
+        if subobj.movement_type != Default::default() {
+            node.children()
+                .push(NodeIndex::new2(format!("#{}-mov-type:{}", subobj.name, subobj.movement_type as i32)).build(&mut self.root.nodes));
+        }
+
+        if subobj.movement_axis != Default::default() {
+            node.children()
+                .push(NodeIndex::new2(format!("#{}-mov-axis:{}", subobj.name, subobj.movement_axis as i32)).build(&mut self.root.nodes));
+        }
+
+        node.mesh = Some(geo_id);
+        for &id in &subobj.children {
+            node.children().push(
+                self.make_subobj_node(subobjs, &subobjs[id], turrets, materials)
+                    .build(&mut self.root.nodes),
+            );
+        }
+
+        node
+    }
+
+    pub fn build_gltf(&mut self, model: &Model) {
+        self.root.materials.extend(model.textures.iter().map(|tex| json::Material {
+            name: Some(format!("{}-material", tex)),
+            ..Default::default()
+        }));
+
+        let mut nodes = vec![];
+
+        for subobj in &model.sub_objects {
+            if subobj.parent.is_none() {
+                let mut top_level_node = self.make_subobj_node(&model.sub_objects, subobj, &model.turrets, model.textures.len());
+
+                for (i, insignia) in model.insignias.iter().enumerate() {
+                    if model.get_detail_level(subobj.obj_id) == Some(insignia.detail_level) {
+                        top_level_node.children().push(self.make_insignia_node(insignia, i))
+                    }
+                }
+
+                nodes.push(top_level_node.build(&mut self.root.nodes));
+            }
+        }
+
+        if let Some(shield_data) = &model.shield_data {
+            nodes.push(self.make_shield_node(shield_data));
+        }
+
+        if !model.thruster_banks.is_empty() {
+            nodes.push(make_thrusters_node(&mut self.root.nodes, &model.thruster_banks, YUp));
+        }
+
+        if !model.paths.is_empty() {
+            nodes.push(make_paths_node(&mut self.root.nodes, &model.paths, YUp));
+        }
+
+        if !model.primary_weps.is_empty() {
+            nodes.push(make_weapons_node(&mut self.root.nodes, &model.primary_weps, "primary", YUp));
+        }
+
+        if !model.secondary_weps.is_empty() {
+            nodes.push(make_weapons_node(&mut self.root.nodes, &model.secondary_weps, "secondary", YUp));
+        }
+
+        if !model.docking_bays.is_empty() {
+            nodes.push(make_docking_bays_node(&mut self.root.nodes, &model.docking_bays, YUp));
+        }
+
+        if !model.glow_banks.is_empty() {
+            nodes.push(make_glows_node(&mut self.root.nodes, &model.glow_banks, YUp));
+        }
+
+        if !model.special_points.is_empty() {
+            nodes.push(make_specials_node(&mut self.root.nodes, &model.special_points, YUp));
+        }
+
+        if !model.eye_points.is_empty() {
+            nodes.push(make_eyes_node(&mut self.root.nodes, &model.eye_points, YUp));
+        }
+
+        if !model.visual_center.is_null() {
+            nodes.push(make_visual_center_node(&mut self.root.nodes, &model.visual_center, YUp));
+        }
+
+        self.root.scene = Some(GltfBuilder::push(
+            &mut self.root.scenes,
+            json::Scene {
+                extensions: None,
+                extras: Default::default(),
+                name: None,
+                nodes,
+            },
+        ));
+
+        self.root.buffers.push(json::Buffer {
+            byte_length: self.buffer.len() as u32,
+            name: None,
+            uri: None,
+            extensions: Default::default(),
+            extras: Default::default(),
+        });
+    }
+}
+
+impl Model {
+    pub fn write_gltf(&self, writer: impl Write, binary: bool) -> Result<(), gltf::Error> {
+        let mut builder = GltfBuilder::default();
+        builder.build_gltf(self);
+        if binary {
+            let json_string = json::serialize::to_string(&builder.root)?;
+            let mut json_offset = json_string.len() as u32;
+            json_offset += json_offset.wrapping_neg() % 4;
+            align_buf(&mut builder.buffer).unwrap();
+            let glb = gltf::binary::Glb {
+                header: gltf::binary::Header {
+                    magic: *b"glTF",
+                    version: 2,
+                    length: json_offset + builder.root.buffers[0].byte_length,
+                },
+                bin: Some(Cow::Borrowed(&builder.buffer)),
+                json: Cow::Owned(json_string.into_bytes()),
+            };
+            glb.to_writer(writer)
+        } else {
+            builder.root.buffers[0].uri = Some(format!(
+                "data:application/octet-stream;base64,{}",
+                base64::display::Base64Display::with_config(&builder.buffer, base64::STANDARD)
+            ));
+            json::serialize::to_writer_pretty(writer, &builder.root)?;
+            Ok(())
+        }
     }
 }

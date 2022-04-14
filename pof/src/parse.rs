@@ -768,7 +768,7 @@ use crate::*;
 use byteorder::{ReadBytesExt, LE};
 use dae_parser::source::{SourceReader, ST, XYZ};
 use dae_parser::{Document, LocalMaps, Material, Node};
-use glm::{Mat4x4, Vec3};
+use glm::Mat4x4;
 use gltf::mesh::Mode;
 use gltf::{buffer, Mesh};
 use nalgebra::Point3;
@@ -1478,7 +1478,7 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
     Box::new(model)
 }
 
-fn gltf_parse_geometry(mesh: Mesh, buffers: &[buffer::Data], transform: Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(Texturing, [PolyVertex; 3])>) {
+fn gltf_parse_geometry(mesh: Mesh, buffers: &[buffer::Data], transform: Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(TextureId, [PolyVertex; 3])>) {
     let mut vertices_out: Vec<Vec3d> = vec![];
     let mut normals_out: Vec<Vec3d> = vec![];
     let mut normals_map: HashMap<Vec3d, NormalId> = HashMap::new();
@@ -1489,11 +1489,11 @@ fn gltf_parse_geometry(mesh: Mesh, buffers: &[buffer::Data], transform: Mat4x4) 
         let vertex_offset = vertices_out.len() as u32;
 
         for position in reader.read_positions().unwrap() {
-            vertices_out.push(flip_y_z(&transform * Vec3d::from(position)));
+            vertices_out.push((&transform * Vec3d::from(position)).from_coord(UpAxis::YUp));
         }
         let texture = match primitive.material().index() {
-            Some(idx) => Texturing::Texture(TextureId(idx as u32)),
-            None => Texturing::Flat(Color::default()),
+            Some(idx) => TextureId(idx as u32),
+            None => TextureId::UNTEXTURED,
         };
         let uvs = reader
             .read_tex_coords(0)
@@ -1506,24 +1506,30 @@ fn gltf_parse_geometry(mesh: Mesh, buffers: &[buffer::Data], transform: Mat4x4) 
                     for normal in normal_iter {
                         normal_ids.push(*normals_map.entry(normal.into()).or_insert_with(|| {
                             let id = NormalId(normals_out.len().try_into().unwrap());
-                            normals_out.push(flip_y_z(&transform * Vec3d::from(normal)));
+                            normals_out.push((&transform * Vec3d::from(normal)).from_coord(UpAxis::YUp));
                             id
                         }));
                     }
                 }
 
-                let mut iter = reader.read_indices().unwrap().into_u32().map(|i| PolyVertex {
-                    vertex_id: VertexId(vertex_offset + i),
-                    normal_id: normal_ids.get(i as usize).copied().unwrap_or_default(),
-                    uv: uvs.as_ref().map_or((0., 0.), |vec| vec[i as usize]),
-                });
-                while let Some(vert1) = iter.next() {
-                    polygons_out.push((texture, [vert1, iter.next().unwrap(), iter.next().unwrap()]));
+                macro_rules! on_indices {
+                    ($indices:expr) => {{
+                        let mut iter = $indices.map(|i| PolyVertex {
+                            vertex_id: VertexId(vertex_offset + i),
+                            normal_id: normal_ids.get(i as usize).copied().unwrap_or_default(),
+                            uv: uvs.as_ref().map_or((0., 0.), |vec| vec[i as usize]),
+                        });
+                        while let Some(vert1) = iter.next() {
+                            polygons_out.push((texture, [vert1, iter.next().unwrap(), iter.next().unwrap()]));
+                        }
+                    }};
+                }
+                match reader.read_indices() {
+                    Some(indices) => on_indices!(indices.into_u32()),
+                    None => on_indices!(0..vertices_out.len() as u32),
                 }
             }
-            _ => {
-                unreachable!()
-            }
+            _ => unreachable!(),
         }
     }
 
@@ -1570,7 +1576,7 @@ fn gltf_parse_subobject_recursive(
         insignias.push(Insignia {
             detail_level: detail_level.unwrap_or(0),
             vertices: vertices_out,
-            offset: flip_y_z(center.into()),
+            offset: Vec3d::from(center).from_coord(UpAxis::YUp),
             faces,
         });
     } else {
@@ -1585,8 +1591,8 @@ fn gltf_parse_subobject_recursive(
             obj_id,
             radius: Default::default(),
             parent: Some(parent),
-            offset: flip_y_z(center.into()),
-            geo_center: flip_y_z(center.into()),
+            offset: Vec3d::from(center).from_coord(UpAxis::YUp),
+            geo_center: Vec3d::from(center).from_coord(UpAxis::YUp),
             bbox: Default::default(),
             name: name.to_string(),
             properties: Default::default(),
@@ -1596,13 +1602,9 @@ fn gltf_parse_subobject_recursive(
                 norms: normals_out,
                 collision_tree: BspData::recalculate(
                     &vertices_out,
-                    polygons_out.into_iter().map(|(texture, verts)| Polygon {
-                        normal: Default::default(),
-                        center: Default::default(),
-                        radius: Default::default(),
-                        texture,
-                        verts: verts.to_vec(),
-                    }),
+                    polygons_out
+                        .into_iter()
+                        .map(|(texture, verts)| Polygon { normal: Default::default(), texture, verts: verts.to_vec() }),
                 ),
                 verts: vertices_out,
             },
@@ -1647,15 +1649,15 @@ fn gltf_parse_subobject_recursive(
                     continue;
                 } else if name.starts_with('#') && name.contains("mov-type") {
                     if let Some(idx) = name.find(':') {
-                        if let Ok(val) = &name[(idx + 1)..].parse::<i32>() {
-                            subobj.movement_type = parse_subsys_mov_type(*val);
+                        if let Ok(val) = name[(idx + 1)..].parse::<i32>() {
+                            subobj.movement_type = val.try_into().unwrap_or_default();
                         }
                     }
                     continue;
                 } else if name.starts_with('#') && name.contains("mov-axis") {
                     if let Some(idx) = name.find(':') {
-                        if let Ok(val) = &name[(idx + 1)..].parse::<i32>() {
-                            subobj.movement_axis = parse_subsys_mov_axis(*val);
+                        if let Ok(val) = name[(idx + 1)..].parse::<i32>() {
+                            subobj.movement_axis = val.try_into().unwrap_or_default();
                         }
                     }
                     continue;
@@ -1699,10 +1701,10 @@ fn gltf_parse_point(node: &gltf::Node, parent_transform: Mat4x4) -> (Vec3d, Vec3
     let zero = Vec3d::ZERO.into();
     let offset = transform.transform_point(&zero) - zero;
     let transform = transform.append_translation(&(-offset));
-    let pos = Vec3d::from(offset).flip_y_z();
+    let pos = Vec3d::from(offset).from_coord(UpAxis::YUp);
     let vector: Vec3d = transform.transform_point(&Point3::from_slice(&[0.0, 1.0, 0.0])).into();
     let radius = vector.magnitude();
-    let norm = vector.normalize().flip_y_z();
+    let norm = vector.normalize().from_coord(UpAxis::YUp);
     (pos, norm, radius)
 }
 
@@ -1792,7 +1794,7 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
                 insignias.push(Insignia {
                     detail_level: 0,
                     vertices: vertices_out,
-                    offset: flip_y_z(center.into()),
+                    offset: Vec3d::from(center).from_coord(UpAxis::YUp),
                     faces,
                 });
             } else {
@@ -1820,7 +1822,7 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
                     obj_id,
                     radius: Default::default(),
                     parent: None,
-                    offset: flip_y_z(center.into()),
+                    offset: Vec3d::from(center).from_coord(UpAxis::YUp),
                     geo_center: Default::default(),
                     bbox: Default::default(),
                     name: name.to_string(),
@@ -1831,13 +1833,9 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
                         norms: normals_out,
                         collision_tree: BspData::recalculate(
                             &vertices_out,
-                            polygons_out.into_iter().map(|(texture, verts)| Polygon {
-                                normal: Default::default(),
-                                center: Default::default(),
-                                radius: Default::default(),
-                                texture,
-                                verts: verts.to_vec(),
-                            }),
+                            polygons_out
+                                .into_iter()
+                                .map(|(texture, verts)| Polygon { normal: Default::default(), texture, verts: verts.to_vec() }),
                         ),
                         verts: vertices_out,
                     },
@@ -2078,7 +2076,9 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
         // this is pretty bad, but not having any detail levels is worse
     }
 
-    let textures = gltf.materials().map(|mat| mat.name().unwrap().to_string()).collect();
+    let mut textures = gltf.materials().map(|mat| mat.name().unwrap().to_string()).collect();
+
+    let untextured_idx = post_parse_fill_untextured_slot(&mut sub_objects, &mut textures);
 
     let mut model = Model {
         version: Version::LATEST,
@@ -2103,6 +2103,7 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
         insignias,
         shield_data,
         path_to_file: path.canonicalize().unwrap_or(path),
+        untextured_idx,
     };
 
     model.recalc_radius();

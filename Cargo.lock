@@ -2032,9 +2032,11 @@ dependencies = [
 name = "pof"
 version = "1.2.1"
 dependencies = [
+ "base64 0.13.0",
  "byteorder",
  "dae-parser",
  "gltf",
+ "gltf-json",
  "nalgebra",
  "nalgebra-glm",
  "walkdir",

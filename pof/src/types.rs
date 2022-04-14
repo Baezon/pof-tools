@@ -555,14 +555,25 @@ mk_struct! {
         pub radius: f32,
         pub turrets: Vec<ObjectId>,
     }
+}
 
-    #[derive(Clone, Default)]
-    pub struct Path {
-        pub name: String,
-        pub parent: String,
-        pub points: Vec<PathPoint>,
+#[derive(Clone, Default)]
+pub struct Path {
+    pub name: String,
+    pub parent: String,
+    pub points: Vec<PathPoint>,
+}
+
+impl Serialize for Path {
+    fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
+        self.name.write_to(w)?;
+        if get_version!() >= Version::V20_02 {
+            self.parent.write_to(w)?;
+        }
+        self.points.write_to(w)
     }
 }
+
 impl Debug for Path {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Path")
@@ -1034,7 +1045,7 @@ impl Serialize for BspData {
 
         let mut buf = vec![];
 
-        crate::write::write_bsp_data(&mut buf, self)?;
+        crate::write::write_bsp_data(&mut buf, get_version!(), self)?;
 
         w.write_u32::<LE>((buf.len()) as u32)?;
         w.write_all(&buf)

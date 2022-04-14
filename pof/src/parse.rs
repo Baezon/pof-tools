@@ -1222,208 +1222,206 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
                     );
                 }
             }
-        } else {
-            if name == "#thrusters" {
-                for (node, _) in dae_node_children_with_keyword(&node.children, "bank") {
-                    let mut new_bank = ThrusterBank::default();
+        } else if name == "#thrusters" {
+            for (node, _) in dae_node_children_with_keyword(&node.children, "bank") {
+                let mut new_bank = ThrusterBank::default();
 
-                    for (node, name) in dae_node_children_with_keyword(&node.children, "") {
-                        if name.contains("properties") {
-                            dae_parse_properties(node, &mut new_bank.properties);
-                        } else if name.contains("point") {
-                            let mut new_point = ThrusterGlow::default();
-
-                            let (pos, norm, rad) = dae_parse_point(node, local_transform, up);
-                            new_point.position = pos;
-                            new_point.normal = norm;
-                            new_point.radius = rad;
-
-                            new_bank.glows.push(new_point);
-                        }
-                    }
-
-                    thruster_banks.push(new_bank);
-                }
-            } else if name == "#paths" {
-                for (node, _) in dae_node_children_with_keyword(&node.children, "path") {
-                    let mut new_path = Path::default();
-
-                    for (node, name) in dae_node_children_with_keyword(&node.children, "") {
-                        if name.contains("parent") {
-                            if let Some(idx) = name.find(":") {
-                                new_path.parent = format!("{}", &name[(idx + 1)..]);
-                            }
-                        } else if name.contains("name") {
-                            if let Some(idx) = name.find(":") {
-                                new_path.name = format!("{}", &name[(idx + 1)..]);
-                            }
-                        } else if name.contains("point") {
-                            let mut new_point = PathPoint::default();
-
-                            let (pos, _, rad) = dae_parse_point(node, local_transform, up);
-                            new_point.position = pos;
-                            new_point.radius = rad;
-
-                            new_path.points.push(new_point);
-                        }
-                    }
-
-                    paths.push(new_path);
-                }
-            } else if name.starts_with("#") && name.contains("weapons") {
-                for (node, _) in dae_node_children_with_keyword(&node.children, "bank") {
-                    let mut new_bank = vec![];
-
-                    for (node, _) in dae_node_children_with_keyword(&node.children, "point") {
-                        let mut new_point = WeaponHardpoint::default();
-
-                        let (pos, norm, _) = dae_parse_point(node, local_transform, up);
-                        new_point.position = pos;
-                        new_point.normal = norm.try_into().unwrap_or_default();
-
-                        for (_, name) in dae_node_children_with_keyword(&node.children, "offset") {
-                            if let Some(idx) = name.find(":") {
-                                if let Ok(val) = &name[(idx + 1)..].parse() {
-                                    new_point.offset = *val;
-                                    break;
-                                }
-                            }
-                        }
-
-                        new_bank.push(new_point);
-                    }
-
-                    if name.contains("secondary") {
-                        secondary_weps.push(new_bank);
-                    } else {
-                        primary_weps.push(new_bank);
-                    }
-                }
-            } else if name == "#docking bays" {
-                for (node, _) in dae_node_children_with_keyword(&node.children, "bay") {
-                    let mut new_bay = Dock::default();
-
-                    let transform = node.transform_as_matrix();
-                    let zero = Vec3d::ZERO.into();
-                    new_bay.position = Vec3d::from(transform.transform_point(&zero) - zero).from_coord(up);
-                    new_bay.fvec = transform.transform_vector(&glm::vec3(0., 1., 0.)).try_into().unwrap_or_default();
-                    new_bay.fvec.0 = new_bay.fvec.0.from_coord(up);
-
-                    new_bay.uvec = transform.transform_vector(&glm::vec3(0., 0., 1.)).try_into().unwrap_or_default();
-                    new_bay.uvec.0 = new_bay.uvec.0.from_coord(up);
-
-                    for (node, name) in dae_node_children_with_keyword(&node.children, "") {
-                        if name.contains("properties") {
-                            dae_parse_properties(node, &mut new_bay.properties);
-                        } else if name.contains("path") {
-                            if let Some(idx) = name.find(":") {
-                                if let Ok(val) = &name[(idx + 1)..].parse() {
-                                    new_bay.path = Some(PathId(*val));
-                                }
-                            }
-                        }
-                    }
-
-                    docking_bays.push(new_bay);
-                }
-            } else if name == "#glows" {
-                for (node, _) in dae_node_children_with_keyword(&node.children, "glowbank") {
-                    let mut new_bank = GlowPointBank::default();
-
-                    for (node, name) in dae_node_children_with_keyword(&node.children, "") {
-                        if name.contains("type") {
-                            if let Some(idx) = name.find(":") {
-                                if let Ok(val) = &name[(idx + 1)..].parse() {
-                                    new_bank.glow_type = *val;
-                                }
-                            }
-                        } else if name.contains("lod") {
-                            if let Some(idx) = name.find(":") {
-                                if let Ok(val) = &name[(idx + 1)..].parse() {
-                                    new_bank.lod = *val;
-                                }
-                            }
-                        } else if name.contains("parent") {
-                            if let Some(idx) = name.find(":") {
-                                if let Ok(val) = &name[(idx + 1)..].parse() {
-                                    new_bank.obj_parent = ObjectId(*val);
-                                }
-                            }
-                        } else if name.contains("ontime") {
-                            if let Some(idx) = name.find(":") {
-                                if let Ok(val) = &name[(idx + 1)..].parse() {
-                                    new_bank.on_time = *val;
-                                }
-                            }
-                        } else if name.contains("offtime") {
-                            if let Some(idx) = name.find(":") {
-                                if let Ok(val) = &name[(idx + 1)..].parse() {
-                                    new_bank.off_time = *val;
-                                }
-                            }
-                        } else if name.contains("disptime") {
-                            if let Some(idx) = name.find(":") {
-                                if let Ok(val) = &name[(idx + 1)..].parse() {
-                                    new_bank.disp_time = *val;
-                                }
-                            }
-                        } else if name.contains("properties") {
-                            dae_parse_properties(node, &mut new_bank.properties);
-                        } else if name.contains("point") {
-                            let mut new_point = GlowPoint::default();
-
-                            let (pos, norm, rad) = dae_parse_point(node, local_transform, up);
-                            new_point.position = pos;
-                            new_point.normal = if name.contains("omni") { Vec3d::ZERO } else { norm };
-                            new_point.radius = rad;
-
-                            new_bank.glow_points.push(new_point);
-                        }
-                    }
-
-                    glow_banks.push(new_bank);
-                }
-            } else if name == "#special points" {
                 for (node, name) in dae_node_children_with_keyword(&node.children, "") {
-                    let mut new_point = SpecialPoint::default();
+                    if name.contains("properties") {
+                        dae_parse_properties(node, &mut new_bank.properties);
+                    } else if name.contains("point") {
+                        let mut new_point = ThrusterGlow::default();
 
-                    if let Some(idx) = name.find(":") {
-                        new_point.name = format!("{}", &name[(idx + 1)..]);
+                        let (pos, norm, rad) = dae_parse_point(node, local_transform, up);
+                        new_point.position = pos;
+                        new_point.normal = norm;
+                        new_point.radius = rad;
+
+                        new_bank.glows.push(new_point);
                     }
-
-                    let (pos, _, rad) = dae_parse_point(node, local_transform, up);
-                    new_point.position = pos;
-                    new_point.radius = rad;
-
-                    for (node, _) in dae_node_children_with_keyword(&node.children, "properties") {
-                        dae_parse_properties(node, &mut new_point.properties);
-                    }
-
-                    special_points.push(new_point);
                 }
-            } else if name == "#eye points" {
+
+                thruster_banks.push(new_bank);
+            }
+        } else if name == "#paths" {
+            for (node, _) in dae_node_children_with_keyword(&node.children, "path") {
+                let mut new_path = Path::default();
+
+                for (node, name) in dae_node_children_with_keyword(&node.children, "") {
+                    if name.contains("parent") {
+                        if let Some(idx) = name.find(':') {
+                            new_path.parent = format!("{}", &name[(idx + 1)..]);
+                        }
+                    } else if name.contains("name") {
+                        if let Some(idx) = name.find(':') {
+                            new_path.name = format!("{}", &name[(idx + 1)..]);
+                        }
+                    } else if name.contains("point") {
+                        let mut new_point = PathPoint::default();
+
+                        let (pos, _, rad) = dae_parse_point(node, local_transform, up);
+                        new_point.position = pos;
+                        new_point.radius = rad;
+
+                        new_path.points.push(new_point);
+                    }
+                }
+
+                paths.push(new_path);
+            }
+        } else if name.starts_with("#") && name.contains("weapons") {
+            for (node, _) in dae_node_children_with_keyword(&node.children, "bank") {
+                let mut new_bank = vec![];
+
                 for (node, _) in dae_node_children_with_keyword(&node.children, "point") {
-                    let mut new_point = EyePoint::default();
+                    let mut new_point = WeaponHardpoint::default();
 
                     let (pos, norm, _) = dae_parse_point(node, local_transform, up);
-                    new_point.offset = pos;
+                    new_point.position = pos;
                     new_point.normal = norm.try_into().unwrap_or_default();
 
-                    for (_, name) in dae_node_children_with_keyword(&node.children, "parent") {
+                    for (_, name) in dae_node_children_with_keyword(&node.children, "offset") {
                         if let Some(idx) = name.find(":") {
                             if let Ok(val) = &name[(idx + 1)..].parse() {
-                                new_point.attached_subobj = ObjectId(*val);
+                                new_point.offset = *val;
                                 break;
                             }
                         }
                     }
 
-                    eye_points.push(new_point);
+                    new_bank.push(new_point);
                 }
-            } else if name == "#visual-center" {
-                let (pos, _, _) = dae_parse_point(node, local_transform, up);
-                visual_center = pos;
+
+                if name.contains("secondary") {
+                    secondary_weps.push(new_bank);
+                } else {
+                    primary_weps.push(new_bank);
+                }
             }
+        } else if name == "#docking bays" {
+            for (node, _) in dae_node_children_with_keyword(&node.children, "bay") {
+                let mut new_bay = Dock::default();
+
+                let transform = node.transform_as_matrix();
+                let zero = Vec3d::ZERO.into();
+                new_bay.position = Vec3d::from(transform.transform_point(&zero) - zero).from_coord(up);
+                new_bay.fvec = transform.transform_vector(&glm::vec3(0., 1., 0.)).try_into().unwrap_or_default();
+                new_bay.fvec.0 = new_bay.fvec.0.from_coord(up);
+
+                new_bay.uvec = transform.transform_vector(&glm::vec3(0., 0., 1.)).try_into().unwrap_or_default();
+                new_bay.uvec.0 = new_bay.uvec.0.from_coord(up);
+
+                for (node, name) in dae_node_children_with_keyword(&node.children, "") {
+                    if name.contains("properties") {
+                        dae_parse_properties(node, &mut new_bay.properties);
+                    } else if name.contains("path") {
+                        if let Some(idx) = name.find(":") {
+                            if let Ok(val) = &name[(idx + 1)..].parse() {
+                                new_bay.path = Some(PathId(*val));
+                            }
+                        }
+                    }
+                }
+
+                docking_bays.push(new_bay);
+            }
+        } else if name == "#glows" {
+            for (node, _) in dae_node_children_with_keyword(&node.children, "glowbank") {
+                let mut new_bank = GlowPointBank::default();
+
+                for (node, name) in dae_node_children_with_keyword(&node.children, "") {
+                    if name.contains("type") {
+                        if let Some(idx) = name.find(":") {
+                            if let Ok(val) = &name[(idx + 1)..].parse() {
+                                new_bank.glow_type = *val;
+                            }
+                        }
+                    } else if name.contains("lod") {
+                        if let Some(idx) = name.find(":") {
+                            if let Ok(val) = &name[(idx + 1)..].parse() {
+                                new_bank.lod = *val;
+                            }
+                        }
+                    } else if name.contains("parent") {
+                        if let Some(idx) = name.find(":") {
+                            if let Ok(val) = &name[(idx + 1)..].parse() {
+                                new_bank.obj_parent = ObjectId(*val);
+                            }
+                        }
+                    } else if name.contains("ontime") {
+                        if let Some(idx) = name.find(":") {
+                            if let Ok(val) = &name[(idx + 1)..].parse() {
+                                new_bank.on_time = *val;
+                            }
+                        }
+                    } else if name.contains("offtime") {
+                        if let Some(idx) = name.find(":") {
+                            if let Ok(val) = &name[(idx + 1)..].parse() {
+                                new_bank.off_time = *val;
+                            }
+                        }
+                    } else if name.contains("disptime") {
+                        if let Some(idx) = name.find(":") {
+                            if let Ok(val) = &name[(idx + 1)..].parse() {
+                                new_bank.disp_time = *val;
+                            }
+                        }
+                    } else if name.contains("properties") {
+                        dae_parse_properties(node, &mut new_bank.properties);
+                    } else if name.contains("point") {
+                        let mut new_point = GlowPoint::default();
+
+                        let (pos, norm, rad) = dae_parse_point(node, local_transform, up);
+                        new_point.position = pos;
+                        new_point.normal = if name.contains("omni") { Vec3d::ZERO } else { norm };
+                        new_point.radius = rad;
+
+                        new_bank.glow_points.push(new_point);
+                    }
+                }
+
+                glow_banks.push(new_bank);
+            }
+        } else if name == "#special points" {
+            for (node, name) in dae_node_children_with_keyword(&node.children, "") {
+                let mut new_point = SpecialPoint::default();
+
+                if let Some(idx) = name.find(":") {
+                    new_point.name = format!("{}", &name[(idx + 1)..]);
+                }
+
+                let (pos, _, rad) = dae_parse_point(node, local_transform, up);
+                new_point.position = pos;
+                new_point.radius = rad;
+
+                for (node, _) in dae_node_children_with_keyword(&node.children, "properties") {
+                    dae_parse_properties(node, &mut new_point.properties);
+                }
+
+                special_points.push(new_point);
+            }
+        } else if name == "#eye points" {
+            for (node, _) in dae_node_children_with_keyword(&node.children, "point") {
+                let mut new_point = EyePoint::default();
+
+                let (pos, norm, _) = dae_parse_point(node, local_transform, up);
+                new_point.offset = pos;
+                new_point.normal = norm.try_into().unwrap_or_default();
+
+                for (_, name) in dae_node_children_with_keyword(&node.children, "parent") {
+                    if let Some(idx) = name.find(":") {
+                        if let Ok(val) = &name[(idx + 1)..].parse() {
+                            new_point.attached_subobj = ObjectId(*val);
+                            break;
+                        }
+                    }
+                }
+
+                eye_points.push(new_point);
+            }
+        } else if name == "#visual-center" {
+            let (pos, _, _) = dae_parse_point(node, local_transform, up);
+            visual_center = pos;
         }
     }
 
@@ -1865,208 +1863,206 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
                     );
                 }
             }
-        } else {
-            if name == "#thrusters" {
-                for (node, _) in gltf_node_children_with_keyword(&node, "bank") {
-                    let mut new_bank = ThrusterBank::default();
+        } else if name == "#thrusters" {
+            for (node, _) in gltf_node_children_with_keyword(&node, "bank") {
+                let mut new_bank = ThrusterBank::default();
 
-                    for (node, name) in gltf_node_children_with_keyword(&node, "") {
-                        if name.contains("properties") {
-                            gltf_parse_properties(&node, &mut new_bank.properties);
-                        } else if name.contains("point") {
-                            let mut new_point = ThrusterGlow::default();
-
-                            let (pos, norm, rad) = gltf_parse_point(&node, local_transform);
-                            new_point.position = pos;
-                            new_point.normal = norm;
-                            new_point.radius = rad;
-
-                            new_bank.glows.push(new_point);
-                        }
-                    }
-
-                    thruster_banks.push(new_bank);
-                }
-            } else if name == "#paths" {
-                for (node, _) in gltf_node_children_with_keyword(&node, "path") {
-                    let mut new_path = Path::default();
-
-                    for (node, name) in gltf_node_children_with_keyword(&node, "") {
-                        if name.contains("parent") {
-                            if let Some(idx) = name.find(":") {
-                                new_path.parent = format!("{}", &name[(idx + 1)..]);
-                            }
-                        } else if name.contains("name") {
-                            if let Some(idx) = name.find(":") {
-                                new_path.name = format!("{}", &name[(idx + 1)..]);
-                            }
-                        } else if name.contains("point") {
-                            let mut new_point = PathPoint::default();
-
-                            let (pos, _, rad) = gltf_parse_point(&node, local_transform);
-                            new_point.position = pos;
-                            new_point.radius = rad;
-
-                            new_path.points.push(new_point);
-                        }
-                    }
-
-                    paths.push(new_path);
-                }
-            } else if name.starts_with("#") && name.contains("weapons") {
-                for (node, _) in gltf_node_children_with_keyword(&node, "bank") {
-                    let mut new_bank = vec![];
-
-                    for (node, _) in gltf_node_children_with_keyword(&node, "point") {
-                        let mut new_point = WeaponHardpoint::default();
-
-                        let (pos, norm, _) = gltf_parse_point(&node, local_transform);
-                        new_point.position = pos;
-                        new_point.normal = norm.try_into().unwrap_or_default();
-
-                        for (_, name) in gltf_node_children_with_keyword(&node, "offset") {
-                            if let Some(idx) = name.find(":") {
-                                if let Ok(val) = &name[(idx + 1)..].parse() {
-                                    new_point.offset = *val;
-                                    break;
-                                }
-                            }
-                        }
-
-                        new_bank.push(new_point);
-                    }
-
-                    if name.contains("secondary") {
-                        secondary_weps.push(new_bank);
-                    } else {
-                        primary_weps.push(new_bank);
-                    }
-                }
-            } else if name == "#docking bays" {
-                for (node, _) in gltf_node_children_with_keyword(&node, "bay") {
-                    let mut new_bay = Dock::default();
-
-                    let transform = Mat4x4::from(node.transform().matrix());
-                    let zero = Vec3d::ZERO.into();
-                    new_bay.position = Vec3d::from(transform.transform_point(&zero) - zero).flip_y_z();
-                    new_bay.fvec = transform.transform_vector(&glm::vec3(0., 1., 0.)).try_into().unwrap_or_default();
-                    new_bay.fvec.0 = new_bay.fvec.0.flip_y_z();
-
-                    new_bay.uvec = transform.transform_vector(&glm::vec3(0., 0., 1.)).try_into().unwrap_or_default();
-                    new_bay.uvec.0 = new_bay.uvec.0.flip_y_z();
-
-                    for (node, name) in gltf_node_children_with_keyword(&node, "") {
-                        if name.contains("properties") {
-                            gltf_parse_properties(&node, &mut new_bay.properties);
-                        } else if name.contains("path") {
-                            if let Some(idx) = name.find(":") {
-                                if let Ok(val) = &name[(idx + 1)..].parse() {
-                                    new_bay.path = Some(PathId(*val));
-                                }
-                            }
-                        }
-                    }
-
-                    docking_bays.push(new_bay);
-                }
-            } else if name == "#glows" {
-                for (node, _) in gltf_node_children_with_keyword(&node, "glowbank") {
-                    let mut new_bank = GlowPointBank::default();
-
-                    for (node, name) in gltf_node_children_with_keyword(&node, "") {
-                        if name.contains("type") {
-                            if let Some(idx) = name.find(":") {
-                                if let Ok(val) = &name[(idx + 1)..].parse() {
-                                    new_bank.glow_type = *val;
-                                }
-                            }
-                        } else if name.contains("lod") {
-                            if let Some(idx) = name.find(":") {
-                                if let Ok(val) = &name[(idx + 1)..].parse() {
-                                    new_bank.lod = *val;
-                                }
-                            }
-                        } else if name.contains("parent") {
-                            if let Some(idx) = name.find(":") {
-                                if let Ok(val) = &name[(idx + 1)..].parse() {
-                                    new_bank.obj_parent = ObjectId(*val);
-                                }
-                            }
-                        } else if name.contains("ontime") {
-                            if let Some(idx) = name.find(":") {
-                                if let Ok(val) = &name[(idx + 1)..].parse() {
-                                    new_bank.on_time = *val;
-                                }
-                            }
-                        } else if name.contains("offtime") {
-                            if let Some(idx) = name.find(":") {
-                                if let Ok(val) = &name[(idx + 1)..].parse() {
-                                    new_bank.off_time = *val;
-                                }
-                            }
-                        } else if name.contains("disptime") {
-                            if let Some(idx) = name.find(":") {
-                                if let Ok(val) = &name[(idx + 1)..].parse() {
-                                    new_bank.disp_time = *val;
-                                }
-                            }
-                        } else if name.contains("properties") {
-                            gltf_parse_properties(&node, &mut new_bank.properties);
-                        } else if name.contains("point") {
-                            let mut new_point = GlowPoint::default();
-
-                            let (pos, norm, rad) = gltf_parse_point(&node, local_transform);
-                            new_point.position = pos;
-                            new_point.normal = if name.contains("omni") { Vec3d::ZERO } else { norm };
-                            new_point.radius = rad;
-
-                            new_bank.glow_points.push(new_point);
-                        }
-                    }
-
-                    glow_banks.push(new_bank);
-                }
-            } else if name == "#special points" {
                 for (node, name) in gltf_node_children_with_keyword(&node, "") {
-                    let mut new_point = SpecialPoint::default();
+                    if name.contains("properties") {
+                        gltf_parse_properties(&node, &mut new_bank.properties);
+                    } else if name.contains("point") {
+                        let mut new_point = ThrusterGlow::default();
 
-                    if let Some(idx) = name.find(":") {
-                        new_point.name = format!("{}", &name[(idx + 1)..]);
+                        let (pos, norm, rad) = gltf_parse_point(&node, local_transform);
+                        new_point.position = pos;
+                        new_point.normal = norm;
+                        new_point.radius = rad;
+
+                        new_bank.glows.push(new_point);
                     }
-
-                    let (pos, _, rad) = gltf_parse_point(&node, local_transform);
-                    new_point.position = pos;
-                    new_point.radius = rad;
-
-                    for (node, _) in gltf_node_children_with_keyword(&node, "properties") {
-                        gltf_parse_properties(&node, &mut new_point.properties);
-                    }
-
-                    special_points.push(new_point);
                 }
-            } else if name == "#eye points" {
+
+                thruster_banks.push(new_bank);
+            }
+        } else if name == "#paths" {
+            for (node, _) in gltf_node_children_with_keyword(&node, "path") {
+                let mut new_path = Path::default();
+
+                for (node, name) in gltf_node_children_with_keyword(&node, "") {
+                    if name.contains("parent") {
+                        if let Some(idx) = name.find(':') {
+                            new_path.parent = format!("{}", &name[(idx + 1)..]);
+                        }
+                    } else if name.contains("name") {
+                        if let Some(idx) = name.find(':') {
+                            new_path.name = format!("{}", &name[(idx + 1)..]);
+                        }
+                    } else if name.contains("point") {
+                        let mut new_point = PathPoint::default();
+
+                        let (pos, _, rad) = gltf_parse_point(&node, local_transform);
+                        new_point.position = pos;
+                        new_point.radius = rad;
+
+                        new_path.points.push(new_point);
+                    }
+                }
+
+                paths.push(new_path);
+            }
+        } else if name.starts_with('#') && name.contains("weapons") {
+            for (node, _) in gltf_node_children_with_keyword(&node, "bank") {
+                let mut new_bank = vec![];
+
                 for (node, _) in gltf_node_children_with_keyword(&node, "point") {
-                    let mut new_point = EyePoint::default();
+                    let mut new_point = WeaponHardpoint::default();
 
                     let (pos, norm, _) = gltf_parse_point(&node, local_transform);
-                    new_point.offset = pos;
+                    new_point.position = pos;
                     new_point.normal = norm.try_into().unwrap_or_default();
 
-                    for (_, name) in gltf_node_children_with_keyword(&node, "parent") {
-                        if let Some(idx) = name.find(":") {
+                    for (_, name) in gltf_node_children_with_keyword(&node, "offset") {
+                        if let Some(idx) = name.find(':') {
                             if let Ok(val) = &name[(idx + 1)..].parse() {
-                                new_point.attached_subobj = ObjectId(*val);
+                                new_point.offset = *val;
                                 break;
                             }
                         }
                     }
 
-                    eye_points.push(new_point);
+                    new_bank.push(new_point);
                 }
-            } else if name == "#visual-center" {
-                let (pos, _, _) = gltf_parse_point(&node, local_transform);
-                visual_center = pos;
+
+                if name.contains("secondary") {
+                    secondary_weps.push(new_bank);
+                } else {
+                    primary_weps.push(new_bank);
+                }
             }
+        } else if name == "#docking bays" {
+            for (node, _) in gltf_node_children_with_keyword(&node, "bay") {
+                let mut new_bay = Dock::default();
+
+                let transform = Mat4x4::from(node.transform().matrix());
+                let zero = Vec3d::ZERO.into();
+                new_bay.position = Vec3d::from(transform.transform_point(&zero) - zero).from_coord(UpAxis::YUp);
+                new_bay.fvec = transform.transform_vector(&glm::vec3(0., 1., 0.)).try_into().unwrap_or_default();
+                new_bay.fvec.0 = new_bay.fvec.0.from_coord(UpAxis::YUp);
+
+                new_bay.uvec = transform.transform_vector(&glm::vec3(0., 0., 1.)).try_into().unwrap_or_default();
+                new_bay.uvec.0 = new_bay.uvec.0.from_coord(UpAxis::YUp);
+
+                for (node, name) in gltf_node_children_with_keyword(&node, "") {
+                    if name.contains("properties") {
+                        gltf_parse_properties(&node, &mut new_bay.properties);
+                    } else if name.contains("path") {
+                        if let Some(idx) = name.find(":") {
+                            if let Ok(val) = &name[(idx + 1)..].parse() {
+                                new_bay.path = Some(PathId(*val));
+                            }
+                        }
+                    }
+                }
+
+                docking_bays.push(new_bay);
+            }
+        } else if name == "#glows" {
+            for (node, _) in gltf_node_children_with_keyword(&node, "glowbank") {
+                let mut new_bank = GlowPointBank::default();
+
+                for (node, name) in gltf_node_children_with_keyword(&node, "") {
+                    if name.contains("type") {
+                        if let Some(idx) = name.find(":") {
+                            if let Ok(val) = &name[(idx + 1)..].parse() {
+                                new_bank.glow_type = *val;
+                            }
+                        }
+                    } else if name.contains("lod") {
+                        if let Some(idx) = name.find(":") {
+                            if let Ok(val) = &name[(idx + 1)..].parse() {
+                                new_bank.lod = *val;
+                            }
+                        }
+                    } else if name.contains("parent") {
+                        if let Some(idx) = name.find(":") {
+                            if let Ok(val) = &name[(idx + 1)..].parse() {
+                                new_bank.obj_parent = ObjectId(*val);
+                            }
+                        }
+                    } else if name.contains("ontime") {
+                        if let Some(idx) = name.find(":") {
+                            if let Ok(val) = &name[(idx + 1)..].parse() {
+                                new_bank.on_time = *val;
+                            }
+                        }
+                    } else if name.contains("offtime") {
+                        if let Some(idx) = name.find(":") {
+                            if let Ok(val) = &name[(idx + 1)..].parse() {
+                                new_bank.off_time = *val;
+                            }
+                        }
+                    } else if name.contains("disptime") {
+                        if let Some(idx) = name.find(":") {
+                            if let Ok(val) = &name[(idx + 1)..].parse() {
+                                new_bank.disp_time = *val;
+                            }
+                        }
+                    } else if name.contains("properties") {
+                        gltf_parse_properties(&node, &mut new_bank.properties);
+                    } else if name.contains("point") {
+                        let mut new_point = GlowPoint::default();
+
+                        let (pos, norm, rad) = gltf_parse_point(&node, local_transform);
+                        new_point.position = pos;
+                        new_point.normal = if name.contains("omni") { Vec3d::ZERO } else { norm };
+                        new_point.radius = rad;
+
+                        new_bank.glow_points.push(new_point);
+                    }
+                }
+
+                glow_banks.push(new_bank);
+            }
+        } else if name == "#special points" {
+            for (node, name) in gltf_node_children_with_keyword(&node, "") {
+                let mut new_point = SpecialPoint::default();
+
+                if let Some(idx) = name.find(":") {
+                    new_point.name = format!("{}", &name[(idx + 1)..]);
+                }
+
+                let (pos, _, rad) = gltf_parse_point(&node, local_transform);
+                new_point.position = pos;
+                new_point.radius = rad;
+
+                for (node, _) in gltf_node_children_with_keyword(&node, "properties") {
+                    gltf_parse_properties(&node, &mut new_point.properties);
+                }
+
+                special_points.push(new_point);
+            }
+        } else if name == "#eye points" {
+            for (node, _) in gltf_node_children_with_keyword(&node, "point") {
+                let mut new_point = EyePoint::default();
+
+                let (pos, norm, _) = gltf_parse_point(&node, local_transform);
+                new_point.offset = pos;
+                new_point.normal = norm.try_into().unwrap_or_default();
+
+                for (_, name) in gltf_node_children_with_keyword(&node, "parent") {
+                    if let Some(idx) = name.find(":") {
+                        if let Ok(val) = &name[(idx + 1)..].parse() {
+                            new_point.attached_subobj = ObjectId(*val);
+                            break;
+                        }
+                    }
+                }
+
+                eye_points.push(new_point);
+            }
+        } else if name == "#visual-center" {
+            let (pos, _, _) = gltf_parse_point(&node, local_transform);
+            visual_center = pos;
         }
     }
 

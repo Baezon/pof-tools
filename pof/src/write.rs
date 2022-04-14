@@ -796,7 +796,7 @@ fn make_shield_node(shield: &ShieldData, geometries: &mut Vec<Geometry>, up: UpA
     let instance = Instance::<Geometry>::new(Url::Fragment(geo_id.clone()));
 
     geometries.push(Geometry::new_mesh(
-        geo_id.clone(),
+        geo_id,
         vec![
             Source::new_local(
                 pos_id.clone(),

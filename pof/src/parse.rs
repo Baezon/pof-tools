@@ -1478,6 +1478,8 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
     Box::new(model)
 }
 
+use UpAxis::YUp;
+
 fn gltf_parse_geometry(mesh: Mesh, buffers: &[buffer::Data], transform: Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(TextureId, [PolyVertex; 3])>) {
     let mut vertices_out: Vec<Vec3d> = vec![];
     let mut normals_out: Vec<Vec3d> = vec![];
@@ -1489,7 +1491,7 @@ fn gltf_parse_geometry(mesh: Mesh, buffers: &[buffer::Data], transform: Mat4x4) 
         let vertex_offset = vertices_out.len() as u32;
 
         for position in reader.read_positions().unwrap() {
-            vertices_out.push((&transform * Vec3d::from(position)).from_coord(UpAxis::YUp));
+            vertices_out.push((&transform * Vec3d::from(position)).from_coord(YUp));
         }
         let texture = match primitive.material().index() {
             Some(idx) => TextureId(idx as u32),
@@ -1506,7 +1508,7 @@ fn gltf_parse_geometry(mesh: Mesh, buffers: &[buffer::Data], transform: Mat4x4) 
                     for normal in normal_iter {
                         normal_ids.push(*normals_map.entry(normal.into()).or_insert_with(|| {
                             let id = NormalId(normals_out.len().try_into().unwrap());
-                            normals_out.push((&transform * Vec3d::from(normal)).from_coord(UpAxis::YUp));
+                            normals_out.push((&transform * Vec3d::from(normal)).from_coord(YUp));
                             id
                         }));
                     }
@@ -1576,7 +1578,7 @@ fn gltf_parse_subobject_recursive(
         insignias.push(Insignia {
             detail_level: detail_level.unwrap_or(0),
             vertices: vertices_out,
-            offset: Vec3d::from(center).from_coord(UpAxis::YUp),
+            offset: Vec3d::from(center).from_coord(YUp),
             faces,
         });
     } else {
@@ -1591,8 +1593,8 @@ fn gltf_parse_subobject_recursive(
             obj_id,
             radius: Default::default(),
             parent: Some(parent),
-            offset: Vec3d::from(center).from_coord(UpAxis::YUp),
-            geo_center: Vec3d::from(center).from_coord(UpAxis::YUp),
+            offset: Vec3d::from(center).from_coord(YUp),
+            geo_center: Vec3d::from(center).from_coord(YUp),
             bbox: Default::default(),
             name: name.to_string(),
             properties: Default::default(),
@@ -1701,10 +1703,10 @@ fn gltf_parse_point(node: &gltf::Node, parent_transform: Mat4x4) -> (Vec3d, Vec3
     let zero = Vec3d::ZERO.into();
     let offset = transform.transform_point(&zero) - zero;
     let transform = transform.append_translation(&(-offset));
-    let pos = Vec3d::from(offset).from_coord(UpAxis::YUp);
+    let pos = Vec3d::from(offset).from_coord(YUp);
     let vector: Vec3d = transform.transform_point(&Point3::from_slice(&[0.0, 1.0, 0.0])).into();
     let radius = vector.magnitude();
-    let norm = vector.normalize().from_coord(UpAxis::YUp);
+    let norm = vector.normalize().from_coord(YUp);
     (pos, norm, radius)
 }
 
@@ -1794,7 +1796,7 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
                 insignias.push(Insignia {
                     detail_level: 0,
                     vertices: vertices_out,
-                    offset: Vec3d::from(center).from_coord(UpAxis::YUp),
+                    offset: Vec3d::from(center).from_coord(YUp),
                     faces,
                 });
             } else {
@@ -1822,7 +1824,7 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
                     obj_id,
                     radius: Default::default(),
                     parent: None,
-                    offset: Vec3d::from(center).from_coord(UpAxis::YUp),
+                    offset: Vec3d::from(center).from_coord(YUp),
                     geo_center: Default::default(),
                     bbox: Default::default(),
                     name: name.to_string(),

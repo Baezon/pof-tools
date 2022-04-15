@@ -767,7 +767,7 @@ impl<'a> dae_parser::geom::VertexLoad<'a, VertexContext> for PolyVertex {
     fn add_texcoord(&mut self, _: &VertexContext, reader: &SourceReader<'a, ST>, index: u32, set: Option<u32>) {
         assert!(set.map_or(true, |set| set == 0));
         let [u, v] = reader.get(index as usize);
-        self.uv = (u, v);
+        self.uv = (u, -v);
     }
 }
 

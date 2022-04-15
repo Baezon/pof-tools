@@ -2054,7 +2054,6 @@ dependencies = [
  "egui_glium",
  "epi",
  "glium",
- "gltf",
  "image 0.24.1",
  "log",
  "nalgebra-glm",

@@ -880,419 +880,409 @@ fn push_subobj(
     obj_id
 }
 
-trait ParseGeometry<N> {
+trait ParseCtx<'a> {
+    type Node: IsNode<'a>;
     fn up(&self) -> UpAxis {
         UpAxis::YUp
     }
-    fn parse_geometry(&self, node: &N, transform: Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(TextureId, Vec<PolyVertex>)>);
-}
 
-fn parse_subobject_recursive<'a, N: IsNode<'a>>(
-    ctx: &impl ParseGeometry<N>, node: N, sub_objects: &mut Vec<SubObject>, parent: ObjectId, insignias: &mut Vec<Insignia>,
-    detail_level: Option<u32>, turrets: &mut Vec<Turret>, parent_transform: Mat4x4,
-) {
-    let name = match node.name() {
-        None => return, // subobjects must have names!
-        Some(name) => name,
-    };
+    fn parse_geometry(&self, node: &Self::Node, transform: Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(TextureId, Vec<PolyVertex>)>);
 
-    let local_transform = parent_transform * node.transform();
-    let zero = Vec3d::ZERO.into();
-    let center = local_transform.transform_point(&zero) - zero;
-    let local_transform = local_transform.append_translation(&(-center));
-    let up = ctx.up();
-    let offset = Vec3d::from(center).from_coord(up);
+    fn parse_subobject_recursive(&self, model: &mut Model, node: Self::Node, parent: ObjectId, detail_level: Option<u32>, parent_transform: Mat4x4) {
+        let name = match node.name() {
+            None => return, // subobjects must have names!
+            Some(name) => name,
+        };
 
-    let (vertices_out, normals_out, polygons_out) = ctx.parse_geometry(&node, local_transform);
+        let local_transform = parent_transform * node.transform();
+        let zero = Vec3d::ZERO.into();
+        let center = local_transform.transform_point(&zero) - zero;
+        let local_transform = local_transform.append_translation(&(-center));
+        let up = self.up();
+        let offset = Vec3d::from(center).from_coord(up);
 
-    // ignore subobjects with no geo
-    // metadata (empties with names like #properties) are handled below directly
-    // this function must *start* with a proper subobject
-    if polygons_out.is_empty() {
-        return;
-    }
+        let (vertices_out, normals_out, polygons_out) = self.parse_geometry(&node, local_transform);
 
-    if name.to_lowercase().contains("insig") {
-        insignias.push(mk_insignia(detail_level, offset, vertices_out, polygons_out));
-    } else {
-        // this should probably be warned about...
-        if vertices_out.is_empty() || normals_out.is_empty() {
+        // ignore subobjects with no geo
+        // metadata (empties with names like #properties) are handled below directly
+        // this function must *start* with a proper subobject
+        if polygons_out.is_empty() {
             return;
         }
 
-        let obj_id = push_subobj(sub_objects, offset, Some(parent), name, false, vertices_out, normals_out, polygons_out);
-
-        for node in node.children() {
-            // make a pointer to the subobj we just pushed
-            // annoying, but the node children could be properties that modify it, or proper subobject children
-            // which will require that this subobject be already pushed into the list
-            let len = sub_objects.len() - 1;
-            let subobj = &mut sub_objects[len];
-
-            if let Some(name) = node.name() {
-                if name.starts_with('#') && name.contains("point") {
-                    let turret = {
-                        match turrets.iter().position(|turret| turret.gun_obj == obj_id) {
-                            Some(idx) => &mut turrets[idx],
-                            None => {
-                                turrets.push(Turret::default());
-                                let idx = turrets.len() - 1;
-                                &mut turrets[idx]
-                            }
-                        }
-                    };
-
-                    turret.gun_obj = obj_id;
-                    turret.base_obj = if name.contains("gun") { parent } else { obj_id };
-
-                    let (pos, norm, _) = node.parse_point(parent_transform, up);
-                    turret.fire_points.push(pos);
-                    turret.normal = norm.try_into().unwrap_or_default();
-                    continue;
-                } else if name.starts_with('#') && name.contains("properties") {
-                    node.parse_properties(&mut subobj.properties);
-                    continue;
-                } else if name.starts_with('#') && name.contains("mov-type") {
-                    if let Some(idx) = name.find(':') {
-                        if let Ok(val) = name[(idx + 1)..].parse::<i32>() {
-                            subobj.movement_type = val.try_into().unwrap_or_default();
-                        }
-                    }
-                    continue;
-                } else if name.starts_with('#') && name.contains("mov-axis") {
-                    if let Some(idx) = name.find(':') {
-                        if let Ok(val) = name[(idx + 1)..].parse::<i32>() {
-                            subobj.movement_axis = val.try_into().unwrap_or_default();
-                        }
-                    }
-                    continue;
-                }
+        if name.to_lowercase().contains("insig") {
+            model.insignias.push(mk_insignia(detail_level, offset, vertices_out, polygons_out));
+        } else {
+            // this should probably be warned about...
+            if vertices_out.is_empty() || normals_out.is_empty() {
+                return;
             }
 
-            parse_subobject_recursive(ctx, node, sub_objects, obj_id, insignias, detail_level, turrets, local_transform);
+            let obj_id = push_subobj(&mut model.sub_objects, offset, Some(parent), name, false, vertices_out, normals_out, polygons_out);
+
+            for node in node.children() {
+                // make a pointer to the subobj we just pushed
+                // annoying, but the node children could be properties that modify it, or proper subobject children
+                // which will require that this subobject be already pushed into the list
+                let len = model.sub_objects.len() - 1;
+                let subobj = &mut model.sub_objects.0[len];
+
+                if let Some(name) = node.name() {
+                    if name.starts_with('#') && name.contains("point") {
+                        let turret = {
+                            match model.turrets.iter().position(|turret| turret.gun_obj == obj_id) {
+                                Some(idx) => &mut model.turrets[idx],
+                                None => {
+                                    model.turrets.push(Turret::default());
+                                    let idx = model.turrets.len() - 1;
+                                    &mut model.turrets[idx]
+                                }
+                            }
+                        };
+
+                        turret.gun_obj = obj_id;
+                        turret.base_obj = if name.contains("gun") { parent } else { obj_id };
+
+                        let (pos, norm, _) = node.parse_point(parent_transform, up);
+                        turret.fire_points.push(pos);
+                        turret.normal = norm.try_into().unwrap_or_default();
+                        continue;
+                    } else if name.starts_with('#') && name.contains("properties") {
+                        node.parse_properties(&mut subobj.properties);
+                        continue;
+                    } else if name.starts_with('#') && name.contains("mov-type") {
+                        if let Some(idx) = name.find(':') {
+                            if let Ok(val) = name[(idx + 1)..].parse::<i32>() {
+                                subobj.movement_type = val.try_into().unwrap_or_default();
+                            }
+                        }
+                        continue;
+                    } else if name.starts_with('#') && name.contains("mov-axis") {
+                        if let Some(idx) = name.find(':') {
+                            if let Ok(val) = name[(idx + 1)..].parse::<i32>() {
+                                subobj.movement_axis = val.try_into().unwrap_or_default();
+                            }
+                        }
+                        continue;
+                    }
+                }
+
+                self.parse_subobject_recursive(model, node, obj_id, detail_level, local_transform);
+            }
         }
     }
-}
 
-fn parse_top_level_nodes<'a, N: IsNode<'a>>(model: &mut Model, ctx: &impl ParseGeometry<N>, nodes: impl IntoIterator<Item = N>) {
-    for node in nodes {
-        let mut local_transform = node.transform();
-        let zero = Vec3d::ZERO.into();
-        let center = local_transform.transform_point(&zero) - zero;
-        local_transform = local_transform.append_translation(&(-center));
-        let up = ctx.up();
-        let offset = Vec3d::from(center).from_coord(up);
+    fn parse_top_level_nodes(&self, model: &mut Model, nodes: impl IntoIterator<Item = Self::Node>) {
+        for node in nodes {
+            let mut local_transform = node.transform();
+            let zero = Vec3d::ZERO.into();
+            let center = local_transform.transform_point(&zero) - zero;
+            local_transform = local_transform.append_translation(&(-center));
+            let up = self.up();
+            let offset = Vec3d::from(center).from_coord(up);
 
-        let name = match node.name() {
-            Some(name) => name,
-            None => continue,
-        };
+            let name = match node.name() {
+                Some(name) => name,
+                None => continue,
+            };
 
-        let (vertices_out, normals_out, polygons_out) = ctx.parse_geometry(&node, local_transform);
-        if !polygons_out.is_empty() {
-            if name.to_lowercase() == "shield" {
-                let mut polygons = vec![];
-                for (_, verts) in polygons_out {
-                    let verts = verts.into_iter().map(|poly| poly.vertex_id).collect::<Vec<_>>();
-                    // triangulate, just to be sure
-                    if let [vert1, ref rest @ ..] = *verts {
-                        for slice in rest.windows(2) {
-                            if let [vert2, vert3] = *slice {
-                                let [v1, v2, v3] = [vert1, vert2, vert3].map(|i| nalgebra_glm::Vec3::from(vertices_out[i.0 as usize]));
-                                polygons.push(ShieldPolygon {
-                                    normal: (v2 - v1).cross(&(v3 - v1)).normalize().into(),
-                                    verts: (vert1, vert2, vert3),
-                                    neighbors: Default::default(),
-                                })
+            let (vertices_out, normals_out, polygons_out) = self.parse_geometry(&node, local_transform);
+            if !polygons_out.is_empty() {
+                if name.to_lowercase() == "shield" {
+                    let mut polygons = vec![];
+                    for (_, verts) in polygons_out {
+                        let verts = verts.into_iter().map(|poly| poly.vertex_id).collect::<Vec<_>>();
+                        // triangulate, just to be sure
+                        if let [vert1, ref rest @ ..] = *verts {
+                            for slice in rest.windows(2) {
+                                if let [vert2, vert3] = *slice {
+                                    let [v1, v2, v3] = [vert1, vert2, vert3].map(|i| nalgebra_glm::Vec3::from(vertices_out[i.0 as usize]));
+                                    polygons.push(ShieldPolygon {
+                                        normal: (v2 - v1).cross(&(v3 - v1)).normalize().into(),
+                                        verts: (vert1, vert2, vert3),
+                                        neighbors: Default::default(),
+                                    })
+                                }
                             }
                         }
                     }
-                }
 
-                // assign shield neighbors
-                // create a map keyed on each vertex pair, based on winding order, where the value is the polygon id
-                let mut map: HashMap<(VertexId, VertexId), PolygonId> = HashMap::new();
-                for (i, poly) in polygons.iter().enumerate() {
-                    map.insert((poly.verts.0, poly.verts.1), PolygonId(i as u32));
-                    map.insert((poly.verts.1, poly.verts.2), PolygonId(i as u32));
-                    map.insert((poly.verts.2, poly.verts.0), PolygonId(i as u32));
-                }
+                    // assign shield neighbors
+                    // create a map keyed on each vertex pair, based on winding order, where the value is the polygon id
+                    let mut map: HashMap<(VertexId, VertexId), PolygonId> = HashMap::new();
+                    for (i, poly) in polygons.iter().enumerate() {
+                        map.insert((poly.verts.0, poly.verts.1), PolygonId(i as u32));
+                        map.insert((poly.verts.1, poly.verts.2), PolygonId(i as u32));
+                        map.insert((poly.verts.2, poly.verts.0), PolygonId(i as u32));
+                    }
 
-                // for each polygon then, by swapping its vertex pairs, you can grab each adjacent polygon
-                for poly in &mut polygons {
-                    let neighbor1 = map.get(&(poly.verts.1, poly.verts.0)).unwrap_or(&PolygonId(0));
-                    let neighbor2 = map.get(&(poly.verts.2, poly.verts.1)).unwrap_or(&PolygonId(0));
-                    let neighbor3 = map.get(&(poly.verts.0, poly.verts.2)).unwrap_or(&PolygonId(0));
-                    poly.neighbors = (*neighbor1, *neighbor2, *neighbor3);
-                }
-                // a map insertion where an entry already exists or a failure to get from the map indicate non-manifoldness, TODO maybe indicate that
+                    // for each polygon then, by swapping its vertex pairs, you can grab each adjacent polygon
+                    for poly in &mut polygons {
+                        let neighbor1 = map.get(&(poly.verts.1, poly.verts.0)).unwrap_or(&PolygonId(0));
+                        let neighbor2 = map.get(&(poly.verts.2, poly.verts.1)).unwrap_or(&PolygonId(0));
+                        let neighbor3 = map.get(&(poly.verts.0, poly.verts.2)).unwrap_or(&PolygonId(0));
+                        poly.neighbors = (*neighbor1, *neighbor2, *neighbor3);
+                    }
+                    // a map insertion where an entry already exists or a failure to get from the map indicate non-manifoldness, TODO maybe indicate that
 
-                model.shield_data = Some(ShieldData {
-                    collision_tree: Some(ShieldData::recalculate_tree(&vertices_out, &polygons)),
-                    verts: vertices_out,
-                    polygons,
-                });
-            } else if name.to_lowercase().contains("insig") {
-                model.insignias.push(mk_insignia(None, offset, vertices_out, polygons_out));
-            } else {
-                // must be a subobject
+                    model.shield_data = Some(ShieldData {
+                        collision_tree: Some(ShieldData::recalculate_tree(&vertices_out, &polygons)),
+                        verts: vertices_out,
+                        polygons,
+                    });
+                } else if name.to_lowercase().contains("insig") {
+                    model.insignias.push(mk_insignia(None, offset, vertices_out, polygons_out));
+                } else {
+                    // must be a subobject
 
-                // this should probably be warned about...
-                if vertices_out.is_empty() || normals_out.is_empty() {
-                    continue;
-                }
+                    // this should probably be warned about...
+                    if vertices_out.is_empty() || normals_out.is_empty() {
+                        continue;
+                    }
 
-                let obj_id =
-                    push_subobj(&mut model.sub_objects, offset, None, name, name.starts_with("debris"), vertices_out, normals_out, polygons_out);
+                    let obj_id =
+                        push_subobj(&mut model.sub_objects, offset, None, name, name.starts_with("debris"), vertices_out, normals_out, polygons_out);
 
-                let mut detail_level: Option<u32> = None;
-                if let Some(idx) = name.to_lowercase().find("detail") {
-                    if let Ok(level) = name[(idx + 6)..].parse::<usize>() {
-                        if level >= model.header.detail_levels.len() {
-                            model.header.detail_levels.resize(level + 1, obj_id);
-                        } else {
-                            model.header.detail_levels[level] = obj_id;
+                    let mut detail_level: Option<u32> = None;
+                    if let Some(idx) = name.to_lowercase().find("detail") {
+                        if let Ok(level) = name[(idx + 6)..].parse::<usize>() {
+                            if level >= model.header.detail_levels.len() {
+                                model.header.detail_levels.resize(level + 1, obj_id);
+                            } else {
+                                model.header.detail_levels[level] = obj_id;
+                            }
+                            detail_level = Some(level as u32);
                         }
-                        detail_level = Some(level as u32);
+                    }
+
+                    for node in node.children() {
+                        self.parse_subobject_recursive(model, node, obj_id, detail_level, local_transform);
                     }
                 }
+            } else if name == "#thrusters" {
+                for (node, _) in node_children_with_keyword(node, "bank") {
+                    let mut new_bank = ThrusterBank::default();
 
-                for node in node.children() {
-                    parse_subobject_recursive(
-                        ctx,
-                        node,
-                        &mut model.sub_objects,
-                        obj_id,
-                        &mut model.insignias,
-                        detail_level,
-                        &mut model.turrets,
-                        local_transform,
-                    );
+                    for (node, name) in node_children_with_keyword(node, "") {
+                        if name.contains("properties") {
+                            node.parse_properties(&mut new_bank.properties);
+                        } else if name.contains("point") {
+                            let mut new_point = ThrusterGlow::default();
+
+                            let (pos, norm, rad) = node.parse_point(local_transform, up);
+                            new_point.position = pos;
+                            new_point.normal = norm;
+                            new_point.radius = rad;
+
+                            new_bank.glows.push(new_point);
+                        }
+                    }
+
+                    model.thruster_banks.push(new_bank);
                 }
-            }
-        } else if name == "#thrusters" {
-            for (node, _) in node_children_with_keyword(node, "bank") {
-                let mut new_bank = ThrusterBank::default();
+            } else if name == "#paths" {
+                for (node, _) in node_children_with_keyword(node, "path") {
+                    let mut new_path = Path::default();
 
-                for (node, name) in node_children_with_keyword(node, "") {
-                    if name.contains("properties") {
-                        node.parse_properties(&mut new_bank.properties);
-                    } else if name.contains("point") {
-                        let mut new_point = ThrusterGlow::default();
+                    for (node, name) in node_children_with_keyword(node, "") {
+                        if name.contains("parent") {
+                            if let Some(idx) = name.find(':') {
+                                new_path.parent = format!("{}", &name[(idx + 1)..]);
+                            }
+                        } else if name.contains("name") {
+                            if let Some(idx) = name.find(':') {
+                                new_path.name = format!("{}", &name[(idx + 1)..]);
+                            }
+                        } else if name.contains("point") {
+                            let mut new_point = PathPoint::default();
 
-                        let (pos, norm, rad) = node.parse_point(local_transform, up);
+                            let (pos, _, rad) = node.parse_point(local_transform, up);
+                            new_point.position = pos;
+                            new_point.radius = rad;
+
+                            new_path.points.push(new_point);
+                        }
+                    }
+
+                    model.paths.push(new_path);
+                }
+            } else if name.starts_with("#") && name.contains("weapons") {
+                for (node, _) in node_children_with_keyword(node, "bank") {
+                    let mut new_bank = vec![];
+
+                    for (node, _) in node_children_with_keyword(node, "point") {
+                        let mut new_point = WeaponHardpoint::default();
+
+                        let (pos, norm, _) = node.parse_point(local_transform, up);
                         new_point.position = pos;
-                        new_point.normal = norm;
-                        new_point.radius = rad;
+                        new_point.normal = norm.try_into().unwrap_or_default();
 
-                        new_bank.glows.push(new_point);
+                        for (_, name) in node_children_with_keyword(node, "offset") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_point.offset = *val;
+                                    break;
+                                }
+                            }
+                        }
+
+                        new_bank.push(new_point);
+                    }
+
+                    if name.contains("secondary") {
+                        model.secondary_weps.push(new_bank);
+                    } else {
+                        model.primary_weps.push(new_bank);
                     }
                 }
+            } else if name == "#docking bays" {
+                for (node, _) in node_children_with_keyword(node, "bay") {
+                    let mut new_bay = Dock::default();
 
-                model.thruster_banks.push(new_bank);
-            }
-        } else if name == "#paths" {
-            for (node, _) in node_children_with_keyword(node, "path") {
-                let mut new_path = Path::default();
+                    let transform = node.transform();
+                    let zero = Vec3d::ZERO.into();
+                    new_bay.position = Vec3d::from(transform.transform_point(&zero) - zero).from_coord(up);
+                    new_bay.fvec = transform.transform_vector(&glm::vec3(0., 1., 0.)).try_into().unwrap_or_default();
+                    new_bay.fvec.0 = new_bay.fvec.0.from_coord(up);
 
+                    new_bay.uvec = transform.transform_vector(&glm::vec3(0., 0., 1.)).try_into().unwrap_or_default();
+                    new_bay.uvec.0 = new_bay.uvec.0.from_coord(up);
+
+                    for (node, name) in node_children_with_keyword(node, "") {
+                        if name.contains("properties") {
+                            node.parse_properties(&mut new_bay.properties);
+                        } else if name.contains("path") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bay.path = Some(PathId(*val));
+                                }
+                            }
+                        }
+                    }
+
+                    model.docking_bays.push(new_bay);
+                }
+            } else if name == "#glows" {
+                for (node, _) in node_children_with_keyword(node, "glowbank") {
+                    let mut new_bank = GlowPointBank::default();
+
+                    for (node, name) in node_children_with_keyword(node, "") {
+                        if name.contains("type") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bank.glow_type = *val;
+                                }
+                            }
+                        } else if name.contains("lod") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bank.lod = *val;
+                                }
+                            }
+                        } else if name.contains("parent") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bank.obj_parent = ObjectId(*val);
+                                }
+                            }
+                        } else if name.contains("ontime") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bank.on_time = *val;
+                                }
+                            }
+                        } else if name.contains("offtime") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bank.off_time = *val;
+                                }
+                            }
+                        } else if name.contains("disptime") {
+                            if let Some(idx) = name.find(":") {
+                                if let Ok(val) = &name[(idx + 1)..].parse() {
+                                    new_bank.disp_time = *val;
+                                }
+                            }
+                        } else if name.contains("properties") {
+                            node.parse_properties(&mut new_bank.properties);
+                        } else if name.contains("point") {
+                            let mut new_point = GlowPoint::default();
+
+                            let (pos, norm, rad) = node.parse_point(local_transform, up);
+                            new_point.position = pos;
+                            new_point.normal = if name.contains("omni") { Vec3d::ZERO } else { norm };
+                            new_point.radius = rad;
+
+                            new_bank.glow_points.push(new_point);
+                        }
+                    }
+
+                    model.glow_banks.push(new_bank);
+                }
+            } else if name == "#special points" {
                 for (node, name) in node_children_with_keyword(node, "") {
-                    if name.contains("parent") {
-                        if let Some(idx) = name.find(':') {
-                            new_path.parent = format!("{}", &name[(idx + 1)..]);
-                        }
-                    } else if name.contains("name") {
-                        if let Some(idx) = name.find(':') {
-                            new_path.name = format!("{}", &name[(idx + 1)..]);
-                        }
-                    } else if name.contains("point") {
-                        let mut new_point = PathPoint::default();
+                    let mut new_point = SpecialPoint::default();
 
-                        let (pos, _, rad) = node.parse_point(local_transform, up);
-                        new_point.position = pos;
-                        new_point.radius = rad;
-
-                        new_path.points.push(new_point);
+                    if let Some(idx) = name.find(":") {
+                        new_point.name = format!("{}", &name[(idx + 1)..]);
                     }
+
+                    let (pos, _, rad) = node.parse_point(local_transform, up);
+                    new_point.position = pos;
+                    new_point.radius = rad;
+
+                    for (node, _) in node_children_with_keyword(node, "properties") {
+                        node.parse_properties(&mut new_point.properties);
+                    }
+
+                    model.special_points.push(new_point);
                 }
-
-                model.paths.push(new_path);
-            }
-        } else if name.starts_with("#") && name.contains("weapons") {
-            for (node, _) in node_children_with_keyword(node, "bank") {
-                let mut new_bank = vec![];
-
+            } else if name == "#eye points" {
                 for (node, _) in node_children_with_keyword(node, "point") {
-                    let mut new_point = WeaponHardpoint::default();
+                    let mut new_point = EyePoint::default();
 
                     let (pos, norm, _) = node.parse_point(local_transform, up);
-                    new_point.position = pos;
+                    new_point.offset = pos;
                     new_point.normal = norm.try_into().unwrap_or_default();
 
-                    for (_, name) in node_children_with_keyword(node, "offset") {
+                    for (_, name) in node_children_with_keyword(node, "parent") {
                         if let Some(idx) = name.find(":") {
                             if let Ok(val) = &name[(idx + 1)..].parse() {
-                                new_point.offset = *val;
+                                new_point.attached_subobj = ObjectId(*val);
                                 break;
                             }
                         }
                     }
 
-                    new_bank.push(new_point);
+                    model.eye_points.push(new_point);
                 }
-
-                if name.contains("secondary") {
-                    model.secondary_weps.push(new_bank);
-                } else {
-                    model.primary_weps.push(new_bank);
-                }
+            } else if name == "#visual-center" {
+                let (pos, _, _) = node.parse_point(local_transform, up);
+                model.visual_center = pos;
             }
-        } else if name == "#docking bays" {
-            for (node, _) in node_children_with_keyword(node, "bay") {
-                let mut new_bay = Dock::default();
-
-                let transform = node.transform();
-                let zero = Vec3d::ZERO.into();
-                new_bay.position = Vec3d::from(transform.transform_point(&zero) - zero).from_coord(up);
-                new_bay.fvec = transform.transform_vector(&glm::vec3(0., 1., 0.)).try_into().unwrap_or_default();
-                new_bay.fvec.0 = new_bay.fvec.0.from_coord(up);
-
-                new_bay.uvec = transform.transform_vector(&glm::vec3(0., 0., 1.)).try_into().unwrap_or_default();
-                new_bay.uvec.0 = new_bay.uvec.0.from_coord(up);
-
-                for (node, name) in node_children_with_keyword(node, "") {
-                    if name.contains("properties") {
-                        node.parse_properties(&mut new_bay.properties);
-                    } else if name.contains("path") {
-                        if let Some(idx) = name.find(":") {
-                            if let Ok(val) = &name[(idx + 1)..].parse() {
-                                new_bay.path = Some(PathId(*val));
-                            }
-                        }
-                    }
-                }
-
-                model.docking_bays.push(new_bay);
-            }
-        } else if name == "#glows" {
-            for (node, _) in node_children_with_keyword(node, "glowbank") {
-                let mut new_bank = GlowPointBank::default();
-
-                for (node, name) in node_children_with_keyword(node, "") {
-                    if name.contains("type") {
-                        if let Some(idx) = name.find(":") {
-                            if let Ok(val) = &name[(idx + 1)..].parse() {
-                                new_bank.glow_type = *val;
-                            }
-                        }
-                    } else if name.contains("lod") {
-                        if let Some(idx) = name.find(":") {
-                            if let Ok(val) = &name[(idx + 1)..].parse() {
-                                new_bank.lod = *val;
-                            }
-                        }
-                    } else if name.contains("parent") {
-                        if let Some(idx) = name.find(":") {
-                            if let Ok(val) = &name[(idx + 1)..].parse() {
-                                new_bank.obj_parent = ObjectId(*val);
-                            }
-                        }
-                    } else if name.contains("ontime") {
-                        if let Some(idx) = name.find(":") {
-                            if let Ok(val) = &name[(idx + 1)..].parse() {
-                                new_bank.on_time = *val;
-                            }
-                        }
-                    } else if name.contains("offtime") {
-                        if let Some(idx) = name.find(":") {
-                            if let Ok(val) = &name[(idx + 1)..].parse() {
-                                new_bank.off_time = *val;
-                            }
-                        }
-                    } else if name.contains("disptime") {
-                        if let Some(idx) = name.find(":") {
-                            if let Ok(val) = &name[(idx + 1)..].parse() {
-                                new_bank.disp_time = *val;
-                            }
-                        }
-                    } else if name.contains("properties") {
-                        node.parse_properties(&mut new_bank.properties);
-                    } else if name.contains("point") {
-                        let mut new_point = GlowPoint::default();
-
-                        let (pos, norm, rad) = node.parse_point(local_transform, up);
-                        new_point.position = pos;
-                        new_point.normal = if name.contains("omni") { Vec3d::ZERO } else { norm };
-                        new_point.radius = rad;
-
-                        new_bank.glow_points.push(new_point);
-                    }
-                }
-
-                model.glow_banks.push(new_bank);
-            }
-        } else if name == "#special points" {
-            for (node, name) in node_children_with_keyword(node, "") {
-                let mut new_point = SpecialPoint::default();
-
-                if let Some(idx) = name.find(":") {
-                    new_point.name = format!("{}", &name[(idx + 1)..]);
-                }
-
-                let (pos, _, rad) = node.parse_point(local_transform, up);
-                new_point.position = pos;
-                new_point.radius = rad;
-
-                for (node, _) in node_children_with_keyword(node, "properties") {
-                    node.parse_properties(&mut new_point.properties);
-                }
-
-                model.special_points.push(new_point);
-            }
-        } else if name == "#eye points" {
-            for (node, _) in node_children_with_keyword(node, "point") {
-                let mut new_point = EyePoint::default();
-
-                let (pos, norm, _) = node.parse_point(local_transform, up);
-                new_point.offset = pos;
-                new_point.normal = norm.try_into().unwrap_or_default();
-
-                for (_, name) in node_children_with_keyword(node, "parent") {
-                    if let Some(idx) = name.find(":") {
-                        if let Ok(val) = &name[(idx + 1)..].parse() {
-                            new_point.attached_subobj = ObjectId(*val);
-                            break;
-                        }
-                    }
-                }
-
-                model.eye_points.push(new_point);
-            }
-        } else if name == "#visual-center" {
-            let (pos, _, _) = node.parse_point(local_transform, up);
-            model.visual_center = pos;
         }
-    }
 
-    for i in 0..model.sub_objects.len() {
-        if let Some(parent) = model.sub_objects[ObjectId(i as u32)].parent {
-            let id = model.sub_objects[ObjectId(i as u32)].obj_id;
-            model.sub_objects[parent].children.push(id);
+        for i in 0..model.sub_objects.len() {
+            if let Some(parent) = model.sub_objects[ObjectId(i as u32)].parent {
+                let id = model.sub_objects[ObjectId(i as u32)].obj_id;
+                model.sub_objects[parent].children.push(id);
+            }
         }
+
+        if model.header.detail_levels.is_empty() && !model.sub_objects.is_empty() {
+            model.header.detail_levels.push(ObjectId(0));
+            // this is pretty bad, but not having any detail levels is worse
+        }
+
+        model.header.num_subobjects = model.sub_objects.len() as _;
+
+        model.untextured_idx = post_parse_fill_untextured_slot(&mut model.sub_objects, &mut model.textures);
+
+        model.recalc_radius();
+        model.recalc_bbox();
+        model.recalc_mass();
+        model.recalc_moi();
     }
-
-    if model.header.detail_levels.is_empty() && !model.sub_objects.is_empty() {
-        model.header.detail_levels.push(ObjectId(0));
-        // this is pretty bad, but not having any detail levels is worse
-    }
-
-    model.header.num_subobjects = model.sub_objects.len() as _;
-
-    model.untextured_idx = post_parse_fill_untextured_slot(&mut model.sub_objects, &mut model.textures);
-
-    model.recalc_radius();
-    model.recalc_bbox();
-    model.recalc_mass();
-    model.recalc_moi();
 }
 
 // =================================================================
@@ -1321,42 +1311,43 @@ struct DaeContext<'a> {
     up: UpAxis,
 }
 
-impl<'a> ParseGeometry<&'a dae::Node> for DaeContext<'a> {
+impl<'a> ParseCtx<'a> for DaeContext<'a> {
+    type Node = &'a dae::Node;
     fn up(&self) -> UpAxis {
         self.up
     }
     fn parse_geometry(&self, node: &&'a dae::Node, transform: Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(TextureId, Vec<PolyVertex>)>) {
-        use dae::source::{SourceReader, ST, XYZ};
-
-        struct VertexContext {
-            vertex_offset: u32,
-            normal_ids: Vec<NormalId>,
-        }
-
-        impl<'a> dae::geom::VertexLoad<'a, VertexContext> for PolyVertex {
-            fn position(ctx: &VertexContext, _: &SourceReader<'a, XYZ>, index: u32) -> Self {
-                PolyVertex {
-                    vertex_id: VertexId(index + ctx.vertex_offset),
-                    normal_id: NormalId(0),
-                    uv: (0.0, 0.0),
-                }
-            }
-            fn add_normal(&mut self, ctx: &VertexContext, _: &SourceReader<'a, XYZ>, index: u32) {
-                self.normal_id = ctx.normal_ids[index as usize];
-            }
-            fn add_texcoord(&mut self, _: &VertexContext, reader: &SourceReader<'a, ST>, index: u32, set: Option<u32>) {
-                assert!(set.map_or(true, |set| set == 0));
-                let [u, v] = reader.get(index as usize);
-                self.uv = (u, v);
-            }
-        }
-
         let mut vertices_out: Vec<Vec3d> = vec![];
         let mut normals_out: Vec<Vec3d> = vec![];
         let mut normals_map: HashMap<Vec3d, NormalId> = HashMap::new();
         let mut polygons_out = vec![];
 
         for geo in &node.instance_geometry {
+            use dae::source::{SourceReader, ST, XYZ};
+
+            struct VertexContext {
+                vertex_offset: u32,
+                normal_ids: Vec<NormalId>,
+            }
+
+            impl<'a> dae::geom::VertexLoad<'a, VertexContext> for PolyVertex {
+                fn position(ctx: &VertexContext, _: &SourceReader<'a, XYZ>, index: u32) -> Self {
+                    PolyVertex {
+                        vertex_id: VertexId(index + ctx.vertex_offset),
+                        normal_id: NormalId(0),
+                        uv: (0.0, 0.0),
+                    }
+                }
+                fn add_normal(&mut self, ctx: &VertexContext, _: &SourceReader<'a, XYZ>, index: u32) {
+                    self.normal_id = ctx.normal_ids[index as usize];
+                }
+                fn add_texcoord(&mut self, _: &VertexContext, reader: &SourceReader<'a, ST>, index: u32, set: Option<u32>) {
+                    assert!(set.map_or(true, |set| set == 0));
+                    let [u, v] = reader.get(index as usize);
+                    self.uv = (u, v);
+                }
+            }
+
             let geo = self.local_maps[&geo.url].element.as_mesh().unwrap();
             let verts = geo.vertices.as_ref().unwrap().importer(&self.local_maps).unwrap();
             let mut vert_ctx = VertexContext { vertex_offset: vertices_out.len() as u32, normal_ids: vec![] };
@@ -1454,7 +1445,7 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
     }
 
     let scene = &document.scene.as_ref().unwrap().instance_visual_scene.as_ref().unwrap().url;
-    parse_top_level_nodes(&mut model, &ctx, &ctx.local_maps.get(scene).unwrap().nodes);
+    ctx.parse_top_level_nodes(&mut model, &ctx.local_maps.get(scene).unwrap().nodes);
     model
 }
 
@@ -1482,8 +1473,9 @@ struct GltfContext {
     buffers: Vec<gltf::buffer::Data>,
 }
 
-impl ParseGeometry<gltf::Node<'_>> for GltfContext {
-    fn parse_geometry(&self, node: &gltf::Node<'_>, transform: Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(TextureId, Vec<PolyVertex>)>) {
+impl<'a> ParseCtx<'a> for GltfContext {
+    type Node = gltf::Node<'a>;
+    fn parse_geometry(&self, node: &Self::Node, transform: Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(TextureId, Vec<PolyVertex>)>) {
         let mut vertices_out: Vec<Vec3d> = vec![];
         let mut normals_out: Vec<Vec3d> = vec![];
         let mut normals_map: HashMap<Vec3d, NormalId> = HashMap::new();
@@ -1555,6 +1547,6 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
     model.path_to_file = path.canonicalize().unwrap_or(path);
     model.textures = gltf.materials().map(|mat| mat.name().unwrap().to_string()).collect();
 
-    parse_top_level_nodes(&mut model, &GltfContext { buffers }, gltf.default_scene().unwrap().nodes());
+    GltfContext { buffers }.parse_top_level_nodes(&mut model, gltf.default_scene().unwrap().nodes());
     model
 }

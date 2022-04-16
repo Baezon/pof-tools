@@ -550,7 +550,7 @@ impl PofToolsGui {
     }
 }
 
-const POF_TOOLS_VERSION: &str = "1.2.0";
+const POF_TOOLS_VERSION: &str = "1.2.1";
 
 fn main() {
     // set up a panic handler to grab the backtrace

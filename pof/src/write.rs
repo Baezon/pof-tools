@@ -829,7 +829,7 @@ fn make_subobj_node(
                 indices.push(uv_len);
                 uv_len += 1;
                 uv_coords.push(vert.uv.0);
-                uv_coords.push(vert.uv.1);
+                uv_coords.push(1. - vert.uv.1);
             }
         }
     }

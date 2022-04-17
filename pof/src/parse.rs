@@ -189,7 +189,7 @@ impl<R: Read + Seek> Parser<R> {
 
                     assert!(self.read_i32()? == 0, "chunked models unimplemented in FSO");
                     let bsp_data_buffer = self.read_byte_buffer()?;
-                    let bsp_data = parse_bsp_data(&bsp_data_buffer)?;
+                    let bsp_data = parse_bsp_data(&bsp_data_buffer, self.version)?;
                     //println!("parsed subobject {}", name);
 
                     assert!(sub_objects[obj_id.0 as usize].is_none());
@@ -223,7 +223,11 @@ impl<R: Read + Seek> Parser<R> {
                     paths = Some(self.read_list(|this| {
                         Ok(Path {
                             name: this.read_string()?,
-                            parent: this.read_string()?,
+                            parent: if this.version >= Version::V20_02 {
+                                this.read_string()?
+                            } else {
+                                String::new()
+                            },
                             points: this.read_list(|this| {
                                 Ok(PathPoint {
                                     position: this.read_vec3d()?,
@@ -267,7 +271,7 @@ impl<R: Read + Seek> Parser<R> {
                                 position: this.read_vec3d()?,
                                 normal: this.read_vec3d()?.try_into().unwrap_or_default(),
                                 // TODO: document this at https://wiki.hard-light.net/index.php/POF_data_structure
-                                offset: if this.version >= Version::V22_01 || this.version == Version::V21_18 {
+                                offset: if this.version >= Version::V21_18 && this.version != Version::V22_00 {
                                     this.read_f32()?
                                 } else {
                                     0.0
@@ -585,8 +589,8 @@ fn parse_chunk_header(buf: &[u8], chunk_type_is_u8: bool) -> io::Result<(u32, &[
     Ok((chunk_type, pointer, &buf[chunk_size..]))
 }
 
-fn parse_bsp_data(mut buf: &[u8]) -> io::Result<BspData> {
-    fn parse_bsp_node(mut buf: &[u8]) -> io::Result<Box<BspNode>> {
+fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
+    fn parse_bsp_node(mut buf: &[u8], version: Version) -> io::Result<Box<BspNode>> {
         // parse the first header
         let (chunk_type, mut chunk, next_chunk) = parse_chunk_header(buf, false)?;
         // the first chunk (after deffpoints) AND the chunks pointed to be SORTNORM's front and back branches should ALWAYS be either another
@@ -600,12 +604,12 @@ fn parse_bsp_data(mut buf: &[u8]) -> io::Result<BspData> {
                     let _reserved = chunk.read_u32::<LE>()?; // just to advance past it
                     let offset = chunk.read_u32::<LE>()?;
                     assert!(offset != 0);
-                    parse_bsp_node(&buf[offset as usize..])?
+                    parse_bsp_node(&buf[offset as usize..], version)?
                 },
                 back: {
                     let offset = chunk.read_u32::<LE>()?;
                     assert!(offset != 0);
-                    parse_bsp_node(&buf[offset as usize..])?
+                    parse_bsp_node(&buf[offset as usize..], version)?
                 },
                 bbox: {
                     let _prelist = chunk.read_u32::<LE>()?; //
@@ -614,7 +618,11 @@ fn parse_bsp_data(mut buf: &[u8]) -> io::Result<BspData> {
                     assert!(_prelist == 0 || buf[_prelist as usize] == 0); //
                     assert!(_postlist == 0 || buf[_postlist as usize] == 0); // And so let's make sure thats the case, they should all lead to ENDOFBRANCH
                     assert!(_online == 0 || buf[_online as usize] == 0); //
-                    read_bbox(&mut chunk)?
+                    if version >= Version::V20_00 {
+                        read_bbox(&mut chunk)?
+                    } else {
+                        BoundingBox::default()
+                    }
                 },
             },
             BspData::BOUNDBOX => BspNode::Leaf {
@@ -707,7 +715,15 @@ fn parse_bsp_data(mut buf: &[u8]) -> io::Result<BspData> {
 
     assert!(num_norms as usize == norms.len());
 
-    let bsp_tree = *parse_bsp_node(next_chunk)?;
+    let mut bsp_tree = *parse_bsp_node(next_chunk, version)?;
+
+    if version < Version::V20_03 {
+        // TODO: always recalculate?
+        bsp_tree.recalculate_centers(&verts);
+        if version < Version::V20_00 {
+            bsp_tree.recalculate_bboxes(&verts);
+        }
+    }
 
     Ok(BspData { collision_tree: bsp_tree, norms, verts })
 }

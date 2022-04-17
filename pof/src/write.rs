@@ -172,10 +172,10 @@ impl Fixup {
     }
 }
 
-pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, bsp_data: &BspData) -> io::Result<()> {
+pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &BspData) -> io::Result<()> {
     const MAX_NORMS_PER_VERT: u8 = 0xCC; //u8::MAX;
 
-    fn write_bsp_node(buf: &mut Vec<u8>, bsp_node: &BspNode) -> io::Result<()> {
+    fn write_bsp_node(buf: &mut Vec<u8>, version: Version, bsp_node: &BspNode) -> io::Result<()> {
         match bsp_node {
             BspNode::Split { normal, point, bbox, front, back } => {
                 let base = buf.len();
@@ -193,13 +193,15 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, bsp_data: &BspData) -> io::Resul
                 buf.write_u32::<LE>(0)?;
                 buf.write_u32::<LE>(0)?;
                 buf.write_u32::<LE>(0)?;
-                bbox.write_to(buf)?;
+                if version >= Version::V20_00 {
+                    bbox.write_to(buf)?;
+                }
 
                 front_offset.finish(buf);
-                write_bsp_node(buf, front)?;
+                write_bsp_node(buf, version, front)?;
 
                 back_offset.finish(buf);
-                write_bsp_node(buf, back)?;
+                write_bsp_node(buf, version, back)?;
 
                 chunk_size_pointer.finish(buf);
             }
@@ -281,7 +283,7 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, bsp_data: &BspData) -> io::Resul
 
     chunk_size_pointer.finish(buf);
 
-    write_bsp_node(buf, &bsp_data.collision_tree)?;
+    write_bsp_node(buf, version, &bsp_data.collision_tree)?;
 
     Ok(())
 }

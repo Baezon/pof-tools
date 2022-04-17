@@ -380,7 +380,7 @@ impl MulAssign<f32> for Mat3d {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct NormalVec3(pub Vec3d);
 
 impl Default for NormalVec3 {
@@ -1251,7 +1251,7 @@ impl Serialize for SubObject {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Dock {
     pub properties: String,
     pub path: Option<PathId>,
@@ -1259,6 +1259,19 @@ pub struct Dock {
     pub fvec: NormalVec3,
     pub uvec: NormalVec3,
 }
+
+impl Default for Dock {
+    fn default() -> Self {
+        Self {
+            properties: Default::default(),
+            path: Default::default(),
+            position: Default::default(),
+            fvec: NormalVec3(Vec3d::new(0., 1., 0.)),
+            uvec: Default::default(),
+        }
+    }
+}
+
 impl Serialize for Dock {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         self.properties.write_to(w)?;

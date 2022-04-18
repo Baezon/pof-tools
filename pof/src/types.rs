@@ -857,7 +857,6 @@ impl ShieldData {
 #[derive(Clone, Debug)]
 pub struct Polygon {
     pub normal: Vec3d,
-    pub center: Vec3d,
     pub radius: f32,
     pub texture: Texturing,
     pub verts: Vec<PolyVertex>,
@@ -924,21 +923,6 @@ impl BspNode {
             }
         }
     }
-
-    pub fn recalculate_centers(&mut self, verts: &[Vec3d]) {
-        match self {
-            BspNode::Split { front, back, .. } => {
-                front.recalculate_centers(verts);
-                back.recalculate_centers(verts);
-            }
-            BspNode::Leaf { poly_list, .. } => {
-                for poly in poly_list {
-                    let vert_iter = poly.verts.iter().map(|polyvert| verts[polyvert.vertex_id.0 as usize]);
-                    poly.center = Vec3d::average(vert_iter);
-                }
-            }
-        }
-    }
 }
 
 pub struct BspNodeIter<'a> {
@@ -984,8 +968,6 @@ impl BspData {
             .map(|mut poly| {
                 let vert_iter = poly.verts.iter().map(|polyvert| verts[polyvert.vertex_id.0 as usize]);
 
-                poly.center = Vec3d::average(vert_iter.clone());
-
                 // generate the normal by averaging the cross products of adjacent edges
                 let mut glm_verts = vert_iter.clone().map(Vec3::from); // first convert to glm vectors
                 poly.normal = if poly.verts.len() == 3 {
@@ -1007,18 +989,18 @@ impl BspData {
                 }
                 .normalize(); // and then normalize
 
-                (BoundingBox::from_vectors(vert_iter).pad(0.01), poly)
+                (Vec3d::average(vert_iter.clone()), BoundingBox::from_vectors(vert_iter).pad(0.01), poly)
             })
             .collect::<Vec<_>>();
 
-        fn recalc_recurse(polygons: &mut [&(BoundingBox, Polygon)]) -> BspNode {
-            if let [&(bbox, ref polygon)] = *polygons {
-                // if theres only one polygon were at the base case
+        fn recalc_recurse(polygons: &mut [&(Vec3d, BoundingBox, Polygon)]) -> BspNode {
+            if let [&(_, bbox, ref polygon)] = *polygons {
+                // if there's only one polygon we're at the base case
                 BspNode::Leaf { bbox, poly_list: vec![polygon.clone()] }
             } else {
-                let bbox = BoundingBox::from_bboxes(polygons.iter().map(|(bbox, _)| bbox)).pad(0.01);
+                let bbox = BoundingBox::from_bboxes(polygons.iter().map(|(_, bbox, _)| bbox)).pad(0.01);
                 let axis = bbox.greatest_dimension();
-                polygons.sort_by(|a, b| a.1.center[axis].partial_cmp(&b.1.center[axis]).unwrap());
+                polygons.sort_by(|a, b| a.0[axis].partial_cmp(&b.0[axis]).unwrap());
 
                 let halfpoint = polygons.len() / 2;
 
@@ -1026,7 +1008,7 @@ impl BspData {
                     front: Box::new(recalc_recurse(&mut polygons[..halfpoint])),
                     back: Box::new(recalc_recurse(&mut polygons[halfpoint..])),
                     bbox,
-                    normal: Vec3d::ZERO, // pretty sure these arent used...
+                    normal: Vec3d::ZERO, // pretty sure these aren't used...
                     point: Vec3d::ZERO,
                 }
             }
@@ -1047,7 +1029,7 @@ impl Serialize for BspData {
 
         crate::write::write_bsp_data(&mut buf, get_version!(), self)?;
 
-        w.write_u32::<LE>((buf.len()) as u32)?;
+        w.write_u32::<LE>(buf.len() as u32)?;
         w.write_all(&buf)
     }
 }

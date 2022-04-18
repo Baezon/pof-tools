@@ -636,7 +636,7 @@ fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
                         poly_list.push(match chunk_type {
                             BspData::TMAPPOLY => {
                                 let normal = read_vec3d(&mut chunk)?;
-                                let center = read_vec3d(&mut chunk)?;
+                                let _center = read_vec3d(&mut chunk)?;
                                 let radius = chunk.read_f32::<LE>()?;
                                 let num_verts = chunk.read_u32::<LE>()?;
                                 let texture = Texturing::Texture(TextureId(chunk.read_u32::<LE>()?));
@@ -648,11 +648,11 @@ fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
                                     })
                                 })?;
 
-                                Polygon { normal, center, radius, verts, texture }
+                                Polygon { normal, radius, verts, texture }
                             }
                             BspData::FLATPOLY => {
                                 let normal = read_vec3d(&mut chunk)?;
-                                let center = read_vec3d(&mut chunk)?;
+                                let _center = read_vec3d(&mut chunk)?;
                                 let radius = chunk.read_f32::<LE>()?;
                                 let num_verts = chunk.read_u32::<LE>()?;
                                 let texture = Texturing::Flat(Color {
@@ -669,7 +669,7 @@ fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
                                     })
                                 })?;
 
-                                Polygon { normal, center, radius, verts, texture }
+                                Polygon { normal, radius, verts, texture }
                             }
                             BspData::ENDOFBRANCH => {
                                 break;
@@ -717,12 +717,8 @@ fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
 
     let mut bsp_tree = *parse_bsp_node(next_chunk, version)?;
 
-    if version < Version::V20_03 {
-        // TODO: always recalculate?
-        bsp_tree.recalculate_centers(&verts);
-        if version < Version::V20_00 {
-            bsp_tree.recalculate_bboxes(&verts);
-        }
+    if version < Version::V20_00 {
+        bsp_tree.recalculate_bboxes(&verts);
     }
 
     Ok(BspData { collision_tree: bsp_tree, norms, verts })
@@ -970,7 +966,6 @@ fn dae_parse_subobject_recursive(
                     &vertices_out,
                     polygons_out.into_iter().map(|(texture, verts)| Polygon {
                         normal: Default::default(),
-                        center: Default::default(),
                         radius: Default::default(),
                         texture,
                         verts,
@@ -1191,7 +1186,6 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
                             &vertices_out,
                             polygons_out.into_iter().map(|(texture, verts)| Polygon {
                                 normal: Default::default(),
-                                center: Default::default(),
                                 radius: Default::default(),
                                 texture,
                                 verts,

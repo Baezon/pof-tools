@@ -175,7 +175,7 @@ impl Fixup {
 pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &BspData) -> io::Result<()> {
     const MAX_NORMS_PER_VERT: u8 = 0xCC; //u8::MAX;
 
-    fn write_bsp_node(buf: &mut Vec<u8>, version: Version, bsp_node: &BspNode) -> io::Result<()> {
+    fn write_bsp_node(buf: &mut Vec<u8>, verts: &[Vec3d], version: Version, bsp_node: &BspNode) -> io::Result<()> {
         match bsp_node {
             BspNode::Split { normal, point, bbox, front, back } => {
                 let base = buf.len();
@@ -198,10 +198,10 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
                 }
 
                 front_offset.finish(buf);
-                write_bsp_node(buf, version, front)?;
+                write_bsp_node(buf, verts, version, front)?;
 
                 back_offset.finish(buf);
-                write_bsp_node(buf, version, back)?;
+                write_bsp_node(buf, verts, version, back)?;
 
                 chunk_size_pointer.finish(buf);
             }
@@ -222,7 +222,8 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
                     let chunk_size_pointer = Fixup::new(buf, base)?;
 
                     poly.normal.write_to(buf)?;
-                    poly.center.write_to(buf)?;
+                    let center = Vec3d::average(poly.verts.iter().map(|polyvert| verts[polyvert.vertex_id.0 as usize]));
+                    center.write_to(buf)?;
                     poly.radius.write_to(buf)?;
                     (poly.verts.len() as u32).write_to(buf)?;
                     poly.texture.write_to(buf)?;
@@ -283,7 +284,7 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
 
     chunk_size_pointer.finish(buf);
 
-    write_bsp_node(buf, version, &bsp_data.collision_tree)?;
+    write_bsp_node(buf, &bsp_data.verts, version, &bsp_data.collision_tree)?;
 
     Ok(())
 }

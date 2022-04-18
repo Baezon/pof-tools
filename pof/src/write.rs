@@ -399,6 +399,7 @@ impl Model {
             write_chunk(w, b"TGUN", Some(&self.turrets))?;
         }
         write_chunk_vec(w, b"FUEL", &self.thruster_banks)?;
+        write_chunk_vec(w, b"GLOW", &self.glow_banks)?;
         if !self.comments.is_empty() {
             write_chunk_raw(w, b"PINF", |w| {
                 let padding_length = (3_usize.wrapping_sub(self.comments.len()) % 4) + 1;

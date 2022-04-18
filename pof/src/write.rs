@@ -177,13 +177,13 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
 
     fn write_bsp_node(buf: &mut Vec<u8>, verts: &[Vec3d], version: Version, bsp_node: &BspNode) -> io::Result<()> {
         match bsp_node {
-            BspNode::Split { normal, point, bbox, front, back } => {
+            BspNode::Split { bbox, front, back } => {
                 let base = buf.len();
                 buf.write_u32::<LE>(BspData::SORTNORM)?;
                 let chunk_size_pointer = Fixup::new(buf, base)?;
 
-                normal.write_to(buf)?;
-                point.write_to(buf)?;
+                Vec3d::ZERO.write_to(buf)?; // plane_normal: unused
+                Vec3d::ZERO.write_to(buf)?; // plane_point: unused
 
                 buf.write_u32::<LE>(0)?;
 

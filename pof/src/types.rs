@@ -865,8 +865,6 @@ pub struct Polygon {
 #[derive(Debug, Clone)]
 pub enum BspNode {
     Split {
-        normal: Vec3d,
-        point: Vec3d,
         bbox: BoundingBox,
         front: Box<BspNode>,
         back: Box<BspNode>,
@@ -1008,8 +1006,6 @@ impl BspData {
                     front: Box::new(recalc_recurse(&mut polygons[..halfpoint])),
                     back: Box::new(recalc_recurse(&mut polygons[halfpoint..])),
                     bbox,
-                    normal: Vec3d::ZERO, // pretty sure these aren't used...
-                    point: Vec3d::ZERO,
                 }
             }
         }

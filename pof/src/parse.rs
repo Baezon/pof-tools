@@ -598,9 +598,9 @@ fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
         //dbg!(chunk_type);
         Ok(Box::new(match chunk_type {
             BspData::SORTNORM => BspNode::Split {
-                normal: read_vec3d(&mut chunk)?,
-                point: read_vec3d(&mut chunk)?,
                 front: {
+                    let _normal = read_vec3d(&mut chunk)?;
+                    let _point = read_vec3d(&mut chunk)?;
                     let _reserved = chunk.read_u32::<LE>()?; // just to advance past it
                     let offset = chunk.read_u32::<LE>()?;
                     assert!(offset != 0);
@@ -613,10 +613,10 @@ fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
                 },
                 bbox: {
                     let _prelist = chunk.read_u32::<LE>()?; //
-                    let _postlist = chunk.read_u32::<LE>()?; // All 3 completely unused, as far as i can tell
+                    let _postlist = chunk.read_u32::<LE>()?; // All 3 completely unused, as far as I can tell
                     let _online = chunk.read_u32::<LE>()?; //
                     assert!(_prelist == 0 || buf[_prelist as usize] == 0); //
-                    assert!(_postlist == 0 || buf[_postlist as usize] == 0); // And so let's make sure thats the case, they should all lead to ENDOFBRANCH
+                    assert!(_postlist == 0 || buf[_postlist as usize] == 0); // And so let's make sure that's the case, they should all lead to ENDOFBRANCH
                     assert!(_online == 0 || buf[_online as usize] == 0); //
                     if version >= Version::V20_00 {
                         read_bbox(&mut chunk)?

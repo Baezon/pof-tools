@@ -603,13 +603,19 @@ fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
                     let _point = read_vec3d(&mut chunk)?;
                     let _reserved = chunk.read_u32::<LE>()?; // just to advance past it
                     let offset = chunk.read_u32::<LE>()?;
-                    assert!(offset != 0);
-                    parse_bsp_node(&buf[offset as usize..], verts, version)?
+                    if offset == 0 {
+                        Box::new(BspNode::Empty)
+                    } else {
+                        parse_bsp_node(&buf[offset as usize..], verts, version)?
+                    }
                 },
                 back: {
                     let offset = chunk.read_u32::<LE>()?;
-                    assert!(offset != 0);
-                    parse_bsp_node(&buf[offset as usize..], verts, version)?
+                    if offset == 0 {
+                        Box::new(BspNode::Empty)
+                    } else {
+                        parse_bsp_node(&buf[offset as usize..], verts, version)?
+                    }
                 },
                 bbox: {
                     let _prelist = chunk.read_u32::<LE>()?; //
@@ -687,6 +693,7 @@ fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
                     _ => BspData::recalculate(verts, poly_list.into_iter()),
                 }
             }
+            BspData::ENDOFBRANCH => BspNode::Empty,
             _ => {
                 unreachable!();
             }

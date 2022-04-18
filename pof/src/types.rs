@@ -212,6 +212,12 @@ impl Display for Vec3d {
 }
 impl Vec3d {
     pub const ZERO: Vec3d = Vec3d { x: 0.0, y: 0.0, z: 0.0 };
+    pub const INFINITY: Vec3d = Vec3d { x: f32::INFINITY, y: f32::INFINITY, z: f32::INFINITY };
+    pub const NEG_INFINITY: Vec3d = Vec3d {
+        x: f32::NEG_INFINITY,
+        y: f32::NEG_INFINITY,
+        z: f32::NEG_INFINITY,
+    };
     pub const fn new(x: f32, y: f32, z: f32) -> Self {
         Vec3d { x, y, z }
     }
@@ -445,8 +451,17 @@ impl Debug for BoundingBox {
     }
 }
 impl BoundingBox {
+    pub const ZERO: Self = Self { min: Vec3d::ZERO, max: Vec3d::ZERO };
+    pub const EMPTY: Self = Self { min: Vec3d::INFINITY, max: Vec3d::NEG_INFINITY };
+    pub fn is_inverted(&self) -> bool {
+        self.max.x < self.min.x || self.max.y < self.min.y || self.max.z < self.min.z
+    }
     pub fn volume(&self) -> f32 {
-        (self.max.x - self.min.x) * (self.max.y - self.min.y) * (self.max.z - self.min.z)
+        if self.is_inverted() {
+            0.
+        } else {
+            (self.max.x - self.min.x) * (self.max.y - self.min.y) * (self.max.z - self.min.z)
+        }
     }
     pub fn x_width(&self) -> f32 {
         self.max.x - self.min.x
@@ -482,25 +497,17 @@ impl BoundingBox {
         self.max.y = self.max.y.max(bbox.max.y);
         self.max.z = self.max.z.max(bbox.max.z);
     }
-    pub fn from_vectors(mut iter: impl Iterator<Item = Vec3d>) -> BoundingBox {
-        if let Some(vec) = iter.next() {
-            iter.fold(BoundingBox { min: vec, max: vec }, |mut bbox, vec| {
-                bbox.expand_vec(vec);
-                bbox
-            })
-        } else {
-            BoundingBox::default()
-        }
+    pub fn from_vectors(iter: impl Iterator<Item = Vec3d>) -> BoundingBox {
+        iter.fold(BoundingBox::EMPTY, |mut bbox, vec| {
+            bbox.expand_vec(vec);
+            bbox
+        })
     }
-    pub fn from_bboxes<'a>(mut iter: impl Iterator<Item = &'a Self>) -> BoundingBox {
-        if let Some(bbox) = iter.next() {
-            iter.fold(*bbox, |mut acc_bbox, bbox| {
-                acc_bbox.expand_bbox(bbox);
-                acc_bbox
-            })
-        } else {
-            BoundingBox::default()
-        }
+    pub fn from_bboxes<'a>(iter: impl Iterator<Item = &'a Self>) -> BoundingBox {
+        iter.fold(BoundingBox::EMPTY, |mut acc_bbox, bbox| {
+            acc_bbox.expand_bbox(bbox);
+            acc_bbox
+        })
     }
 
     pub fn pad(mut self, pad: f32) -> BoundingBox {
@@ -520,6 +527,15 @@ impl BoundingBox {
             }
         }
         true
+    }
+
+    /// Replaces inverted bounding boxes with `Self::ZERO`.
+    pub fn sanitize(&self) -> &Self {
+        if self.is_inverted() {
+            &Self::ZERO
+        } else {
+            self
+        }
     }
 }
 

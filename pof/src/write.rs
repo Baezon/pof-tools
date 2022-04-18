@@ -224,7 +224,7 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
                     poly.normal.write_to(buf)?;
                     let center = Vec3d::average(poly.verts.iter().map(|polyvert| verts[polyvert.vertex_id.0 as usize]));
                     center.write_to(buf)?;
-                    poly.radius.write_to(buf)?;
+                    0f32.write_to(buf)?; // radius: unused
                     (poly.verts.len() as u32).write_to(buf)?;
                     poly.texture.write_to(buf)?;
 

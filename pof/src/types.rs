@@ -857,7 +857,6 @@ impl ShieldData {
 #[derive(Clone, Debug)]
 pub struct Polygon {
     pub normal: Vec3d,
-    pub radius: f32,
     pub texture: Texturing,
     pub verts: Vec<PolyVertex>,
 }

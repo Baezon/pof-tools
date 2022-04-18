@@ -205,7 +205,7 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
 
                 chunk_size_pointer.finish(buf);
             }
-            BspNode::Leaf { bbox, poly_list } => {
+            BspNode::Leaf { bbox, poly } => {
                 let base = buf.len();
                 buf.write_u32::<LE>(BspData::BOUNDBOX)?;
                 let chunk_size_pointer = Fixup::new(buf, base)?;
@@ -213,32 +213,31 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
                 bbox.sanitize().write_to(buf)?;
                 chunk_size_pointer.finish(buf);
 
-                for poly in poly_list {
-                    let base = buf.len();
-                    match &poly.texture {
-                        Texturing::Flat(_) => buf.write_u32::<LE>(BspData::FLATPOLY)?,
-                        Texturing::Texture(_) => buf.write_u32::<LE>(BspData::TMAPPOLY)?,
-                    }
-                    let chunk_size_pointer = Fixup::new(buf, base)?;
-
-                    poly.normal.write_to(buf)?;
-                    let center = Vec3d::average(poly.verts.iter().map(|polyvert| verts[polyvert.vertex_id.0 as usize]));
-                    center.write_to(buf)?;
-                    0f32.write_to(buf)?; // radius: unused
-                    (poly.verts.len() as u32).write_to(buf)?;
-                    poly.texture.write_to(buf)?;
-
-                    for vert in &poly.verts {
-                        u16::try_from(vert.vertex_id.0).unwrap().write_to(buf)?;
-                        u16::try_from(vert.normal_id.0).unwrap().write_to(buf)?;
-                        if matches!(poly.texture, Texturing::Texture(_)) {
-                            vert.uv.write_to(buf)?;
-                        }
-                    }
-
-                    chunk_size_pointer.finish(buf);
+                let base = buf.len();
+                match &poly.texture {
+                    Texturing::Flat(_) => buf.write_u32::<LE>(BspData::FLATPOLY)?,
+                    Texturing::Texture(_) => buf.write_u32::<LE>(BspData::TMAPPOLY)?,
                 }
+                let chunk_size_pointer = Fixup::new(buf, base)?;
+
+                poly.normal.write_to(buf)?;
+                let center = Vec3d::average(poly.verts.iter().map(|polyvert| verts[polyvert.vertex_id.0 as usize]));
+                center.write_to(buf)?;
+                0f32.write_to(buf)?; // radius: unused
+                (poly.verts.len() as u32).write_to(buf)?;
+                poly.texture.write_to(buf)?;
+
+                for vert in &poly.verts {
+                    u16::try_from(vert.vertex_id.0).unwrap().write_to(buf)?;
+                    u16::try_from(vert.normal_id.0).unwrap().write_to(buf)?;
+                    if matches!(poly.texture, Texturing::Texture(_)) {
+                        vert.uv.write_to(buf)?;
+                    }
+                }
+
+                chunk_size_pointer.finish(buf);
             }
+            BspNode::Empty => {}
         }
 
         buf.write_u32::<LE>(BspData::ENDOFBRANCH)?;
@@ -820,21 +819,19 @@ fn make_subobj_node(
     let mut uv_len = 0;
     let mut prim_elems = vec![(vec![], vec![]); materials.len() + 1];
 
-    for (_, polylist) in subobj.bsp_data.collision_tree.leaves() {
-        for poly in polylist {
-            let (vert_count, indices) = &mut prim_elems[match poly.texture {
-                Texturing::Flat(_) => 0,
-                Texturing::Texture(idx) => idx.0 as usize + 1,
-            }];
-            vert_count.push(poly.verts.len() as u32);
-            for vert in poly.verts.iter().rev() {
-                indices.push(vert.vertex_id.0 as _);
-                indices.push(vert.normal_id.0 as _);
-                indices.push(uv_len);
-                uv_len += 1;
-                uv_coords.push(vert.uv.0);
-                uv_coords.push(1. - vert.uv.1);
-            }
+    for (_, poly) in subobj.bsp_data.collision_tree.leaves() {
+        let (vert_count, indices) = &mut prim_elems[match poly.texture {
+            Texturing::Flat(_) => 0,
+            Texturing::Texture(idx) => idx.0 as usize + 1,
+        }];
+        vert_count.push(poly.verts.len() as u32);
+        for vert in poly.verts.iter().rev() {
+            indices.push(vert.vertex_id.0 as _);
+            indices.push(vert.normal_id.0 as _);
+            indices.push(uv_len);
+            uv_len += 1;
+            uv_coords.push(vert.uv.0);
+            uv_coords.push(1. - vert.uv.1);
         }
     }
 

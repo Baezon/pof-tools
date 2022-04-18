@@ -316,12 +316,10 @@ impl GlObjectBuffers {
 
         let bsp_data = &object.bsp_data;
 
-        for (_, poly_list) in bsp_data.collision_tree.leaves() {
-            for poly in poly_list {
-                match poly.texture {
-                    Texturing::Texture(tex) => textures[tex.0 as usize].push(bsp_data, poly),
-                    Texturing::Flat(_) => no_texture.push(bsp_data, poly),
-                }
+        for (_, poly) in bsp_data.collision_tree.leaves() {
+            match poly.texture {
+                Texturing::Texture(tex) => textures[tex.0 as usize].push(bsp_data, poly),
+                Texturing::Flat(_) => no_texture.push(bsp_data, poly),
             }
         }
 

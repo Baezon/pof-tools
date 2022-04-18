@@ -590,7 +590,7 @@ fn parse_chunk_header(buf: &[u8], chunk_type_is_u8: bool) -> io::Result<(u32, &[
 }
 
 fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
-    fn parse_bsp_node(mut buf: &[u8], version: Version) -> io::Result<Box<BspNode>> {
+    fn parse_bsp_node(mut buf: &[u8], verts: &[Vec3d], version: Version) -> io::Result<Box<BspNode>> {
         // parse the first header
         let (chunk_type, mut chunk, next_chunk) = parse_chunk_header(buf, false)?;
         // the first chunk (after deffpoints) AND the chunks pointed to be SORTNORM's front and back branches should ALWAYS be either another
@@ -604,12 +604,12 @@ fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
                     let _reserved = chunk.read_u32::<LE>()?; // just to advance past it
                     let offset = chunk.read_u32::<LE>()?;
                     assert!(offset != 0);
-                    parse_bsp_node(&buf[offset as usize..], version)?
+                    parse_bsp_node(&buf[offset as usize..], verts, version)?
                 },
                 back: {
                     let offset = chunk.read_u32::<LE>()?;
                     assert!(offset != 0);
-                    parse_bsp_node(&buf[offset as usize..], version)?
+                    parse_bsp_node(&buf[offset as usize..], verts, version)?
                 },
                 bbox: {
                     let _prelist = chunk.read_u32::<LE>()?; //
@@ -625,67 +625,68 @@ fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
                     }
                 },
             },
-            BspData::BOUNDBOX => BspNode::Leaf {
-                bbox: read_bbox(&mut chunk)?,
-                poly_list: {
-                    let mut poly_list = vec![];
+            BspData::BOUNDBOX => {
+                let bbox = read_bbox(&mut chunk)?;
+                let mut poly_list = vec![];
+                buf = next_chunk;
+                loop {
+                    let (chunk_type, mut chunk, next_chunk) = parse_chunk_header(buf, false)?;
+                    // keeping looping and pushing new polygons
+                    poly_list.push(match chunk_type {
+                        BspData::TMAPPOLY => {
+                            let normal = read_vec3d(&mut chunk)?;
+                            let _center = read_vec3d(&mut chunk)?;
+                            let _radius = chunk.read_f32::<LE>()?;
+                            let num_verts = chunk.read_u32::<LE>()?;
+                            let texture = Texturing::Texture(TextureId(chunk.read_u32::<LE>()?));
+                            let verts = read_list_n(num_verts as usize, &mut chunk, |chunk| {
+                                Ok(PolyVertex {
+                                    vertex_id: VertexId(chunk.read_u16::<LE>()?.into()),
+                                    normal_id: NormalId(chunk.read_u16::<LE>()?.into()),
+                                    uv: (chunk.read_f32::<LE>()?, chunk.read_f32::<LE>()?),
+                                })
+                            })?;
+
+                            Polygon { normal, verts, texture }
+                        }
+                        BspData::FLATPOLY => {
+                            let normal = read_vec3d(&mut chunk)?;
+                            let _center = read_vec3d(&mut chunk)?;
+                            let _radius = chunk.read_f32::<LE>()?;
+                            let num_verts = chunk.read_u32::<LE>()?;
+                            let texture = Texturing::Flat(Color {
+                                red: chunk.read_u8()?,
+                                green: chunk.read_u8()?,
+                                blue: chunk.read_u8()?,
+                            });
+                            let _ = chunk.read_u8()?; // get rid of padding byte
+                            let verts = read_list_n(num_verts as usize, &mut chunk, |chunk| {
+                                Ok(PolyVertex {
+                                    vertex_id: VertexId(chunk.read_u16::<LE>()?.into()),
+                                    normal_id: NormalId(chunk.read_u16::<LE>()?.into()),
+                                    uv: Default::default(),
+                                })
+                            })?;
+
+                            Polygon { normal, verts, texture }
+                        }
+                        BspData::ENDOFBRANCH => {
+                            break;
+                        }
+                        _ => {
+                            unreachable!("unknown chunk type! {}", chunk_type);
+                        }
+                    });
+
                     buf = next_chunk;
-                    loop {
-                        let (chunk_type, mut chunk, next_chunk) = parse_chunk_header(buf, false)?;
-                        // keeping looping and pushing new polygons
-                        poly_list.push(match chunk_type {
-                            BspData::TMAPPOLY => {
-                                let normal = read_vec3d(&mut chunk)?;
-                                let _center = read_vec3d(&mut chunk)?;
-                                let _radius = chunk.read_f32::<LE>()?;
-                                let num_verts = chunk.read_u32::<LE>()?;
-                                let texture = Texturing::Texture(TextureId(chunk.read_u32::<LE>()?));
-                                let verts = read_list_n(num_verts as usize, &mut chunk, |chunk| {
-                                    Ok(PolyVertex {
-                                        vertex_id: VertexId(chunk.read_u16::<LE>()?.into()),
-                                        normal_id: NormalId(chunk.read_u16::<LE>()?.into()),
-                                        uv: (chunk.read_f32::<LE>()?, chunk.read_f32::<LE>()?),
-                                    })
-                                })?;
-
-                                Polygon { normal, verts, texture }
-                            }
-                            BspData::FLATPOLY => {
-                                let normal = read_vec3d(&mut chunk)?;
-                                let _center = read_vec3d(&mut chunk)?;
-                                let _radius = chunk.read_f32::<LE>()?;
-                                let num_verts = chunk.read_u32::<LE>()?;
-                                let texture = Texturing::Flat(Color {
-                                    red: chunk.read_u8()?,
-                                    green: chunk.read_u8()?,
-                                    blue: chunk.read_u8()?,
-                                });
-                                let _ = chunk.read_u8()?; // get rid of padding byte
-                                let verts = read_list_n(num_verts as usize, &mut chunk, |chunk| {
-                                    Ok(PolyVertex {
-                                        vertex_id: VertexId(chunk.read_u16::<LE>()?.into()),
-                                        normal_id: NormalId(chunk.read_u16::<LE>()?.into()),
-                                        uv: Default::default(),
-                                    })
-                                })?;
-
-                                Polygon { normal, verts, texture }
-                            }
-                            BspData::ENDOFBRANCH => {
-                                break;
-                            }
-                            _ => {
-                                unreachable!("unknown chunk type! {}", chunk_type);
-                            }
-                        });
-
-                        buf = next_chunk;
-                    }
-                    //assert!(!poly_list.is_empty());
-                    //println!("leaf length {}", poly_list.len());
-                    poly_list
-                },
-            },
+                }
+                //println!("leaf length {}", poly_list.len());
+                match poly_list.len() {
+                    0 => BspNode::Empty,
+                    1 => BspNode::Leaf { bbox, poly: poly_list.into_iter().next().unwrap() },
+                    _ => BspData::recalculate(verts, poly_list.into_iter()),
+                }
+            }
             _ => {
                 unreachable!();
             }
@@ -715,7 +716,7 @@ fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
 
     assert!(num_norms as usize == norms.len());
 
-    let mut bsp_tree = *parse_bsp_node(next_chunk, version)?;
+    let mut bsp_tree = *parse_bsp_node(next_chunk, &verts, version)?;
 
     if version < Version::V20_00 {
         bsp_tree.recalculate_bboxes(&verts);

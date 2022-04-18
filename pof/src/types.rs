@@ -886,18 +886,21 @@ pub enum BspNode {
     },
     Leaf {
         bbox: BoundingBox,
-        poly_list: Vec<Polygon>,
+        poly: Polygon,
     },
+    Empty,
 }
 impl Default for BspNode {
     fn default() -> Self {
-        Self::Leaf { bbox: BoundingBox::default(), poly_list: vec![] }
+        Self::Empty
     }
 }
 impl BspNode {
     pub fn bbox(&self) -> &BoundingBox {
-        let (BspNode::Split { bbox, .. } | BspNode::Leaf { bbox, .. }) = self;
-        bbox
+        match self {
+            BspNode::Split { bbox, .. } | BspNode::Leaf { bbox, .. } => bbox,
+            BspNode::Empty => &BoundingBox::EMPTY,
+        }
     }
 
     pub fn leaves(&self) -> BspNodeIter<'_> {
@@ -907,7 +910,8 @@ impl BspNode {
     pub fn sum_of_bboxes(&self) -> f32 {
         match self {
             BspNode::Split { bbox, front, back, .. } => bbox.volume() + front.sum_of_bboxes() + back.sum_of_bboxes(),
-            BspNode::Leaf { bbox, poly_list } => bbox.volume() * poly_list.len() as f32,
+            BspNode::Leaf { bbox, .. } => bbox.volume(),
+            BspNode::Empty => 0.,
         }
     }
 
@@ -918,7 +922,8 @@ impl BspNode {
                 let (depth2, sz2) = back.sum_depth_and_size();
                 (depth1 + depth2 + sz1 + sz2, sz1 + sz2)
             }
-            BspNode::Leaf { poly_list, .. } => (0, poly_list.len() as u32),
+            BspNode::Leaf { .. } => (0, 1),
+            BspNode::Empty => (0, 0),
         }
     }
 
@@ -930,10 +935,10 @@ impl BspNode {
                 *bbox = *front.bbox();
                 bbox.expand_bbox(back.bbox());
             }
-            BspNode::Leaf { bbox, poly_list } => {
-                let vert_ids = poly_list.iter().flat_map(|poly| &poly.verts);
-                *bbox = BoundingBox::from_vectors(vert_ids.map(|vert| verts[vert.vertex_id.0 as usize]));
+            BspNode::Leaf { bbox, poly } => {
+                *bbox = BoundingBox::from_vectors(poly.verts.iter().map(|vert| verts[vert.vertex_id.0 as usize]));
             }
+            BspNode::Empty => {}
         }
     }
 }
@@ -943,7 +948,7 @@ pub struct BspNodeIter<'a> {
 }
 
 impl<'a> Iterator for BspNodeIter<'a> {
-    type Item = (&'a BoundingBox, &'a Vec<Polygon>);
+    type Item = (&'a BoundingBox, &'a Polygon);
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -952,9 +957,10 @@ impl<'a> Iterator for BspNodeIter<'a> {
                     self.stack.push(back);
                     self.stack.push(front);
                 }
-                BspNode::Leaf { bbox, poly_list } => {
-                    return Some((bbox, poly_list));
+                BspNode::Leaf { bbox, poly } => {
+                    return Some((bbox, poly));
                 }
+                BspNode::Empty => {}
             }
         }
     }
@@ -1009,7 +1015,7 @@ impl BspData {
         fn recalc_recurse(polygons: &mut [&(Vec3d, BoundingBox, Polygon)]) -> BspNode {
             if let [&(_, bbox, ref polygon)] = *polygons {
                 // if there's only one polygon we're at the base case
-                BspNode::Leaf { bbox, poly_list: vec![polygon.clone()] }
+                BspNode::Leaf { bbox, poly: polygon.clone() }
             } else {
                 let bbox = BoundingBox::from_bboxes(polygons.iter().map(|(_, bbox, _)| bbox)).pad(0.01);
                 let axis = bbox.greatest_dimension();
@@ -1026,7 +1032,7 @@ impl BspData {
         }
 
         if polygons.is_empty() {
-            BspNode::Leaf { bbox: BoundingBox::default(), poly_list: vec![] }
+            BspNode::Empty
         } else {
             recalc_recurse(&mut polygons.iter().collect::<Vec<_>>())
         }
@@ -1606,12 +1612,7 @@ impl Model {
 
         subobj.bsp_data.collision_tree.recalculate_bboxes(&subobj.bsp_data.verts);
 
-        subobj.bbox = {
-            match subobj.bsp_data.collision_tree {
-                BspNode::Split { bbox, .. } => bbox,
-                BspNode::Leaf { bbox, .. } => bbox,
-            }
-        };
+        subobj.bbox = *subobj.bsp_data.collision_tree.bbox();
 
         if transform_offset {
             subobj.offset = matrix * subobj.offset;

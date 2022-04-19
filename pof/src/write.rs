@@ -197,11 +197,15 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
                     bbox.sanitize().write_to(buf)?;
                 }
 
-                front_offset.finish(buf);
-                write_bsp_node(buf, verts, version, front)?;
+                if !matches!(**front, BspNode::Empty) {
+                    front_offset.finish(buf);
+                    write_bsp_node(buf, verts, version, front)?;
+                } // otherwise front_offset = 0
 
-                back_offset.finish(buf);
-                write_bsp_node(buf, verts, version, back)?;
+                if !matches!(**back, BspNode::Empty) {
+                    back_offset.finish(buf);
+                    write_bsp_node(buf, verts, version, back)?;
+                } // otherwise back_offset = 0
 
                 chunk_size_pointer.finish(buf);
             }

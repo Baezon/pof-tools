@@ -129,7 +129,7 @@ pub(crate) fn write_shield_node(buf: &mut Vec<u8>, shield_node: &ShieldNode, chu
             write_chunk_type!(ShieldNode::SPLIT)?;
             let chunk_size_pointer = Fixup::new(buf, base)?;
 
-            bbox.write_to(buf)?;
+            bbox.sanitize().write_to(buf)?;
             let front_offset = Fixup::new(buf, base)?;
             let back_offset = Fixup::new(buf, base)?;
 
@@ -146,7 +146,7 @@ pub(crate) fn write_shield_node(buf: &mut Vec<u8>, shield_node: &ShieldNode, chu
             write_chunk_type!(ShieldNode::LEAF)?;
             let chunk_size_pointer = Fixup::new(buf, base)?;
 
-            bbox.write_to(buf)?;
+            bbox.sanitize().write_to(buf)?;
             poly_list.write_to(buf)?;
             chunk_size_pointer.finish(buf);
         }
@@ -175,9 +175,9 @@ impl Fixup {
 pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &BspData) -> io::Result<()> {
     const MAX_NORMS_PER_VERT: u8 = 0xCC; //u8::MAX;
 
-    fn write_bsp_node(buf: &mut Vec<u8>, version: Version, bsp_node: &BspNode) -> io::Result<()> {
+    fn write_bsp_node(buf: &mut Vec<u8>, verts: &[Vec3d], version: Version, bsp_node: &BspNode) -> io::Result<()> {
         match bsp_node {
-            BspNode::Split { normal, point, bbox, front, back } => {
+            BspNode::Split { bbox, front, back } => {
                 let base = buf.len();
                 if version >= Version::V23_00 {
                     buf.write_u32::<LE>(BspData::SORTNORM2)?;
@@ -190,18 +190,22 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
                     let front_offset = Fixup::new(buf, base)?;
                     let back_offset = Fixup::new(buf, base)?;
 
-                    front_offset.finish(buf);
-                    write_bsp_node(buf, version, front)?;
+                    if !matches!(**front, BspNode::Empty) {
+                        front_offset.finish(buf);
+                        write_bsp_node(buf, verts, version, front)?;
+                    } // otherwise front_offset = 0
 
-                    back_offset.finish(buf);
-                    write_bsp_node(buf, version, back)?;
+                    if !matches!(**back, BspNode::Empty) {
+                        back_offset.finish(buf);
+                        write_bsp_node(buf, verts, version, back)?;
+                    } // otherwise back_offset = 0
 
                     bbox.write_to(buf)?;
 
                     chunk_size_pointer.finish(buf);
                 } else {
-                    normal.write_to(buf)?;
-                    point.write_to(buf)?;
+                    Vec3d::ZERO.write_to(buf)?; // plane_normal: unused
+                    Vec3d::ZERO.write_to(buf)?; // plane_point: unused
 
                     buf.write_u32::<LE>(0)?;
 
@@ -212,27 +216,29 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
                     buf.write_u32::<LE>(0)?;
                     buf.write_u32::<LE>(0)?;
                     if version >= Version::V20_00 {
-                        bbox.write_to(buf)?;
+                        bbox.sanitize().write_to(buf)?;
                     }
 
-                    front_offset.finish(buf);
-                    write_bsp_node(buf, version, front)?;
+                    if !matches!(**front, BspNode::Empty) {
+                        front_offset.finish(buf);
+                        write_bsp_node(buf, verts, version, front)?;
+                    } // otherwise front_offset = 0
 
-                    back_offset.finish(buf);
-                    write_bsp_node(buf, version, back)?;
+                    if !matches!(**back, BspNode::Empty) {
+                        back_offset.finish(buf);
+                        write_bsp_node(buf, verts, version, back)?;
+                    } // otherwise back_offset = 0
 
                     chunk_size_pointer.finish(buf);
                 }
             }
-            BspNode::Leaf { bbox, poly_list } => {
+            BspNode::Leaf { bbox, poly } => {
                 let base = buf.len();
                 if version >= Version::V23_00 {
                     buf.write_u32::<LE>(BspData::TMAPPOLY2)?;
                     let chunk_size_pointer = Fixup::new(buf, base)?;
 
                     bbox.write_to(buf)?;
-
-                    let poly = &poly_list[0];
 
                     poly.normal.write_to(buf)?;
                     poly.texture.write_to(buf)?;
@@ -249,30 +255,29 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
                     buf.write_u32::<LE>(BspData::BOUNDBOX)?;
                     let chunk_size_pointer = Fixup::new(buf, base)?;
 
-                    bbox.write_to(buf)?;
+                    bbox.sanitize().write_to(buf)?;
                     chunk_size_pointer.finish(buf);
 
-                    for poly in poly_list {
-                        let base = buf.len();
-                        buf.write_u32::<LE>(BspData::TMAPPOLY)?;
-                        let chunk_size_pointer = Fixup::new(buf, base)?;
+                    let base = buf.len();
+                    buf.write_u32::<LE>(BspData::TMAPPOLY)?;
+                    let chunk_size_pointer = Fixup::new(buf, base)?;
 
-                        poly.normal.write_to(buf)?;
-                        Vec3d::ZERO.write_to(buf)?;
-                        0f32.write_to(buf)?;
-                        (poly.verts.len() as u32).write_to(buf)?;
-                        poly.texture.write_to(buf)?;
+                    poly.normal.write_to(buf)?;
+                    Vec3d::ZERO.write_to(buf)?;
+                    0f32.write_to(buf)?;
+                    (poly.verts.len() as u32).write_to(buf)?;
+                    poly.texture.write_to(buf)?;
 
-                        for vert in &poly.verts {
-                            u16::try_from(vert.vertex_id.0).unwrap().write_to(buf)?;
-                            u16::try_from(vert.normal_id.0).unwrap().write_to(buf)?;
-                            vert.uv.write_to(buf)?;
-                        }
-
-                        chunk_size_pointer.finish(buf);
+                    for vert in &poly.verts {
+                        u16::try_from(vert.vertex_id.0).unwrap().write_to(buf)?;
+                        u16::try_from(vert.normal_id.0).unwrap().write_to(buf)?;
+                        vert.uv.write_to(buf)?;
                     }
+
+                    chunk_size_pointer.finish(buf);
                 }
             }
+            BspNode::Empty => {}
         }
 
         if version < Version::V23_00 {
@@ -320,7 +325,7 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
 
     chunk_size_pointer.finish(buf);
 
-    write_bsp_node(buf, version, &bsp_data.collision_tree)?;
+    write_bsp_node(buf, &bsp_data.verts, version, &bsp_data.collision_tree)?;
 
     Ok(())
 }
@@ -394,7 +399,7 @@ impl Model {
                 self.header.max_radius.write_to(w)?;
                 self.header.obj_flags.write_to(w)?;
             }
-            self.header.bbox.write_to(w)?;
+            self.header.bbox.sanitize().write_to(w)?;
             self.header.detail_levels.write_to(w)?;
             self.sub_objects
                 .iter()
@@ -857,18 +862,16 @@ fn make_subobj_node(
     let mut uv_len = 0;
     let mut prim_elems = vec![(vec![], vec![]); materials.len() + 1];
 
-    for (_, polylist) in subobj.bsp_data.collision_tree.leaves() {
-        for poly in polylist {
-            let (vert_count, indices) = &mut prim_elems[poly.texture.0 as usize + 1];
-            vert_count.push(poly.verts.len() as u32);
-            for vert in poly.verts.iter().rev() {
-                indices.push(vert.vertex_id.0 as _);
-                indices.push(vert.normal_id.0 as _);
-                indices.push(uv_len);
-                uv_len += 1;
-                uv_coords.push(vert.uv.0);
-                uv_coords.push(1. - vert.uv.1);
-            }
+    for (_, poly) in subobj.bsp_data.collision_tree.leaves() {
+        let (vert_count, indices) = &mut prim_elems[poly.texture.0 as usize + 1];
+        vert_count.push(poly.verts.len() as u32);
+        for vert in poly.verts.iter().rev() {
+            indices.push(vert.vertex_id.0 as _);
+            indices.push(vert.normal_id.0 as _);
+            indices.push(uv_len);
+            uv_len += 1;
+            uv_coords.push(vert.uv.0);
+            uv_coords.push(1. - vert.uv.1);
         }
     }
 

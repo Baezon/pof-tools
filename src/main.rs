@@ -316,10 +316,8 @@ impl GlObjectBuffers {
 
         let bsp_data = &object.bsp_data;
 
-        for (_, poly_list) in bsp_data.collision_tree.leaves() {
-            for poly in poly_list {
-                textures[poly.texture.0 as usize].push(bsp_data, poly);
-            }
+        for (_, poly) in bsp_data.collision_tree.leaves() {
+            textures[poly.texture.0 as usize].push(bsp_data, poly);
         }
 
         let mut buffers = vec![];
@@ -970,6 +968,7 @@ fn main() {
                                     bbox
                                 }
                                 BspNode::Leaf { bbox, .. } => bbox,
+                                BspNode::Empty => continue,
                             };
 
                             let mut mat = glm::scaling(&(bbox.max - bbox.min).into());

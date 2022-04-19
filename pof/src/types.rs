@@ -210,6 +210,12 @@ impl Display for Vec3d {
 }
 impl Vec3d {
     pub const ZERO: Vec3d = Vec3d { x: 0.0, y: 0.0, z: 0.0 };
+    pub const INFINITY: Vec3d = Vec3d { x: f32::INFINITY, y: f32::INFINITY, z: f32::INFINITY };
+    pub const NEG_INFINITY: Vec3d = Vec3d {
+        x: f32::NEG_INFINITY,
+        y: f32::NEG_INFINITY,
+        z: f32::NEG_INFINITY,
+    };
     pub const fn new(x: f32, y: f32, z: f32) -> Self {
         Vec3d { x, y, z }
     }
@@ -443,8 +449,17 @@ impl Debug for BoundingBox {
     }
 }
 impl BoundingBox {
+    pub const ZERO: Self = Self { min: Vec3d::ZERO, max: Vec3d::ZERO };
+    pub const EMPTY: Self = Self { min: Vec3d::INFINITY, max: Vec3d::NEG_INFINITY };
+    pub fn is_inverted(&self) -> bool {
+        self.max.x < self.min.x || self.max.y < self.min.y || self.max.z < self.min.z
+    }
     pub fn volume(&self) -> f32 {
-        (self.max.x - self.min.x) * (self.max.y - self.min.y) * (self.max.z - self.min.z)
+        if self.is_inverted() {
+            0.
+        } else {
+            (self.max.x - self.min.x) * (self.max.y - self.min.y) * (self.max.z - self.min.z)
+        }
     }
     pub fn x_width(&self) -> f32 {
         self.max.x - self.min.x
@@ -480,25 +495,17 @@ impl BoundingBox {
         self.max.y = self.max.y.max(bbox.max.y);
         self.max.z = self.max.z.max(bbox.max.z);
     }
-    pub fn from_vectors(mut iter: impl Iterator<Item = Vec3d>) -> BoundingBox {
-        if let Some(vec) = iter.next() {
-            iter.fold(BoundingBox { min: vec, max: vec }, |mut bbox, vec| {
-                bbox.expand_vec(vec);
-                bbox
-            })
-        } else {
-            BoundingBox::default()
-        }
+    pub fn from_vectors(iter: impl Iterator<Item = Vec3d>) -> BoundingBox {
+        iter.fold(BoundingBox::EMPTY, |mut bbox, vec| {
+            bbox.expand_vec(vec);
+            bbox
+        })
     }
-    pub fn from_bboxes<'a>(mut iter: impl Iterator<Item = &'a Self>) -> BoundingBox {
-        if let Some(bbox) = iter.next() {
-            iter.fold(*bbox, |mut acc_bbox, bbox| {
-                acc_bbox.expand_bbox(bbox);
-                acc_bbox
-            })
-        } else {
-            BoundingBox::default()
-        }
+    pub fn from_bboxes<'a>(iter: impl Iterator<Item = &'a Self>) -> BoundingBox {
+        iter.fold(BoundingBox::EMPTY, |mut acc_bbox, bbox| {
+            acc_bbox.expand_bbox(bbox);
+            acc_bbox
+        })
     }
 
     pub fn pad(mut self, pad: f32) -> BoundingBox {
@@ -518,6 +525,15 @@ impl BoundingBox {
             }
         }
         true
+    }
+
+    /// Replaces inverted bounding boxes with `Self::ZERO`.
+    pub fn sanitize(&self) -> &Self {
+        if self.is_inverted() {
+            &Self::ZERO
+        } else {
+            self
+        }
     }
 }
 
@@ -860,67 +876,22 @@ pub struct Polygon {
     pub verts: Vec<PolyVertex>,
 }
 
-pub struct BspNodeIterMut<'a> {
-    stack: Vec<&'a mut BspNode>,
-}
-
-impl<'a> Iterator for BspNodeIterMut<'a> {
-    type Item = (&'a mut BoundingBox, &'a mut Vec<Polygon>);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            match self.stack.pop()? {
-                BspNode::Split { front, back, .. } => {
-                    self.stack.push(back);
-                    self.stack.push(front);
-                }
-                BspNode::Leaf { bbox, poly_list } => {
-                    return Some((bbox, poly_list));
-                }
-            }
-        }
-    }
-}
-
-pub struct BspNodeIter<'a> {
-    stack: Vec<&'a BspNode>,
-}
-
-impl<'a> Iterator for BspNodeIter<'a> {
-    type Item = (&'a BoundingBox, &'a Vec<Polygon>);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            match self.stack.pop()? {
-                BspNode::Split { front, back, .. } => {
-                    self.stack.push(back);
-                    self.stack.push(front);
-                }
-                BspNode::Leaf { bbox, poly_list } => {
-                    return Some((bbox, poly_list));
-                }
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum BspNode {
     Split {
-        normal: Vec3d,
-        point: Vec3d,
         bbox: BoundingBox,
         front: Box<BspNode>,
         back: Box<BspNode>,
     },
     Leaf {
         bbox: BoundingBox,
-        poly_list: Vec<Polygon>,
+        poly: Polygon,
     },
+    Empty,
 }
 impl Default for BspNode {
     fn default() -> Self {
-        Self::Leaf { bbox: BoundingBox::default(), poly_list: vec![] }
+        Self::Empty
     }
 }
 impl BspNode {
@@ -929,8 +900,10 @@ impl BspNode {
     }
 
     pub fn bbox(&self) -> &BoundingBox {
-        let (BspNode::Split { bbox, .. } | BspNode::Leaf { bbox, .. }) = self;
-        bbox
+        match self {
+            BspNode::Split { bbox, .. } | BspNode::Leaf { bbox, .. } => bbox,
+            BspNode::Empty => &BoundingBox::EMPTY,
+        }
     }
 
     pub fn leaves(&self) -> BspNodeIter<'_> {
@@ -940,7 +913,8 @@ impl BspNode {
     pub fn sum_of_bboxes(&self) -> f32 {
         match self {
             BspNode::Split { bbox, front, back, .. } => bbox.volume() + front.sum_of_bboxes() + back.sum_of_bboxes(),
-            BspNode::Leaf { bbox, poly_list } => bbox.volume() * poly_list.len() as f32,
+            BspNode::Leaf { bbox, .. } => bbox.volume(),
+            BspNode::Empty => 0.,
         }
     }
 
@@ -951,7 +925,8 @@ impl BspNode {
                 let (depth2, sz2) = back.sum_depth_and_size();
                 (depth1 + depth2 + sz1 + sz2, sz1 + sz2)
             }
-            BspNode::Leaf { poly_list, .. } => (0, poly_list.len() as u32),
+            BspNode::Leaf { .. } => (0, 1),
+            BspNode::Empty => (0, 0),
         }
     }
 
@@ -963,9 +938,55 @@ impl BspNode {
                 *bbox = *front.bbox();
                 bbox.expand_bbox(back.bbox());
             }
-            BspNode::Leaf { bbox, poly_list } => {
-                let vert_ids = poly_list.iter().flat_map(|poly| &poly.verts);
-                *bbox = BoundingBox::from_vectors(vert_ids.map(|vert| verts[vert.vertex_id.0 as usize]));
+            BspNode::Leaf { bbox, poly } => {
+                *bbox = BoundingBox::from_vectors(poly.verts.iter().map(|vert| verts[vert.vertex_id.0 as usize]));
+            }
+            BspNode::Empty => {}
+        }
+    }
+}
+
+pub struct BspNodeIterMut<'a> {
+    stack: Vec<&'a mut BspNode>,
+}
+
+impl<'a> Iterator for BspNodeIterMut<'a> {
+    type Item = (&'a mut BoundingBox, &'a mut Polygon);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.stack.pop()? {
+                BspNode::Split { front, back, .. } => {
+                    self.stack.push(back);
+                    self.stack.push(front);
+                }
+                BspNode::Leaf { bbox, poly } => {
+                    return Some((bbox, poly));
+                }
+                BspNode::Empty => {}
+            }
+        }
+    }
+}
+
+pub struct BspNodeIter<'a> {
+    stack: Vec<&'a BspNode>,
+}
+
+impl<'a> Iterator for BspNodeIter<'a> {
+    type Item = (&'a BoundingBox, &'a Polygon);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.stack.pop()? {
+                BspNode::Split { front, back, .. } => {
+                    self.stack.push(back);
+                    self.stack.push(front);
+                }
+                BspNode::Leaf { bbox, poly } => {
+                    return Some((bbox, poly));
+                }
+                BspNode::Empty => {}
             }
         }
     }
@@ -1021,8 +1042,8 @@ impl BspData {
 
         fn recalc_recurse(polygons: &mut [&(Vec3d, BoundingBox, Polygon)]) -> BspNode {
             if let [&(_, bbox, ref polygon)] = *polygons {
-                // if theres only one polygon were at the base case
-                BspNode::Leaf { bbox, poly_list: vec![polygon.clone()] }
+                // if there's only one polygon we're at the base case
+                BspNode::Leaf { bbox, poly: polygon.clone() }
             } else {
                 let bbox = BoundingBox::from_bboxes(polygons.iter().map(|(_, bbox, _)| bbox)).pad(0.01);
                 let axis = bbox.greatest_dimension();
@@ -1034,14 +1055,12 @@ impl BspData {
                     front: Box::new(recalc_recurse(&mut polygons[..halfpoint])),
                     back: Box::new(recalc_recurse(&mut polygons[halfpoint..])),
                     bbox,
-                    normal: Vec3d::ZERO, // pretty sure these arent used...
-                    point: Vec3d::ZERO,
                 }
             }
         }
 
         if polygons.is_empty() {
-            BspNode::Leaf { bbox: BoundingBox::default(), poly_list: vec![] }
+            BspNode::Empty
         } else {
             recalc_recurse(&mut polygons.iter().collect::<Vec<_>>())
         }
@@ -1055,7 +1074,7 @@ impl Serialize for BspData {
 
         crate::write::write_bsp_data(&mut buf, get_version(), self)?;
 
-        w.write_u32::<LE>((buf.len()) as u32)?;
+        w.write_u32::<LE>(buf.len() as u32)?;
         w.write_all(&buf)
     }
 }
@@ -1624,12 +1643,7 @@ impl Model {
 
         subobj.bsp_data.collision_tree.recalculate_bboxes(&subobj.bsp_data.verts);
 
-        subobj.bbox = {
-            match subobj.bsp_data.collision_tree {
-                BspNode::Split { bbox, .. } => bbox,
-                BspNode::Leaf { bbox, .. } => bbox,
-            }
-        };
+        subobj.bbox = *subobj.bsp_data.collision_tree.bbox();
 
         if transform_offset {
             subobj.offset = matrix * subobj.offset;
@@ -1773,15 +1787,13 @@ impl Model {
 pub fn post_parse_fill_untextured_slot(sub_objects: &mut Vec<SubObject>, textures: &mut Vec<String>) -> Option<TextureId> {
     let mut untextured_anywhere = false;
     for subobj in sub_objects.iter_mut() {
-        for (_, poly_list) in subobj.bsp_data.collision_tree.leaves_mut() {
-            for poly in poly_list {
-                if poly.texture == TextureId(u32::MAX) {
-                    if !untextured_anywhere {
-                        untextured_anywhere = true;
-                        textures.push(format!("Untextured"));
-                    }
-                    poly.texture = TextureId((textures.len() - 1) as u32);
+        for (_, poly) in subobj.bsp_data.collision_tree.leaves_mut() {
+            if poly.texture == TextureId(u32::MAX) {
+                if !untextured_anywhere {
+                    untextured_anywhere = true;
+                    textures.push(format!("Untextured"));
                 }
+                poly.texture = TextureId((textures.len() - 1) as u32);
             }
         }
     }

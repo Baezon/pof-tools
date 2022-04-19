@@ -565,7 +565,7 @@ pub struct Path {
 impl Serialize for Path {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         self.name.write_to(w)?;
-        if get_version!() >= Version::V20_02 {
+        if get_version() >= Version::V20_02 {
             self.parent.write_to(w)?;
         }
         self.points.write_to(w)
@@ -969,21 +969,6 @@ impl BspNode {
             }
         }
     }
-
-    pub fn recalculate_centers(&mut self, verts: &[Vec3d]) {
-        match self {
-            BspNode::Split { front, back, .. } => {
-                front.recalculate_centers(verts);
-                back.recalculate_centers(verts);
-            }
-            BspNode::Leaf { poly_list, .. } => {
-                for poly in poly_list {
-                    let vert_iter = poly.verts.iter().map(|polyvert| verts[polyvert.vertex_id.0 as usize]);
-                    poly.center = Vec3d::average(vert_iter);
-                }
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1068,7 +1053,7 @@ impl Serialize for BspData {
 
         let mut buf = vec![];
 
-        crate::write::write_bsp_data(&mut buf, get_version!(), self)?;
+        crate::write::write_bsp_data(&mut buf, get_version(), self)?;
 
         w.write_u32::<LE>((buf.len()) as u32)?;
         w.write_all(&buf)

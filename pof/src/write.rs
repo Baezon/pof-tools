@@ -179,75 +179,106 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
         match bsp_node {
             BspNode::Split { normal, point, bbox, front, back } => {
                 let base = buf.len();
-                buf.write_u32::<LE>(BspData::SORTNORM)?;
-                let chunk_size_pointer = Fixup::new(buf, base)?;
-
-                normal.write_to(buf)?;
-                point.write_to(buf)?;
-
-                buf.write_u32::<LE>(0)?;
-
-                let front_offset = Fixup::new(buf, base)?;
-                let back_offset = Fixup::new(buf, base)?;
-
-                buf.write_u32::<LE>(0)?;
-                buf.write_u32::<LE>(0)?;
-                buf.write_u32::<LE>(0)?;
-                if version >= Version::V20_00 {
-                    bbox.write_to(buf)?;
+                if version >= Version::V23_00 {
+                    buf.write_u32::<LE>(BspData::SORTNORM2)?;
+                } else {
+                    buf.write_u32::<LE>(BspData::SORTNORM)?;
                 }
-
-                front_offset.finish(buf);
-                write_bsp_node(buf, version, front)?;
-
-                back_offset.finish(buf);
-                write_bsp_node(buf, version, back)?;
-
-                chunk_size_pointer.finish(buf);
-            }
-            BspNode::Leaf { bbox, poly_list } => {
-                let base = buf.len();
-                buf.write_u32::<LE>(BspData::BOUNDBOX)?;
                 let chunk_size_pointer = Fixup::new(buf, base)?;
 
-                bbox.write_to(buf)?;
-                chunk_size_pointer.finish(buf);
+                if version >= Version::V23_00 {
+                    let front_offset = Fixup::new(buf, base)?;
+                    let back_offset = Fixup::new(buf, base)?;
 
-                for poly in poly_list {
-                    let base = buf.len();
-                    if get_version() >= Version::V23_00 {
-                        buf.write_u32::<LE>(BspData::TMAPPOLY2)?
-                    } else {
-                        buf.write_u32::<LE>(BspData::TMAPPOLY)?
-                    }
-                    let chunk_size_pointer = Fixup::new(buf, base)?;
+                    front_offset.finish(buf);
+                    write_bsp_node(buf, version, front)?;
 
-                    poly.normal.write_to(buf)?;
-                    if get_version() < Version::V23_00 {
-                        Vec3d::ZERO.write_to(buf)?;
-                        0f32.write_to(buf)?;
-                    }
-                    (poly.verts.len() as u32).write_to(buf)?;
-                    poly.texture.write_to(buf)?;
+                    back_offset.finish(buf);
+                    write_bsp_node(buf, version, back)?;
 
-                    for vert in &poly.verts {
-                        if get_version() < Version::V23_00 {
-                            u16::try_from(vert.vertex_id.0).unwrap().write_to(buf)?;
-                            u16::try_from(vert.normal_id.0).unwrap().write_to(buf)?;
-                        } else {
-                            vert.vertex_id.0.write_to(buf)?;
-                            vert.normal_id.0.write_to(buf)?;
-                        }
-                        vert.uv.write_to(buf)?;
+                    bbox.write_to(buf)?;
+
+                    chunk_size_pointer.finish(buf);
+                } else {
+                    normal.write_to(buf)?;
+                    point.write_to(buf)?;
+
+                    buf.write_u32::<LE>(0)?;
+
+                    let front_offset = Fixup::new(buf, base)?;
+                    let back_offset = Fixup::new(buf, base)?;
+
+                    buf.write_u32::<LE>(0)?;
+                    buf.write_u32::<LE>(0)?;
+                    buf.write_u32::<LE>(0)?;
+                    if version >= Version::V20_00 {
+                        bbox.write_to(buf)?;
                     }
+
+                    front_offset.finish(buf);
+                    write_bsp_node(buf, version, front)?;
+
+                    back_offset.finish(buf);
+                    write_bsp_node(buf, version, back)?;
 
                     chunk_size_pointer.finish(buf);
                 }
             }
+            BspNode::Leaf { bbox, poly_list } => {
+                let base = buf.len();
+                if version >= Version::V23_00 {
+                    buf.write_u32::<LE>(BspData::TMAPPOLY2)?;
+                    let chunk_size_pointer = Fixup::new(buf, base)?;
+
+                    bbox.write_to(buf)?;
+
+                    let poly = &poly_list[0];
+
+                    poly.normal.write_to(buf)?;
+                    poly.texture.write_to(buf)?;
+                    (poly.verts.len() as u32).write_to(buf)?;
+
+                    for vert in &poly.verts {
+                        vert.vertex_id.0.write_to(buf)?;
+                        vert.normal_id.0.write_to(buf)?;
+                        vert.uv.write_to(buf)?;
+                    }
+
+                    chunk_size_pointer.finish(buf);
+                } else {
+                    buf.write_u32::<LE>(BspData::BOUNDBOX)?;
+                    let chunk_size_pointer = Fixup::new(buf, base)?;
+
+                    bbox.write_to(buf)?;
+                    chunk_size_pointer.finish(buf);
+
+                    for poly in poly_list {
+                        let base = buf.len();
+                        buf.write_u32::<LE>(BspData::TMAPPOLY)?;
+                        let chunk_size_pointer = Fixup::new(buf, base)?;
+
+                        poly.normal.write_to(buf)?;
+                        Vec3d::ZERO.write_to(buf)?;
+                        0f32.write_to(buf)?;
+                        (poly.verts.len() as u32).write_to(buf)?;
+                        poly.texture.write_to(buf)?;
+
+                        for vert in &poly.verts {
+                            u16::try_from(vert.vertex_id.0).unwrap().write_to(buf)?;
+                            u16::try_from(vert.normal_id.0).unwrap().write_to(buf)?;
+                            vert.uv.write_to(buf)?;
+                        }
+
+                        chunk_size_pointer.finish(buf);
+                    }
+                }
+            }
         }
 
-        buf.write_u32::<LE>(BspData::ENDOFBRANCH)?;
-        buf.write_u32::<LE>(0)?;
+        if version < Version::V23_00 {
+            buf.write_u32::<LE>(BspData::ENDOFBRANCH)?;
+            buf.write_u32::<LE>(0)?;
+        }
 
         Ok(())
     }

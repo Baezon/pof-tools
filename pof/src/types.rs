@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use byteorder::{WriteBytesExt, LE};
+pub use dae_parser::UpAxis;
 use glm::{Mat3x3, TMat4, Vec3};
 use nalgebra_glm::Mat4;
 extern crate nalgebra_glm as glm;
@@ -238,9 +239,22 @@ impl Vec3d {
         out
     }
 
-    // intentional swizzle
-    pub fn flip_y_z(&self) -> Vec3d {
-        Vec3d { x: self.x, y: self.z, z: self.y }
+    /// Swizzle coordinates from POF (Right: `+x`, Up: `+y`, In: `-z`) to specified DAE convention
+    pub fn from_coord(&self, up: UpAxis) -> Vec3d {
+        match up {
+            UpAxis::XUp => Vec3d { x: -self.z, y: self.x, z: self.y },
+            UpAxis::YUp => Vec3d { x: self.x, y: self.y, z: -self.z },
+            UpAxis::ZUp => Vec3d { x: self.x, y: self.z, z: self.y },
+        }
+    }
+
+    /// Swizzle coordinates from specified DAE convention to POF (Right: `+x`, Up: `+y`, In: `-z`)
+    pub fn to_coord(&self, up: UpAxis) -> Vec3d {
+        match up {
+            UpAxis::XUp => Vec3d { x: self.y, y: self.z, z: -self.x },
+            UpAxis::YUp => Vec3d { x: self.x, y: self.y, z: -self.z },
+            UpAxis::ZUp => Vec3d { x: self.x, y: self.z, z: self.y },
+        }
     }
 }
 impl Add for Vec3d {
@@ -364,7 +378,7 @@ impl MulAssign<f32> for Mat3d {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct NormalVec3(pub Vec3d);
 
 impl Default for NormalVec3 {
@@ -539,14 +553,25 @@ mk_struct! {
         pub radius: f32,
         pub turrets: Vec<ObjectId>,
     }
+}
 
-    #[derive(Clone, Default)]
-    pub struct Path {
-        pub name: String,
-        pub parent: String,
-        pub points: Vec<PathPoint>,
+#[derive(Clone, Default)]
+pub struct Path {
+    pub name: String,
+    pub parent: String,
+    pub points: Vec<PathPoint>,
+}
+
+impl Serialize for Path {
+    fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
+        self.name.write_to(w)?;
+        if get_version!() >= Version::V20_02 {
+            self.parent.write_to(w)?;
+        }
+        self.points.write_to(w)
     }
 }
+
 impl Debug for Path {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Path")
@@ -644,7 +669,7 @@ impl Serialize for ShieldNode {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         let mut buf = vec![];
 
-        crate::write::write_shield_node(&mut buf, self, get_version() < Version::V21_18)?;
+        crate::write::write_shield_node(&mut buf, self, get_version() < Version::V22_00)?;
 
         w.write_u32::<LE>((buf.len()) as u32)?;
         w.write_all(&buf)
@@ -682,7 +707,7 @@ impl Serialize for WeaponHardpoint {
         self.position.write_to(w)?;
         self.normal.write_to(w)?;
         let version = get_version();
-        if version >= Version::V22_01 || version == Version::V21_18 {
+        if version >= Version::V21_18 && version != Version::V22_00 {
             self.offset.write_to(w)?;
         }
         Ok(())
@@ -903,6 +928,11 @@ impl BspNode {
         BspNodeIterMut { stack: vec![self] }
     }
 
+    pub fn bbox(&self) -> &BoundingBox {
+        let (BspNode::Split { bbox, .. } | BspNode::Leaf { bbox, .. }) = self;
+        bbox
+    }
+
     pub fn leaves(&self) -> BspNodeIter<'_> {
         BspNodeIter { stack: vec![self] }
     }
@@ -930,57 +960,26 @@ impl BspNode {
             BspNode::Split { bbox, front, back, .. } => {
                 front.recalculate_bboxes(verts);
                 back.recalculate_bboxes(verts);
-                bbox.min = {
-                    let min1 = match **front {
-                        BspNode::Split { ref bbox, .. } => &bbox.min,
-                        BspNode::Leaf { ref bbox, .. } => &bbox.min,
-                    };
-                    let min2 = match **back {
-                        BspNode::Split { ref bbox, .. } => &bbox.min,
-                        BspNode::Leaf { ref bbox, .. } => &bbox.min,
-                    };
-                    Vec3d {
-                        x: f32::min(min1.x, min2.x),
-                        y: f32::min(min1.y, min2.y),
-                        z: f32::min(min1.z, min2.z),
-                    }
-                };
-                bbox.max = {
-                    let max1 = match **front {
-                        BspNode::Split { ref bbox, .. } => &bbox.max,
-                        BspNode::Leaf { ref bbox, .. } => &bbox.max,
-                    };
-                    let max2 = match **back {
-                        BspNode::Split { ref bbox, .. } => &bbox.max,
-                        BspNode::Leaf { ref bbox, .. } => &bbox.max,
-                    };
-                    Vec3d {
-                        x: f32::max(max1.x, max2.x),
-                        y: f32::max(max1.y, max2.y),
-                        z: f32::max(max1.z, max2.z),
-                    }
-                };
+                *bbox = *front.bbox();
+                bbox.expand_bbox(back.bbox());
             }
             BspNode::Leaf { bbox, poly_list } => {
-                bbox.max = verts[poly_list.first().unwrap().verts.first().unwrap().vertex_id.0 as usize];
-                bbox.min = verts[poly_list.first().unwrap().verts.first().unwrap().vertex_id.0 as usize];
+                let vert_ids = poly_list.iter().flat_map(|poly| &poly.verts);
+                *bbox = BoundingBox::from_vectors(vert_ids.map(|vert| verts[vert.vertex_id.0 as usize]));
+            }
+        }
+    }
+
+    pub fn recalculate_centers(&mut self, verts: &[Vec3d]) {
+        match self {
+            BspNode::Split { front, back, .. } => {
+                front.recalculate_centers(verts);
+                back.recalculate_centers(verts);
+            }
+            BspNode::Leaf { poly_list, .. } => {
                 for poly in poly_list {
-                    for vert_id in &poly.verts {
-                        bbox.min = {
-                            Vec3d {
-                                x: f32::min(bbox.min.x, verts[vert_id.vertex_id.0 as usize].x),
-                                y: f32::min(bbox.min.y, verts[vert_id.vertex_id.0 as usize].y),
-                                z: f32::min(bbox.min.z, verts[vert_id.vertex_id.0 as usize].z),
-                            }
-                        };
-                        bbox.max = {
-                            Vec3d {
-                                x: f32::max(bbox.max.x, verts[vert_id.vertex_id.0 as usize].x),
-                                y: f32::max(bbox.max.y, verts[vert_id.vertex_id.0 as usize].y),
-                                z: f32::max(bbox.max.z, verts[vert_id.vertex_id.0 as usize].z),
-                            }
-                        };
-                    }
+                    let vert_iter = poly.verts.iter().map(|polyvert| verts[polyvert.vertex_id.0 as usize]);
+                    poly.center = Vec3d::average(vert_iter);
                 }
             }
         }
@@ -1069,7 +1068,7 @@ impl Serialize for BspData {
 
         let mut buf = vec![];
 
-        crate::write::write_bsp_data(&mut buf, self)?;
+        crate::write::write_bsp_data(&mut buf, get_version!(), self)?;
 
         w.write_u32::<LE>((buf.len()) as u32)?;
         w.write_all(&buf)
@@ -1260,7 +1259,7 @@ impl Serialize for SubObject {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Dock {
     pub properties: String,
     pub path: Option<PathId>,
@@ -1268,6 +1267,19 @@ pub struct Dock {
     pub fvec: NormalVec3,
     pub uvec: NormalVec3,
 }
+
+impl Default for Dock {
+    fn default() -> Self {
+        Self {
+            properties: Default::default(),
+            path: Default::default(),
+            position: Default::default(),
+            fvec: NormalVec3(Vec3d::new(0., 1., 0.)),
+            uvec: Default::default(),
+        }
+    }
+}
+
 impl Serialize for Dock {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         self.properties.write_to(w)?;
@@ -1437,8 +1449,16 @@ macro_rules! mk_versions {
 }
 
 mk_versions! {
+    /// Prehistoric - First version
+    V19_00(1900, "19.00"),
     /// Prehistoric - Mass / MOI introduced
     V19_03(1903, "19.03"),
+    /// Prehistoric - Bounding box added to BSP
+    V20_00(2000, "20.00"),
+    /// Prehistoric - Added path parent names
+    V20_02(2002, "20.02"),
+    /// Prehistoric - normal_point became center_point in TMAPPOLY
+    V20_03(2003, "20.03"),
     /// Prehistoric - Glow point radius introduced after this
     V20_04(2004, "20.04"),
     /// Prehistoric - Muzzle flash introduced

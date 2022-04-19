@@ -12,7 +12,7 @@ use std::{
 use eframe::egui::{self, Button, TextStyle, Ui};
 use pof::ObjectId;
 
-use crate::{ui_properties_panel::PropertiesPanel, GlBufferedInsignia, GlBufferedObject, GlBufferedShield, GlLollipops, POF_TOOLS_VERSION};
+use crate::{ui_properties_panel::PropertiesPanel, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers, POF_TOOLS_VERSION};
 
 #[derive(PartialEq, Hash, Debug, Clone, Copy)]
 pub(crate) enum TreeSelection {
@@ -438,6 +438,7 @@ pub(crate) struct UiState {
 pub(crate) struct PofToolsGui {
     pub model: Box<Model>,
     pub model_loading_thread: Option<Receiver<Result<Option<Box<Model>>, String>>>,
+    #[allow(clippy::type_complexity)]
     pub texture_loading_thread: Option<Receiver<Option<(RawImage2d<'static, u8>, TextureId)>>>,
     pub glow_point_sim_start: std::time::Instant,
 
@@ -452,7 +453,7 @@ pub(crate) struct PofToolsGui {
     pub camera_scale: f32,
     pub camera_offset: Vec3d,
 
-    pub buffer_objects: Vec<GlBufferedObject>, // all the subobjects, conditionally rendered based on the current tree selection
+    pub buffer_objects: Vec<GlObjectBuffers>, // all the subobjects, conditionally rendered based on the current tree selection
     pub buffer_textures: HashMap<TextureId, SrgbTexture2d>, // map of tex ids to actual textures
     pub buffer_shield: Option<GlBufferedShield>, // the shield, similar to the above
     pub buffer_insignias: Vec<GlBufferedInsignia>, // the insignias, similar to the above
@@ -776,19 +777,20 @@ impl PofToolsGui {
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     self.tree_selectable_item(ui, "Header", TreeSelection::Header);
 
+                    let num_subobjs = self.model.sub_objects.len();
+                    let name = format!("SubObjects{}", if num_subobjs > 0 { format!(", {}", num_subobjs) } else { String::new() });
                     self.ui_state.tree_collapsing_item(
                         &self.model,
                         ui,
-                        "SubObjects",
+                        &name,
                         TreeSelection::SubObjects(SubObjectSelection::Header),
                         |ui_state, ui| {
                             fn make_subobject_child_list(ui_state: &mut UiState, model: &Model, obj: &SubObject, ui: &mut Ui) {
-                                let name = format!("{} ({:#?})", obj.name, obj.obj_id);
                                 let selection = TreeSelection::SubObjects(SubObjectSelection::SubObject(obj.obj_id));
                                 if obj.children().next() == None {
-                                    ui_state.tree_selectable_item(model, ui, &name, selection);
+                                    ui_state.tree_selectable_item(model, ui, &obj.name, selection);
                                 } else {
-                                    ui_state.tree_collapsing_item(model, ui, &name, selection, |ui_state, ui| {
+                                    ui_state.tree_collapsing_item(model, ui, &obj.name, selection, |ui_state, ui| {
                                         for &i in obj.children() {
                                             make_subobject_child_list(ui_state, model, &model.sub_objects[i], ui)
                                         }
@@ -804,12 +806,17 @@ impl PofToolsGui {
                         },
                     );
 
-                    self.ui_state.tree_collapsing_item(
-                        &self.model,
-                        ui,
-                        "Textures",
-                        TreeSelection::Textures(TextureSelection::Header),
-                        |ui_state, ui| {
+                    let num_textures = self.model.textures.len();
+                    let name = format!(
+                        "Textures{}",
+                        if num_textures > 0 {
+                            format!(", {}", num_textures)
+                        } else {
+                            String::new()
+                        }
+                    );
+                    self.ui_state
+                        .tree_collapsing_item(&self.model, ui, &name, TreeSelection::Textures(TextureSelection::Header), |ui_state, ui| {
                             for (i, tex) in self.model.textures.iter().enumerate() {
                                 ui_state.tree_selectable_item(
                                     &self.model,
@@ -818,20 +825,21 @@ impl PofToolsGui {
                                     TreeSelection::Textures(TextureSelection::Texture(TextureId(i as u32))),
                                 );
                             }
-                        },
-                    );
+                        });
 
+                    let num_banks = self.model.thruster_banks.len();
+                    let name = format!("Thrusters{}", if num_banks > 0 { format!(", {}", num_banks) } else { String::new() });
                     self.ui_state.tree_collapsing_item(
                         &self.model,
                         ui,
-                        "Thrusters",
+                        &name,
                         TreeSelection::Thrusters(ThrusterSelection::Header),
                         |ui_state, ui| {
                             for (i, thruster_bank) in self.model.thruster_banks.iter().enumerate() {
                                 ui_state.tree_collapsing_item(
                                     &self.model,
                                     ui,
-                                    &format!("Bank {}", i + 1),
+                                    &format!("Bank {}, {}", i + 1, thruster_bank.glows.len()),
                                     TreeSelection::Thrusters(ThrusterSelection::Bank(i)),
                                     |ui_state, ui| {
                                         for j in 0..thruster_bank.glows.len() {
@@ -848,23 +856,23 @@ impl PofToolsGui {
                         },
                     );
 
-                    self.ui_state.tree_collapsing_item(
-                        &self.model,
-                        ui,
-                        "Weapons",
-                        TreeSelection::Weapons(WeaponSelection::Header),
-                        |ui_state, ui| {
+                    let num_banks = self.model.primary_weps.len() + self.model.secondary_weps.len();
+                    let name = format!("Weapons{}", if num_banks > 0 { format!(", {}", num_banks) } else { String::new() });
+                    self.ui_state
+                        .tree_collapsing_item(&self.model, ui, &name, TreeSelection::Weapons(WeaponSelection::Header), |ui_state, ui| {
+                            let num_banks = self.model.primary_weps.len();
+                            let name = format!("Primary Weapons{}", if num_banks > 0 { format!(", {}", num_banks) } else { String::new() });
                             ui_state.tree_collapsing_item(
                                 &self.model,
                                 ui,
-                                "Primary Weapons",
+                                &name,
                                 TreeSelection::Weapons(WeaponSelection::PriHeader),
                                 |ui_state, ui| {
                                     for (i, primary_bank) in self.model.primary_weps.iter().enumerate() {
                                         ui_state.tree_collapsing_item(
                                             &self.model,
                                             ui,
-                                            &format!("Bank {}", i + 1),
+                                            &format!("Bank {}, {}", i + 1, primary_bank.len()),
                                             TreeSelection::Weapons(WeaponSelection::PriBank(i)),
                                             |ui_state, ui| {
                                                 for j in 0..primary_bank.len() {
@@ -881,17 +889,19 @@ impl PofToolsGui {
                                 },
                             );
 
+                            let num_banks = self.model.secondary_weps.len();
+                            let name = format!("Secondary Weapons{}", if num_banks > 0 { format!(", {}", num_banks) } else { String::new() });
                             ui_state.tree_collapsing_item(
                                 &self.model,
                                 ui,
-                                "Secondary Weapons",
+                                &name,
                                 TreeSelection::Weapons(WeaponSelection::SecHeader),
                                 |ui_state, ui| {
                                     for (i, secondary_bank) in self.model.secondary_weps.iter().enumerate() {
                                         ui_state.tree_collapsing_item(
                                             &self.model,
                                             ui,
-                                            &format!("Bank {}", i + 1),
+                                            &format!("Bank {}, {}", i + 1, secondary_bank.len()),
                                             TreeSelection::Weapons(WeaponSelection::SecBank(i)),
                                             |ui_state, ui| {
                                                 for j in 0..secondary_bank.len() {
@@ -907,13 +917,14 @@ impl PofToolsGui {
                                     }
                                 },
                             );
-                        },
-                    );
+                        });
 
+                    let num_bays = self.model.docking_bays.len();
+                    let name = format!("Docking Bays{}", if num_bays > 0 { format!(", {}", num_bays) } else { String::new() });
                     self.ui_state.tree_collapsing_item(
                         &self.model,
                         ui,
-                        "Docking Bays",
+                        &name,
                         TreeSelection::DockingBays(DockingSelection::Header),
                         |ui_state, ui| {
                             for (i, docking_bay) in self.model.docking_bays.iter().enumerate() {
@@ -927,21 +938,27 @@ impl PofToolsGui {
                         },
                     );
 
-                    self.ui_state.tree_collapsing_item(
-                        &self.model,
-                        ui,
-                        "Glow Points",
-                        TreeSelection::Glows(GlowSelection::Header),
-                        |ui_state, ui| {
+                    let num_glow_banks = self.model.glow_banks.len();
+                    let name = format!(
+                        "Glow Points{}",
+                        if num_glow_banks > 0 {
+                            format!(", {}", num_glow_banks)
+                        } else {
+                            String::new()
+                        }
+                    );
+                    self.ui_state
+                        .tree_collapsing_item(&self.model, ui, &name, TreeSelection::Glows(GlowSelection::Header), |ui_state, ui| {
                             for (i, glow_bank) in self.model.glow_banks.iter().enumerate() {
                                 ui_state.tree_collapsing_item(
                                     &self.model,
                                     ui,
                                     &format!(
-                                        "Bank {}{}",
+                                        "Bank {}{}, {}",
                                         i + 1,
                                         pof::properties_get_field(&self.model.glow_banks[i].properties, "$glow_texture")
-                                            .map_or(String::new(), |tex| format!(" ({})", tex))
+                                            .map_or(String::new(), |tex| format!(" ({})", tex)),
+                                        glow_bank.glow_points.len()
                                     ),
                                     TreeSelection::Glows(GlowSelection::Bank(i)),
                                     |ui_state, ui| {
@@ -956,13 +973,14 @@ impl PofToolsGui {
                                     },
                                 );
                             }
-                        },
-                    );
+                        });
 
+                    let num_points = self.model.special_points.len();
+                    let name = format!("Special Points{}", if num_points > 0 { format!(", {}", num_points) } else { String::new() });
                     self.ui_state.tree_collapsing_item(
                         &self.model,
                         ui,
-                        "Special Points",
+                        &name,
                         TreeSelection::SpecialPoints(SpecialPointSelection::Header),
                         |ui_state, ui| {
                             for (i, special_point) in self.model.special_points.iter().enumerate() {
@@ -976,17 +994,15 @@ impl PofToolsGui {
                         },
                     );
 
-                    self.ui_state.tree_collapsing_item(
-                        &self.model,
-                        ui,
-                        "Turrets",
-                        TreeSelection::Turrets(TurretSelection::Header),
-                        |ui_state, ui| {
+                    let num_turrets = self.model.turrets.len();
+                    let name = format!("Turrets{}", if num_turrets > 0 { format!(", {}", num_turrets) } else { String::new() });
+                    self.ui_state
+                        .tree_collapsing_item(&self.model, ui, &name, TreeSelection::Turrets(TurretSelection::Header), |ui_state, ui| {
                             for (i, turret) in self.model.turrets.iter().enumerate() {
                                 ui_state.tree_collapsing_item(
                                     &self.model,
                                     ui,
-                                    &self.model.sub_objects[turret.base_obj].name,
+                                    &format!("{}, {}", self.model.sub_objects[turret.base_obj].name, turret.fire_points.len()),
                                     TreeSelection::Turrets(TurretSelection::Turret(i)),
                                     |ui_state, ui| {
                                         for j in 0..turret.fire_points.len() {
@@ -1000,16 +1016,17 @@ impl PofToolsGui {
                                     },
                                 );
                             }
-                        },
-                    );
+                        });
 
+                    let num_paths = self.model.paths.len();
+                    let name = format!("Paths{}", if num_paths > 0 { format!(", {}", num_paths) } else { String::new() });
                     self.ui_state
-                        .tree_collapsing_item(&self.model, ui, "Paths", TreeSelection::Paths(PathSelection::Header), |ui_state, ui| {
+                        .tree_collapsing_item(&self.model, ui, &name, TreeSelection::Paths(PathSelection::Header), |ui_state, ui| {
                             for (i, path) in self.model.paths.iter().enumerate() {
                                 ui_state.tree_collapsing_item(
                                     &self.model,
                                     ui,
-                                    &path.name,
+                                    &format!("{}, {}", path.name, path.points.len()),
                                     TreeSelection::Paths(PathSelection::Path(i)),
                                     |ui_state, ui| {
                                         for j in 0..path.points.len() {
@@ -1025,12 +1042,10 @@ impl PofToolsGui {
                             }
                         });
 
-                    self.ui_state.tree_collapsing_item(
-                        &self.model,
-                        ui,
-                        "Insignias",
-                        TreeSelection::Insignia(InsigniaSelection::Header),
-                        |ui_state, ui| {
+                    let num_insigs = self.model.insignias.len();
+                    let name = format!("Insignias{}", if num_insigs > 0 { format!(", {}", num_insigs) } else { String::new() });
+                    self.ui_state
+                        .tree_collapsing_item(&self.model, ui, &name, TreeSelection::Insignia(InsigniaSelection::Header), |ui_state, ui| {
                             for (i, _) in self.model.insignias.iter().enumerate() {
                                 ui_state.tree_selectable_item(
                                     &self.model,
@@ -1039,17 +1054,19 @@ impl PofToolsGui {
                                     TreeSelection::Insignia(InsigniaSelection::Insignia(i)),
                                 );
                             }
-                        },
-                    );
+                        });
 
-                    self.ui_state.tree_selectable_item(&self.model, ui, "Shield", TreeSelection::Shield);
-
-                    self.ui_state.tree_collapsing_item(
+                    self.ui_state.tree_selectable_item(
                         &self.model,
                         ui,
-                        "Eye Points",
-                        TreeSelection::EyePoints(EyeSelection::Header),
-                        |ui_state, ui| {
+                        if self.model.shield_data.is_some() { "Shield" } else { "(No Shield)" },
+                        TreeSelection::Shield,
+                    );
+
+                    let num_eyes = self.model.eye_points.len();
+                    let name = format!("Eye Points{}", if num_eyes > 0 { format!(", {}", num_eyes) } else { String::new() });
+                    self.ui_state
+                        .tree_collapsing_item(&self.model, ui, &name, TreeSelection::EyePoints(EyeSelection::Header), |ui_state, ui| {
                             for (i, eye) in self.model.eye_points.iter().enumerate() {
                                 ui_state.tree_selectable_item(
                                     &self.model,
@@ -1058,8 +1075,7 @@ impl PofToolsGui {
                                     TreeSelection::EyePoints(EyeSelection::EyePoint(i)),
                                 );
                             }
-                        },
-                    );
+                        });
 
                     self.ui_state
                         .tree_selectable_item(&self.model, ui, "Visual Center", TreeSelection::VisualCenter);

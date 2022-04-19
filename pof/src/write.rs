@@ -9,8 +9,8 @@ use glm::{Mat4x4, Vec3};
 extern crate nalgebra_glm as glm;
 
 use crate::{
-    BspData, BspNode, Dock, EyePoint, GlowPointBank, Insignia, Model, ObjVec, ObjectId, Path, ShieldData, ShieldNode, SpecialPoint, SubObject,
-    Texturing, ThrusterBank, Turret, Vec3d, Version, WeaponHardpoint,
+    get_version, BspData, BspNode, Dock, EyePoint, GlowPointBank, Insignia, Model, ObjVec, ObjectId, Path, ShieldData, ShieldNode, SpecialPoint,
+    SubObject, Texturing, ThrusterBank, Turret, Vec3d, Version, WeaponHardpoint,
 };
 
 pub(crate) trait Serialize {
@@ -213,24 +213,30 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, bsp_data: &BspData) -> io::Resul
 
                 for poly in poly_list {
                     let base = buf.len();
-                    match &poly.texture {
-                        Texturing::Flat(_) => buf.write_u32::<LE>(BspData::FLATPOLY)?,
-                        Texturing::Texture(_) => buf.write_u32::<LE>(BspData::TMAPPOLY)?,
+                    if get_version() >= Version::V23_00 {
+                        buf.write_u32::<LE>(BspData::TMAPPOLY2)?
+                    } else {
+                        buf.write_u32::<LE>(BspData::TMAPPOLY)?
                     }
                     let chunk_size_pointer = Fixup::new(buf, base)?;
 
                     poly.normal.write_to(buf)?;
-                    poly.center.write_to(buf)?;
-                    poly.radius.write_to(buf)?;
+                    if get_version() < Version::V23_00 {
+                        Vec3d::ZERO.write_to(buf)?;
+                        0f32.write_to(buf)?;
+                    }
                     (poly.verts.len() as u32).write_to(buf)?;
                     poly.texture.write_to(buf)?;
 
                     for vert in &poly.verts {
-                        u16::try_from(vert.vertex_id.0).unwrap().write_to(buf)?;
-                        u16::try_from(vert.normal_id.0).unwrap().write_to(buf)?;
-                        if matches!(poly.texture, Texturing::Texture(_)) {
-                            vert.uv.write_to(buf)?;
+                        if get_version() < Version::V23_00 {
+                            u16::try_from(vert.vertex_id.0).unwrap().write_to(buf)?;
+                            u16::try_from(vert.normal_id.0).unwrap().write_to(buf)?;
+                        } else {
+                            vert.vertex_id.0.write_to(buf)?;
+                            vert.normal_id.0.write_to(buf)?;
                         }
+                        vert.uv.write_to(buf)?;
                     }
 
                     chunk_size_pointer.finish(buf);
@@ -342,7 +348,8 @@ impl Model {
         });
         w.write_all(b"PSPO")?;
 
-        w.write_i32::<LE>(self.version.into())?;
+        w.write_i32::<LE>(Version::V23_00.into())?;
+        //w.write_i32::<LE>(self.version.into())?;
 
         write_chunk_raw(w, if self.version >= Version::V21_16 { b"HDR2" } else { b"OHDR" }, |w| {
             if self.version >= Version::V21_16 {
@@ -832,10 +839,7 @@ fn make_subobj_node(
 
     for (_, polylist) in subobj.bsp_data.collision_tree.leaves() {
         for poly in polylist {
-            let (vert_count, indices) = &mut prim_elems[match poly.texture {
-                Texturing::Flat(_) => 0,
-                Texturing::Texture(idx) => idx.0 as usize + 1,
-            }];
+            let (vert_count, indices) = &mut prim_elems[poly.texture.0 as usize + 1];
             vert_count.push(poly.verts.len() as u32);
             for vert in poly.verts.iter().rev() {
                 indices.push(vert.vertex_id.0 as _);

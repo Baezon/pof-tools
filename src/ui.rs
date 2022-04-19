@@ -557,7 +557,7 @@ impl PofToolsGui {
                 }
 
                 if ui
-                    .add_enabled(self.errors.is_empty(), Button::new(RichText::new("🖴").text_style(TextStyle::Heading)))
+                    .add_enabled(true, Button::new(RichText::new("🖴").text_style(TextStyle::Heading)))
                     .on_hover_text("Save")
                     .on_disabled_hover_text("All errors must be corrected before saving.")
                     .clicked()

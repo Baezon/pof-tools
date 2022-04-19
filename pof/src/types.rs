@@ -43,10 +43,8 @@ id_type! {PathId, u32}
 thread_local! {
     pub(crate) static VERSION: Cell<Version> = Cell::new(Version::default());
 }
-macro_rules! get_version {
-    () => {
-        VERSION.with(|f| f.get())
-    };
+pub(crate) fn get_version() -> Version {
+    VERSION.with(|f| f.get())
 }
 
 // like a regular vector, but indexed with ObjectIds only, for some safety
@@ -646,7 +644,7 @@ impl Serialize for ShieldNode {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         let mut buf = vec![];
 
-        crate::write::write_shield_node(&mut buf, self, get_version!() < Version::V21_18)?;
+        crate::write::write_shield_node(&mut buf, self, get_version() < Version::V21_18)?;
 
         w.write_u32::<LE>((buf.len()) as u32)?;
         w.write_all(&buf)
@@ -683,7 +681,7 @@ impl Serialize for WeaponHardpoint {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         self.position.write_to(w)?;
         self.normal.write_to(w)?;
-        let version = get_version!();
+        let version = get_version();
         if version >= Version::V22_01 || version == Version::V21_18 {
             self.offset.write_to(w)?;
         }
@@ -710,7 +708,7 @@ impl Serialize for ThrusterGlow {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         self.position.write_to(w)?;
         self.normal.write_to(w)?;
-        if get_version!() > Version::V20_04 {
+        if get_version() > Version::V20_04 {
             self.radius.write_to(w)?;
         }
         Ok(())
@@ -832,10 +830,53 @@ impl ShieldData {
 #[derive(Clone, Debug)]
 pub struct Polygon {
     pub normal: Vec3d,
-    pub center: Vec3d,
-    pub radius: f32,
-    pub texture: Texturing,
+    pub texture: TextureId, // this might be u32::MAX during parsing which indicates untextured, this is cleaned up in
+    //                         post_parse_fill_untextured_slot with an explicit "untextured" texture id
     pub verts: Vec<PolyVertex>,
+}
+
+pub struct BspNodeIterMut<'a> {
+    stack: Vec<&'a mut BspNode>,
+}
+
+impl<'a> Iterator for BspNodeIterMut<'a> {
+    type Item = (&'a mut BoundingBox, &'a mut Vec<Polygon>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.stack.pop()? {
+                BspNode::Split { front, back, .. } => {
+                    self.stack.push(back);
+                    self.stack.push(front);
+                }
+                BspNode::Leaf { bbox, poly_list } => {
+                    return Some((bbox, poly_list));
+                }
+            }
+        }
+    }
+}
+
+pub struct BspNodeIter<'a> {
+    stack: Vec<&'a BspNode>,
+}
+
+impl<'a> Iterator for BspNodeIter<'a> {
+    type Item = (&'a BoundingBox, &'a Vec<Polygon>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.stack.pop()? {
+                BspNode::Split { front, back, .. } => {
+                    self.stack.push(back);
+                    self.stack.push(front);
+                }
+                BspNode::Leaf { bbox, poly_list } => {
+                    return Some((bbox, poly_list));
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -858,6 +899,10 @@ impl Default for BspNode {
     }
 }
 impl BspNode {
+    pub fn leaves_mut(&mut self) -> BspNodeIterMut<'_> {
+        BspNodeIterMut { stack: vec![self] }
+    }
+
     pub fn leaves(&self) -> BspNodeIter<'_> {
         BspNodeIter { stack: vec![self] }
     }
@@ -942,28 +987,6 @@ impl BspNode {
     }
 }
 
-pub struct BspNodeIter<'a> {
-    stack: Vec<&'a BspNode>,
-}
-
-impl<'a> Iterator for BspNodeIter<'a> {
-    type Item = (&'a BoundingBox, &'a Vec<Polygon>);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            match self.stack.pop()? {
-                BspNode::Split { front, back, .. } => {
-                    self.stack.push(back);
-                    self.stack.push(front);
-                }
-                BspNode::Leaf { bbox, poly_list } => {
-                    return Some((bbox, poly_list));
-                }
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct BspData {
     pub verts: Vec<Vec3d>,
@@ -977,15 +1000,15 @@ impl BspData {
     pub(crate) const TMAPPOLY: u32 = 3;
     pub(crate) const SORTNORM: u32 = 4;
     pub(crate) const BOUNDBOX: u32 = 5;
+    pub(crate) const TMAPPOLY2: u32 = 6;
+    pub(crate) const SORTNORM2: u32 = 7;
 }
 impl BspData {
     pub fn recalculate(verts: &[Vec3d], polygons: impl Iterator<Item = Polygon>) -> BspNode {
-        // first go over the polygons, filling some data, and exporting their bboxes, which is important for the actual BSP generation
+        // first go over the polygons, filling some data, and exporting their bboxes and centers, which is important for the actual BSP generation
         let polygons = polygons
             .map(|mut poly| {
                 let vert_iter = poly.verts.iter().map(|polyvert| verts[polyvert.vertex_id.0 as usize]);
-
-                poly.center = Vec3d::average(vert_iter.clone());
 
                 // generate the normal by averaging the cross products of adjacent edges
                 let mut glm_verts = vert_iter.clone().map(Vec3::from); // first convert to glm vectors
@@ -1008,18 +1031,18 @@ impl BspData {
                 }
                 .normalize(); // and then normalize
 
-                (BoundingBox::from_vectors(vert_iter).pad(0.01), poly)
+                (Vec3d::average(vert_iter.clone()), BoundingBox::from_vectors(vert_iter).pad(0.01), poly)
             })
             .collect::<Vec<_>>();
 
-        fn recalc_recurse(polygons: &mut [&(BoundingBox, Polygon)]) -> BspNode {
-            if let [&(bbox, ref polygon)] = *polygons {
+        fn recalc_recurse(polygons: &mut [&(Vec3d, BoundingBox, Polygon)]) -> BspNode {
+            if let [&(_, bbox, ref polygon)] = *polygons {
                 // if theres only one polygon were at the base case
                 BspNode::Leaf { bbox, poly_list: vec![polygon.clone()] }
             } else {
-                let bbox = BoundingBox::from_bboxes(polygons.iter().map(|(bbox, _)| bbox)).pad(0.01);
+                let bbox = BoundingBox::from_bboxes(polygons.iter().map(|(_, bbox, _)| bbox)).pad(0.01);
                 let axis = bbox.greatest_dimension();
-                polygons.sort_by(|a, b| a.1.center[axis].partial_cmp(&b.1.center[axis]).unwrap());
+                polygons.sort_by(|a, b| a.0[axis].partial_cmp(&b.0[axis]).unwrap());
 
                 let halfpoint = polygons.len() / 2;
 
@@ -1061,7 +1084,7 @@ pub struct ThrusterBank {
 impl Serialize for ThrusterBank {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         (self.glows.len() as u32).write_to(w)?;
-        if get_version!() >= Version::V21_17 {
+        if get_version() >= Version::V21_17 {
             self.properties.write_to(w)?;
         }
         for glow in &self.glows {
@@ -1216,7 +1239,7 @@ impl SubObject {
 }
 impl Serialize for SubObject {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
-        let version = get_version!();
+        let version = get_version();
         self.obj_id.write_to(w)?;
         if version >= Version::V21_16 {
             self.radius.write_to(w)?;
@@ -1436,6 +1459,8 @@ mk_versions! {
     V22_00(2200, "22.00"),
     /// External weapon angle offset compatible
     V22_01(2201, "22.01"),
+    /// Extended vertex and normal limits per subobject
+    V23_00(2300, "23.00"),
 }
 
 #[derive(Debug, Default)]
@@ -1459,6 +1484,7 @@ pub struct Model {
     pub shield_data: Option<ShieldData>,
 
     pub path_to_file: PathBuf,
+    pub untextured_idx: Option<TextureId>,
 }
 impl Model {
     pub fn get_total_subobj_offset(&self, id: ObjectId) -> Vec3d {
@@ -1736,6 +1762,29 @@ impl Model {
         } else {
             None
         }
+    }
+}
+
+pub fn post_parse_fill_untextured_slot(sub_objects: &mut Vec<SubObject>, textures: &mut Vec<String>) -> Option<TextureId> {
+    let mut untextured_anywhere = false;
+    for subobj in sub_objects.iter_mut() {
+        for (_, poly_list) in subobj.bsp_data.collision_tree.leaves_mut() {
+            for poly in poly_list {
+                if poly.texture == TextureId(u32::MAX) {
+                    if !untextured_anywhere {
+                        untextured_anywhere = true;
+                        textures.push(format!("Untextured"));
+                    }
+                    poly.texture = TextureId((textures.len() - 1) as u32);
+                }
+            }
+        }
+    }
+
+    if untextured_anywhere {
+        Some(TextureId((textures.len() - 1) as u32))
+    } else {
+        None
     }
 }
 

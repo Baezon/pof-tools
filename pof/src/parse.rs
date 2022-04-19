@@ -453,11 +453,14 @@ impl<R: Read + Seek> Parser<R> {
             sub_objects[id].is_debris_model = true;
         }
 
+        let mut textures = textures.unwrap_or_default();
+        let untextured_idx = post_parse_fill_untextured_slot(&mut sub_objects, &mut textures);
+
         Ok(Model {
             version: self.version,
             header: header.expect("No header chunk found???"),
             sub_objects,
-            textures: textures.unwrap_or_default(),
+            textures,
             paths: paths.unwrap_or_default(),
             special_points: special_points.unwrap_or_default(),
             eye_points: eye_points.unwrap_or_default(),
@@ -472,6 +475,7 @@ impl<R: Read + Seek> Parser<R> {
             visual_center: visual_center.unwrap_or_default(),
             shield_data,
             path_to_file: path.canonicalize().unwrap_or(path),
+            untextured_idx,
         })
     }
 
@@ -628,12 +632,14 @@ fn parse_bsp_data(mut buf: &[u8]) -> io::Result<BspData> {
                         let (chunk_type, mut chunk, next_chunk) = parse_chunk_header(buf, false)?;
                         // keeping looping and pushing new polygons
                         poly_list.push(match chunk_type {
-                            BspData::TMAPPOLY => {
+                            BspData::TMAPPOLY | BspData::TMAPPOLY2 => {
                                 let normal = read_vec3d(&mut chunk)?;
-                                let center = read_vec3d(&mut chunk)?;
-                                let radius = chunk.read_f32::<LE>()?;
+                                if chunk_type == BspData::TMAPPOLY {
+                                    let _ = read_vec3d(&mut chunk)?;
+                                    let _ = chunk.read_f32::<LE>()?;
+                                }
                                 let num_verts = chunk.read_u32::<LE>()?;
-                                let texture = Texturing::Texture(TextureId(chunk.read_u32::<LE>()?));
+                                let texture = TextureId(chunk.read_u32::<LE>()?);
                                 let verts = read_list_n(num_verts as usize, &mut chunk, |chunk| {
                                     Ok(PolyVertex {
                                         vertex_id: VertexId(chunk.read_u16::<LE>()?.into()),
@@ -642,18 +648,17 @@ fn parse_bsp_data(mut buf: &[u8]) -> io::Result<BspData> {
                                     })
                                 })?;
 
-                                Polygon { normal, center, radius, verts, texture }
+                                Polygon { normal, verts, texture }
                             }
                             BspData::FLATPOLY => {
                                 let normal = read_vec3d(&mut chunk)?;
                                 let center = read_vec3d(&mut chunk)?;
                                 let radius = chunk.read_f32::<LE>()?;
                                 let num_verts = chunk.read_u32::<LE>()?;
-                                let texture = Texturing::Flat(Color {
-                                    red: chunk.read_u8()?,
-                                    green: chunk.read_u8()?,
-                                    blue: chunk.read_u8()?,
-                                });
+                                let texture = TextureId(u32::MAX);
+                                let _r = chunk.read_u8()?;
+                                let _g = chunk.read_u8()?;
+                                let _b = chunk.read_u8()?;
                                 let _ = chunk.read_u8()?; // get rid of padding byte
                                 let verts = read_list_n(num_verts as usize, &mut chunk, |chunk| {
                                     Ok(PolyVertex {
@@ -663,7 +668,7 @@ fn parse_bsp_data(mut buf: &[u8]) -> io::Result<BspData> {
                                     })
                                 })?;
 
-                                Polygon { normal, center, radius, verts, texture }
+                                Polygon { normal, verts, texture }
                             }
                             BspData::ENDOFBRANCH => {
                                 break;
@@ -833,7 +838,7 @@ fn dae_parse_properties(node: &Node, properties: &mut String) {
 // all translation should be removed and put into a separate offset of some kind
 fn dae_parse_geometry(
     node: &Node, local_maps: &LocalMaps, material_map: &HashMap<&String, TextureId>, transform: Mat4x4,
-) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(Texturing, Vec<PolyVertex>)>) {
+) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(TextureId, Vec<PolyVertex>)>) {
     let mut vertices_out: Vec<Vec3d> = vec![];
     let mut normals_out: Vec<Vec3d> = vec![];
     let mut normals_map: HashMap<Vec3d, NormalId> = HashMap::new();
@@ -851,10 +856,9 @@ fn dae_parse_geometry(
         for prim_elem in &geo.elements {
             match prim_elem {
                 dae_parser::Primitive::PolyList(polies) => {
-                    // println!("{:#?}, {:#?}", polies.material, material_map);
                     let texture = match &polies.material {
-                        Some(mat) => Texturing::Texture(material_map[mat]),
-                        None => Texturing::Flat(Color::default()),
+                        Some(mat) => material_map[mat],
+                        None => TextureId(u32::MAX),
                     };
 
                     let importer = polies.importer(local_maps, verts.clone()).unwrap();
@@ -878,10 +882,9 @@ fn dae_parse_geometry(
                     }
                 }
                 dae_parser::Primitive::Triangles(tris) => {
-                    // println!("{:#?}, {:#?}", tris.material, material_map);
                     let texture = match &tris.material {
-                        Some(mat) => Texturing::Texture(material_map[mat]),
-                        None => Texturing::Flat(Color::default()),
+                        Some(mat) => material_map[mat],
+                        None => TextureId(u32::MAX),
                     };
                     let importer = tris.importer(local_maps, verts.clone()).unwrap();
 
@@ -982,13 +985,9 @@ fn dae_parse_subobject_recursive(
                 norms: normals_out,
                 collision_tree: BspData::recalculate(
                     &vertices_out,
-                    polygons_out.into_iter().map(|(texture, verts)| Polygon {
-                        normal: Default::default(),
-                        center: Default::default(),
-                        radius: Default::default(),
-                        texture,
-                        verts,
-                    }),
+                    polygons_out
+                        .into_iter()
+                        .map(|(texture, verts)| Polygon { normal: Default::default(), texture, verts }),
                 ),
                 verts: vertices_out,
             },
@@ -1202,13 +1201,9 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
                         norms: normals_out,
                         collision_tree: BspData::recalculate(
                             &vertices_out,
-                            polygons_out.into_iter().map(|(texture, verts)| Polygon {
-                                normal: Default::default(),
-                                center: Default::default(),
-                                radius: Default::default(),
-                                texture,
-                                verts,
-                            }),
+                            polygons_out
+                                .into_iter()
+                                .map(|(texture, verts)| Polygon { normal: Default::default(), texture, verts }),
                         ),
                         verts: vertices_out,
                     },
@@ -1457,6 +1452,8 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
         textures[id.0 as usize] = tex.strip_suffix("-material").unwrap_or(tex).to_string();
     }
 
+    let untextured_idx = post_parse_fill_untextured_slot(&mut sub_objects, &mut textures);
+
     let mut model = Model {
         version: Version::LATEST,
         header: ObjHeader {
@@ -1480,6 +1477,7 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
         insignias,
         shield_data,
         path_to_file: path.canonicalize().unwrap_or(path),
+        untextured_idx,
     };
 
     model.recalc_radius();

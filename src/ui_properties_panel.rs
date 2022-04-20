@@ -1016,9 +1016,10 @@ impl PofToolsGui {
                     num_debris >= pof::MAX_DEBRIS_OBJECTS || selected_id.map_or(false, |id| self.model.header.detail_levels.contains(&id));
 
                 ui.add_enabled_ui(selected_id.map_or(false, |id| !cannot_be_debris || self.model.sub_objects[id].is_debris_model), |ui| {
-                    if selected_id.map_or(false, |id| self.model.sub_objects[id].is_debris_model)
-                        && (self.model.header.detail_levels.contains(&selected_id.unwrap()) || num_debris > pof::MAX_DEBRIS_OBJECTS)
-                    {
+                    if selected_id.map_or(false, |id| {
+                        self.model.sub_objects[id].is_debris_model
+                            && (self.model.header.detail_levels.contains(&id) || num_debris > pof::MAX_DEBRIS_OBJECTS)
+                    }) {
                         UiState::set_widget_color(ui, Color32::RED);
                     }
 

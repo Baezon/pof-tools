@@ -9,8 +9,8 @@ use glm::{Mat4x4, Vec3};
 extern crate nalgebra_glm as glm;
 
 use crate::{
-    get_version, BspData, BspNode, Dock, EyePoint, GlowPointBank, Insignia, Model, ObjVec, ObjectId, Path, ShieldData, ShieldNode, SpecialPoint,
-    SubObject, Texturing, ThrusterBank, Turret, Vec3d, Version, WeaponHardpoint,
+    BspData, BspNode, Dock, EyePoint, GlowPointBank, Insignia, Model, ObjVec, ObjectId, Path, ShieldData, ShieldNode, SpecialPoint, SubObject,
+    ThrusterBank, Turret, Vec3d, Version, WeaponHardpoint,
 };
 
 pub(crate) trait Serialize {

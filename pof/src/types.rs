@@ -38,6 +38,12 @@ id_type! {NormalId, u32}
 id_type! {PolygonId, u32}
 id_type! {PathId, u32}
 
+impl TextureId {
+    /// Used temporarily during parsing to denote untextured polygons
+    /// before the "untextured" texture has been added
+    pub(crate) const UNTEXTURED: Self = Self(u32::MAX);
+}
+
 // what, a global?? in rust?????
 // this is how the current version is kept track of while writing pof to disk
 // much easier than having to pass around a version to every Serialize implementation despite it mattering in like 1% of cases
@@ -609,20 +615,6 @@ impl Serialize for PolyVertex<()> {
         self.vertex_id.write_to(w)?;
         0_u16.write_to(w)?;
         self.uv.write_to(w)
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum Texturing {
-    Flat(Color),
-    Texture(TextureId),
-}
-impl Serialize for Texturing {
-    fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
-        match self {
-            Texturing::Flat(color) => color.write_to(w),
-            Texturing::Texture(tmap) => tmap.write_to(w),
-        }
     }
 }
 

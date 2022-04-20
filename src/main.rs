@@ -20,8 +20,7 @@ use glium::{
 use glm::Mat4x4;
 use native_dialog::FileDialog;
 use pof::{
-    BspData, BspNode, Insignia, Model, NormalId, ObjVec, ObjectId, Parser, PolyVertex, Polygon, ShieldData, SubObject, TextureId, Texturing, Vec3d,
-    VertexId,
+    BspData, BspNode, Insignia, Model, NormalId, ObjVec, ObjectId, Parser, PolyVertex, Polygon, ShieldData, SubObject, TextureId, Vec3d, VertexId,
 };
 use simplelog::*;
 use std::{

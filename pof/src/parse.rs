@@ -669,8 +669,8 @@ fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
                             let _center = read_vec3d(&mut chunk)?;
                             let _radius = chunk.read_f32::<LE>()?;
                             let num_verts = chunk.read_u32::<LE>()?;
-                            let texture = TextureId(u32::MAX);
-                            let _ = chunk.read_u8()?; // get rid of padding byte
+                            let texture = TextureId::UNTEXTURED;
+                            let _color = chunk.read_u32::<LE>()?;
                             let verts = read_list_n(num_verts as usize, &mut chunk, |chunk| {
                                 Ok(PolyVertex {
                                     vertex_id: VertexId(chunk.read_u16::<LE>()?.into()),
@@ -865,10 +865,9 @@ fn dae_parse_geometry(
         for prim_elem in &geo.elements {
             match prim_elem {
                 dae_parser::Primitive::PolyList(polies) => {
-                    let texture = match &polies.material {
-                        Some(mat) => material_map[mat],
-                        None => TextureId(u32::MAX),
-                    };
+                    let texture = (polies.material.as_ref())
+                        .and_then(|mat| material_map.get(mat).copied())
+                        .unwrap_or(TextureId::UNTEXTURED);
 
                     let importer = polies.importer(local_maps, verts.clone()).unwrap();
 
@@ -891,10 +890,10 @@ fn dae_parse_geometry(
                     }
                 }
                 dae_parser::Primitive::Triangles(tris) => {
-                    let texture = match &tris.material {
-                        Some(mat) => material_map[mat],
-                        None => TextureId(u32::MAX),
-                    };
+                    let texture = (tris.material.as_ref())
+                        .and_then(|mat| material_map.get(mat).copied())
+                        .unwrap_or(TextureId::UNTEXTURED);
+
                     let importer = tris.importer(local_maps, verts.clone()).unwrap();
 
                     vert_ctx.normal_ids = vec![];

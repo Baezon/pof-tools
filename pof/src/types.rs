@@ -868,8 +868,10 @@ impl ShieldData {
 #[derive(Clone, Debug)]
 pub struct Polygon {
     pub normal: Vec3d,
-    pub texture: TextureId, // this might be u32::MAX during parsing which indicates untextured, this is cleaned up in
-    //                         post_parse_fill_untextured_slot with an explicit "untextured" texture id
+    // this might be TextureId::UNTEXTURED during parsing which indicates untextured;
+    // this is cleaned up in `post_parse_fill_untextured_slot`
+    // with an explicit "untextured" texture id
+    pub texture: TextureId,
     pub verts: Vec<PolyVertex>,
 }
 
@@ -1782,19 +1784,20 @@ impl Model {
 }
 
 pub fn post_parse_fill_untextured_slot(sub_objects: &mut Vec<SubObject>, textures: &mut Vec<String>) -> Option<TextureId> {
-    let mut untextured_slot = None;
+    let mut has_untextured = false;
+    let untextured_id = TextureId(textures.len().try_into().unwrap());
     for subobj in sub_objects.iter_mut() {
         for (_, poly) in subobj.bsp_data.collision_tree.leaves_mut() {
-            if poly.texture == TextureId::UNTEXTURED {
-                poly.texture = *untextured_slot.get_or_insert_with(|| {
-                    let n = TextureId(textures.len() as u32);
-                    textures.push(format!("Untextured"));
-                    n
-                });
+            if poly.texture >= untextured_id {
+                has_untextured = true;
+                poly.texture = untextured_id;
             }
         }
     }
-    untextured_slot
+    has_untextured.then(|| {
+        textures.push(format!("Untextured"));
+        untextured_id
+    })
 }
 
 fn properties_delete_field(properties: &mut String, field: &str) {

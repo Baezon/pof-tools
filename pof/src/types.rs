@@ -1784,20 +1784,28 @@ impl Model {
 }
 
 pub fn post_parse_fill_untextured_slot(sub_objects: &mut Vec<SubObject>, textures: &mut Vec<String>) -> Option<TextureId> {
+    let max_texture = TextureId(textures.len().try_into().unwrap());
+    let untextured_id = match textures.iter().position(|tex| tex == "Untextured") {
+        Some(index) => TextureId(index.try_into().unwrap()),
+        None => max_texture,
+    };
     let mut has_untextured = false;
-    let untextured_id = TextureId(textures.len().try_into().unwrap());
     for subobj in sub_objects.iter_mut() {
         for (_, poly) in subobj.bsp_data.collision_tree.leaves_mut() {
-            if poly.texture >= untextured_id {
+            if poly.texture >= max_texture {
                 has_untextured = true;
                 poly.texture = untextured_id;
             }
         }
     }
-    has_untextured.then(|| {
+    if untextured_id < max_texture {
+        Some(untextured_id)
+    } else if has_untextured {
         textures.push(format!("Untextured"));
-        untextured_id
-    })
+        Some(untextured_id)
+    } else {
+        None
+    }
 }
 
 fn properties_delete_field(properties: &mut String, field: &str) {

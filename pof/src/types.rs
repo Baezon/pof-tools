@@ -1107,36 +1107,35 @@ macro_rules! mk_enumeration {
 }
 
 mk_enumeration! {
-    #[derive(Debug, Clone, Copy, PartialEq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum SubsysMovementType(i32) {
-        // no idea what any of these are, just copied from the source
-        NONE = -1,
-        POS = 0,
-        ROT = 1,
-        ROTSPECIAL = 2,
-        TRIGGERED = 3,
-        INTRINSICROTATE = 4,
+        None = -1,
+        Unused = 0, // previously MOVEMENT_TYPE_POS
+        Regular = 1, // previously MOVEMENT_TYPE_ROT
+        Turret = 2, // for turrets only
+        Triggered = 3,
+        Intrinsic = 4, // intrinsic (non-subsystem-based)
     }
 }
 impl Default for SubsysMovementType {
     fn default() -> Self {
-        Self::NONE
+        Self::None
     }
 }
 
 mk_enumeration! {
-    #[derive(Debug, Clone, Copy, PartialEq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum SubsysMovementAxis(i32) {
-        NONE = -1,
-        XAXIS = 0,
-        ZAXIS = 1,
-        YAXIS = 2,
-        OTHER = 3,
+        None = -1,
+        X = 0,
+        Z = 1,
+        Y = 2,
+        Other = 3,
     }
 }
 impl Default for SubsysMovementAxis {
     fn default() -> Self {
-        Self::NONE
+        Self::None
     }
 }
 

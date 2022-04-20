@@ -4,29 +4,6 @@ use std::convert::TryInto;
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
-fn parse_subsys_mov_type(val: i32) -> SubsysMovementType {
-    match val {
-        -1 => SubsysMovementType::NONE,
-        0 => SubsysMovementType::POS,
-        1 => SubsysMovementType::ROT,
-        2 => SubsysMovementType::ROTSPECIAL,
-        3 => SubsysMovementType::TRIGGERED,
-        4 => SubsysMovementType::INTRINSICROTATE,
-        _ => SubsysMovementType::NONE,
-    }
-}
-
-fn parse_subsys_mov_axis(val: i32) -> SubsysMovementAxis {
-    match val {
-        -1 => SubsysMovementAxis::NONE,
-        0 => SubsysMovementAxis::XAXIS,
-        1 => SubsysMovementAxis::ZAXIS,
-        2 => SubsysMovementAxis::YAXIS,
-        3 => SubsysMovementAxis::OTHER,
-        _ => SubsysMovementAxis::NONE,
-    }
-}
-
 pub struct Parser<R> {
     file: R,
     version: Version,
@@ -184,8 +161,11 @@ impl<R: Read + Seek> Parser<R> {
                     let bbox = self.read_bbox()?;
                     let name = self.read_string()?;
                     let properties = self.read_string()?;
-                    let movement_type = parse_subsys_mov_type(self.read_i32()?);
-                    let movement_axis = parse_subsys_mov_axis(self.read_i32()?);
+                    let movement_type = self.read_i32()?.try_into().unwrap_or_default();
+                    let mut movement_axis = self.read_i32()?.try_into().unwrap_or_default();
+                    if movement_type == SubsysMovementType::None {
+                        movement_axis = SubsysMovementAxis::None
+                    }
 
                     assert!(self.read_i32()? == 0, "chunked models unimplemented in FSO");
                     let bsp_data_buffer = self.read_byte_buffer()?;
@@ -1019,15 +999,15 @@ fn dae_parse_subobject_recursive(
                     continue;
                 } else if name.starts_with('#') && name.contains("mov-type") {
                     if let Some(idx) = name.find(':') {
-                        if let Ok(val) = &name[(idx + 1)..].parse::<i32>() {
-                            subobj.movement_type = parse_subsys_mov_type(*val);
+                        if let Ok(val) = name[(idx + 1)..].parse::<i32>() {
+                            subobj.movement_type = val.try_into().unwrap_or_default();
                         }
                     }
                     continue;
                 } else if name.starts_with('#') && name.contains("mov-axis") {
                     if let Some(idx) = name.find(':') {
-                        if let Ok(val) = &name[(idx + 1)..].parse::<i32>() {
-                            subobj.movement_axis = parse_subsys_mov_axis(*val);
+                        if let Ok(val) = name[(idx + 1)..].parse::<i32>() {
+                            subobj.movement_axis = val.try_into().unwrap_or_default();
                         }
                     }
                     continue;

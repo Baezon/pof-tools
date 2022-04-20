@@ -190,6 +190,8 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
                     let front_offset = Fixup::new(buf, base)?;
                     let back_offset = Fixup::new(buf, base)?;
 
+                    bbox.write_to(buf)?;
+
                     if !matches!(**front, BspNode::Empty) {
                         front_offset.finish(buf);
                         write_bsp_node(buf, verts, version, front)?;
@@ -199,8 +201,6 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
                         back_offset.finish(buf);
                         write_bsp_node(buf, verts, version, back)?;
                     } // otherwise back_offset = 0
-
-                    bbox.write_to(buf)?;
 
                     chunk_size_pointer.finish(buf);
                 } else {

@@ -1109,9 +1109,9 @@ macro_rules! mk_enumeration {
 mk_enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum SubsysMovementType(i32) {
-        None = -1, // previously MOVEMENT_TYPE_POS
-        Unused = 0, // previously MOVEMENT_TYPE_ROT
-        Regular = 1,
+        None = -1,
+        Unused = 0, // previously MOVEMENT_TYPE_POS
+        Regular = 1, // previously MOVEMENT_TYPE_ROT
         Turret = 2, // for turrets only
         Triggered = 3,
         Intrinsic = 4, // intrinsic (non-subsystem-based)

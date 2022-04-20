@@ -1782,24 +1782,19 @@ impl Model {
 }
 
 pub fn post_parse_fill_untextured_slot(sub_objects: &mut Vec<SubObject>, textures: &mut Vec<String>) -> Option<TextureId> {
-    let mut untextured_anywhere = false;
+    let mut untextured_slot = None;
     for subobj in sub_objects.iter_mut() {
         for (_, poly) in subobj.bsp_data.collision_tree.leaves_mut() {
-            if poly.texture == TextureId(u32::MAX) {
-                if !untextured_anywhere {
-                    untextured_anywhere = true;
+            if poly.texture == TextureId::UNTEXTURED {
+                poly.texture = *untextured_slot.get_or_insert_with(|| {
+                    let n = TextureId(textures.len() as u32);
                     textures.push(format!("Untextured"));
-                }
-                poly.texture = TextureId((textures.len() - 1) as u32);
+                    n
+                });
             }
         }
     }
-
-    if untextured_anywhere {
-        Some(TextureId((textures.len() - 1) as u32))
-    } else {
-        None
-    }
+    untextured_slot
 }
 
 fn properties_delete_field(properties: &mut String, field: &str) {

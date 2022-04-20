@@ -716,7 +716,7 @@ impl PropertiesPanel {
             offset_string: Default::default(),
             radius_string: Default::default(),
             is_debris_check: Default::default(),
-            rot_axis: SubsysMovementAxis::NONE,
+            rot_axis: SubsysMovementAxis::None,
             transform_window: TransformWindow {
                 open: false,
                 vector: format!("1, 0, 0"),
@@ -1015,34 +1015,31 @@ impl PofToolsGui {
                 let cannot_be_debris =
                     num_debris >= pof::MAX_DEBRIS_OBJECTS || selected_id.map_or(false, |id| self.model.header.detail_levels.contains(&id));
 
-                ui.add_enabled_ui(
-                    selected_id.is_some() && (self.model.sub_objects[selected_id.unwrap()].is_debris_model || !cannot_be_debris),
-                    |ui| {
-                        if selected_id.map_or(false, |id| self.model.sub_objects[id].is_debris_model)
-                            && (self.model.header.detail_levels.contains(&selected_id.unwrap()) || num_debris > pof::MAX_DEBRIS_OBJECTS)
-                        {
-                            UiState::set_widget_color(ui, Color32::RED);
-                        }
+                ui.add_enabled_ui(!cannot_be_debris || selected_id.map_or(false, |id| self.model.sub_objects[id].is_debris_model), |ui| {
+                    if selected_id.map_or(false, |id| self.model.sub_objects[id].is_debris_model)
+                        && (self.model.header.detail_levels.contains(&selected_id.unwrap()) || num_debris > pof::MAX_DEBRIS_OBJECTS)
+                    {
+                        UiState::set_widget_color(ui, Color32::RED);
+                    }
 
-                        let mut checkbox = ui.checkbox(is_debris_check, "Debris Subobject");
+                    let mut checkbox = ui.checkbox(is_debris_check, "Debris Subobject");
 
-                        if selected_id.map_or(false, |_| num_debris >= pof::MAX_DEBRIS_OBJECTS) {
-                            checkbox = checkbox.on_disabled_hover_text(format!("The maximum number of debris is {}", pof::MAX_DEBRIS_OBJECTS));
-                        }
+                    if selected_id.map_or(false, |_| num_debris >= pof::MAX_DEBRIS_OBJECTS) {
+                        checkbox = checkbox.on_disabled_hover_text(format!("The maximum number of debris is {}", pof::MAX_DEBRIS_OBJECTS));
+                    }
 
-                        if selected_id.map_or(false, |id| self.model.header.detail_levels.contains(&id)) {
-                            checkbox = checkbox.on_disabled_hover_text(format!("A detail object cannot also be debris"));
-                        }
+                    if selected_id.map_or(false, |id| self.model.header.detail_levels.contains(&id)) {
+                        checkbox = checkbox.on_disabled_hover_text(format!("A detail object cannot also be debris"));
+                    }
 
-                        if checkbox.changed() {
-                            self.model.sub_objects[selected_id.unwrap()].is_debris_model = *is_debris_check;
-                            PofToolsGui::recheck_errors(&mut self.errors, &self.model, One(Error::TooManyDebrisObjects));
-                            PofToolsGui::recheck_errors(&mut self.errors, &self.model, One(Error::DetailAndDebrisObj(selected_id.unwrap())));
-                        }
+                    if checkbox.changed() {
+                        self.model.sub_objects[selected_id.unwrap()].is_debris_model = *is_debris_check;
+                        PofToolsGui::recheck_errors(&mut self.errors, &self.model, One(Error::TooManyDebrisObjects));
+                        PofToolsGui::recheck_errors(&mut self.errors, &self.model, One(Error::DetailAndDebrisObj(selected_id.unwrap())));
+                    }
 
-                        UiState::reset_widget_color(ui);
-                    },
-                );
+                    UiState::reset_widget_color(ui);
+                });
 
                 ui.add_space(5.0);
 
@@ -1253,11 +1250,11 @@ impl PofToolsGui {
                 ui.label("Rotation Axis:");
                 let old_val = *rot_axis;
                 ui.add_enabled_ui(selected_id.is_some(), |ui| {
-                    ui.radio_value(rot_axis, SubsysMovementAxis::NONE, "None");
-                    ui.radio_value(rot_axis, SubsysMovementAxis::XAXIS, "X-axis");
-                    ui.radio_value(rot_axis, SubsysMovementAxis::YAXIS, "Y-axis");
-                    ui.radio_value(rot_axis, SubsysMovementAxis::ZAXIS, "Z-axis");
-                    ui.radio_value(rot_axis, SubsysMovementAxis::OTHER, "Other");
+                    ui.radio_value(rot_axis, SubsysMovementAxis::None, "None");
+                    ui.radio_value(rot_axis, SubsysMovementAxis::X, "X-axis");
+                    ui.radio_value(rot_axis, SubsysMovementAxis::Y, "Y-axis");
+                    ui.radio_value(rot_axis, SubsysMovementAxis::Z, "Z-axis");
+                    ui.radio_value(rot_axis, SubsysMovementAxis::Other, "Other");
                 });
                 if old_val != *rot_axis {
                     self.model.sub_objects[selected_id.unwrap()].movement_axis = *rot_axis;

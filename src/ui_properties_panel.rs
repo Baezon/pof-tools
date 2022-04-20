@@ -4,8 +4,8 @@ use egui::{style::Widgets, text::LayoutJob, CollapsingHeader, Color32, DragValue
 use glium::Display;
 use nalgebra_glm::TMat4;
 use pof::{
-    Dock, EyePoint, GlowPoint, GlowPointBank, Insignia, Model, ObjectId, PathId, PathPoint, SpecialPoint, SubsysMovementAxis, ThrusterGlow, Vec3d,
-    WeaponHardpoint,
+    Dock, EyePoint, GlowPoint, GlowPointBank, Insignia, Model, ObjectId, PathId, PathPoint, SpecialPoint, SubsysMovementAxis, SubsysMovementType,
+    ThrusterGlow, Vec3d, WeaponHardpoint,
 };
 
 use crate::ui::{
@@ -1257,7 +1257,13 @@ impl PofToolsGui {
                     ui.radio_value(rot_axis, SubsysMovementAxis::Other, "Other");
                 });
                 if old_val != *rot_axis {
-                    self.model.sub_objects[selected_id.unwrap()].movement_axis = *rot_axis;
+                    let obj = &mut self.model.sub_objects[selected_id.unwrap()];
+                    obj.movement_axis = *rot_axis;
+                    if *rot_axis == SubsysMovementAxis::None {
+                        obj.movement_type = SubsysMovementType::None
+                    } else if obj.movement_type == SubsysMovementType::None {
+                        obj.movement_type = SubsysMovementType::Regular
+                    }
                 }
 
                 // DEBUG - prints total bsp node bbox volume at all depths (divided by actual top-level bbox volume so literal size doesn't matter)

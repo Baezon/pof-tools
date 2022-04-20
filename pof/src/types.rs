@@ -1107,7 +1107,7 @@ macro_rules! mk_enumeration {
 }
 
 mk_enumeration! {
-    #[derive(Debug, Clone, Copy, PartialEq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum SubsysMovementType(i32) {
         None = -1, // previously MOVEMENT_TYPE_POS
         Unused = 0, // previously MOVEMENT_TYPE_ROT
@@ -1124,7 +1124,7 @@ impl Default for SubsysMovementType {
 }
 
 mk_enumeration! {
-    #[derive(Debug, Clone, Copy, PartialEq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum SubsysMovementAxis(i32) {
         None = -1,
         X = 0,

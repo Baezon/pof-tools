@@ -162,7 +162,10 @@ impl<R: Read + Seek> Parser<R> {
                     let name = self.read_string()?;
                     let properties = self.read_string()?;
                     let movement_type = self.read_i32()?.try_into().unwrap_or_default();
-                    let movement_axis = self.read_i32()?.try_into().unwrap_or_default();
+                    let mut movement_axis = self.read_i32()?.try_into().unwrap_or_default();
+                    if movement_type == SubsysMovementType::None {
+                        movement_axis = SubsysMovementAxis::None
+                    }
 
                     assert!(self.read_i32()? == 0, "chunked models unimplemented in FSO");
                     let bsp_data_buffer = self.read_byte_buffer()?;

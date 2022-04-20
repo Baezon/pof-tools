@@ -442,11 +442,16 @@ impl Mat3d {
     }
 }
 
-mk_struct! {
-    #[derive(Default, Clone, Copy)]
-    pub struct BoundingBox {
-        pub min: Vec3d,
-        pub max: Vec3d,
+#[derive(Default, Clone, Copy)]
+pub struct BoundingBox {
+    pub min: Vec3d,
+    pub max: Vec3d,
+}
+impl Serialize for BoundingBox {
+    fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
+        let bbox = self.sanitize();
+        bbox.min.write_to(w)?;
+        bbox.max.write_to(w)
     }
 }
 impl Debug for BoundingBox {

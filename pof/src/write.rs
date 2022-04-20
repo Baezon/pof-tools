@@ -129,7 +129,7 @@ pub(crate) fn write_shield_node(buf: &mut Vec<u8>, shield_node: &ShieldNode, chu
             write_chunk_type!(ShieldNode::SPLIT)?;
             let chunk_size_pointer = Fixup::new(buf, base)?;
 
-            bbox.sanitize().write_to(buf)?;
+            bbox.write_to(buf)?;
             let front_offset = Fixup::new(buf, base)?;
             let back_offset = Fixup::new(buf, base)?;
 
@@ -146,7 +146,7 @@ pub(crate) fn write_shield_node(buf: &mut Vec<u8>, shield_node: &ShieldNode, chu
             write_chunk_type!(ShieldNode::LEAF)?;
             let chunk_size_pointer = Fixup::new(buf, base)?;
 
-            bbox.sanitize().write_to(buf)?;
+            bbox.write_to(buf)?;
             poly_list.write_to(buf)?;
             chunk_size_pointer.finish(buf);
         }
@@ -216,7 +216,7 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
                     buf.write_u32::<LE>(0)?;
                     buf.write_u32::<LE>(0)?;
                     if version >= Version::V20_00 {
-                        bbox.sanitize().write_to(buf)?;
+                        bbox.write_to(buf)?;
                     }
 
                     if !matches!(**front, BspNode::Empty) {
@@ -255,7 +255,7 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
                     buf.write_u32::<LE>(BspData::BOUNDBOX)?;
                     let chunk_size_pointer = Fixup::new(buf, base)?;
 
-                    bbox.sanitize().write_to(buf)?;
+                    bbox.write_to(buf)?;
                     chunk_size_pointer.finish(buf);
 
                     let base = buf.len();
@@ -399,7 +399,7 @@ impl Model {
                 self.header.max_radius.write_to(w)?;
                 self.header.obj_flags.write_to(w)?;
             }
-            self.header.bbox.sanitize().write_to(w)?;
+            self.header.bbox.write_to(w)?;
             self.header.detail_levels.write_to(w)?;
             self.sub_objects
                 .iter()

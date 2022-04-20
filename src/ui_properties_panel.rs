@@ -1015,7 +1015,7 @@ impl PofToolsGui {
                 let cannot_be_debris =
                     num_debris >= pof::MAX_DEBRIS_OBJECTS || selected_id.map_or(false, |id| self.model.header.detail_levels.contains(&id));
 
-                ui.add_enabled_ui(!cannot_be_debris || selected_id.map_or(false, |id| self.model.sub_objects[id].is_debris_model), |ui| {
+                ui.add_enabled_ui(selected_id.map_or(false, |id| !cannot_be_debris || self.model.sub_objects[id].is_debris_model), |ui| {
                     if selected_id.map_or(false, |id| self.model.sub_objects[id].is_debris_model)
                         && (self.model.header.detail_levels.contains(&selected_id.unwrap()) || num_debris > pof::MAX_DEBRIS_OBJECTS)
                     {

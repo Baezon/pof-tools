@@ -591,6 +591,7 @@ impl PofToolsGui {
                     // 'those specific warnings but for all their parameters' so just do them all i guess
                     if changed {
                         PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All);
+                        PofToolsGui::recheck_errors(&mut self.errors, &self.model, All);
                     }
                 });
 

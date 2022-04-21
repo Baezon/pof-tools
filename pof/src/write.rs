@@ -1269,8 +1269,8 @@ impl GltfBuilder {
 
             // intentional swizzle
             (v1, normal).write_to(&mut self.buffer).unwrap();
-            (v2, normal).write_to(&mut self.buffer).unwrap();
             (v3, normal).write_to(&mut self.buffer).unwrap();
+            (v2, normal).write_to(&mut self.buffer).unwrap();
 
             bbox_pos.expand_vec(v1);
             bbox_pos.expand_vec(v2);

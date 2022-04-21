@@ -787,7 +787,7 @@ trait IsNode<'a>: Clone {
         let offset = transform.transform_point(&zero) - zero;
         let transform = transform.append_translation(&(-offset));
         let pos = Vec3d::from(offset).from_coord(up);
-        let vector: Vec3d = transform.transform_point(&Point3::from_slice(&[0.0, 1.0, 0.0])).into();
+        let vector: Vec3d = transform.transform_point(&Vec3d::new(0., 0., 1.).to_coord(up).into()).into();
         let radius = vector.magnitude();
         let norm = vector.normalize().from_coord(up);
         (pos, norm, radius)

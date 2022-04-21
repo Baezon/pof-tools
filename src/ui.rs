@@ -558,7 +558,7 @@ impl PofToolsGui {
                 }
 
                 if ui
-                    .add_enabled(true, Button::new(RichText::new("🖴").text_style(TextStyle::Heading)))
+                    .add_enabled(self.errors.is_empty(), Button::new(RichText::new("🖴").text_style(TextStyle::Heading)))
                     .on_hover_text("Save")
                     .on_disabled_hover_text("All errors must be corrected before saving.")
                     .clicked()
@@ -701,7 +701,7 @@ impl PofToolsGui {
                                         RichText::new(format!(
                                             "⊗ Subobject {} has more than the {} vertices supported by the currently selected pof version",
                                             self.model.sub_objects[id].name,
-                                            u16::MAX,
+                                            self.model.max_verts_norms_per_subobj(),
                                         ))
                                         .text_style(TextStyle::Button)
                                         .color(Color32::RED),
@@ -712,7 +712,7 @@ impl PofToolsGui {
                                         RichText::new(format!(
                                             "⊗ Subobject {} has more than the {} normals supported by the currently selected pof version",
                                             self.model.sub_objects[id].name,
-                                            u16::MAX,
+                                            self.model.max_verts_norms_per_subobj(),
                                         ))
                                         .text_style(TextStyle::Button)
                                         .color(Color32::RED),
@@ -1115,8 +1115,8 @@ impl PofToolsGui {
                 Error::TooManyDebrisObjects => model.num_debris_objects() > pof::MAX_DEBRIS_OBJECTS,
                 Error::DetailAndDebrisObj(id) => model.header.detail_levels.contains(&id) && model.sub_objects[id].is_debris_model,
                 Error::DetailObjWithParent(id) => model.header.detail_levels.contains(&id) && model.sub_objects[id].parent().is_some(),
-                Error::TooManyVerts(id) => model.sub_objects[id].bsp_data.verts.len() > u16::MAX as usize,
-                Error::TooManyNorms(id) => model.sub_objects[id].bsp_data.norms.len() > u16::MAX as usize,
+                Error::TooManyVerts(id) => model.sub_objects[id].bsp_data.verts.len() > model.max_verts_norms_per_subobj(),
+                Error::TooManyNorms(id) => model.sub_objects[id].bsp_data.norms.len() > model.max_verts_norms_per_subobj(),
             };
 
             let existing_warning = errors.contains(&error);
@@ -1149,11 +1149,11 @@ impl PofToolsGui {
             }
 
             for subobj in &model.sub_objects {
-                if subobj.bsp_data.verts.len() > u16::MAX as usize {
+                if subobj.bsp_data.verts.len() > model.max_verts_norms_per_subobj() {
                     errors.insert(Error::TooManyVerts(subobj.obj_id));
                 }
 
-                if subobj.bsp_data.norms.len() > u16::MAX as usize {
+                if subobj.bsp_data.norms.len() > model.max_verts_norms_per_subobj() {
                     errors.insert(Error::TooManyNorms(subobj.obj_id));
                 }
             }

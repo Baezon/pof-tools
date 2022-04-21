@@ -958,33 +958,33 @@ fn main() {
                         //      This is quite useful but incredibly ineffcient
                         //      TODO make this more efficient
                         //
-                        let mut node_stack = vec![(&pt_gui.model.sub_objects[id].bsp_data.collision_tree, 0u32)];
-                        while let Some((node, depth)) = node_stack.pop() {
-                            let bbox = match node {
-                                BspNode::Split { bbox, front, back, .. } => {
-                                    node_stack.push((front, depth + 1));
-                                    node_stack.push((back, depth + 1));
-                                    bbox
-                                }
-                                BspNode::Leaf { bbox, .. } => bbox,
-                                BspNode::Empty => continue,
-                            };
+                        // let mut node_stack = vec![(&pt_gui.model.sub_objects[id].bsp_data.collision_tree, 0u32)];
+                        // while let Some((node, depth)) = node_stack.pop() {
+                        //     let bbox = match node {
+                        //         BspNode::Split { bbox, front, back, .. } => {
+                        //             node_stack.push((front, depth + 1));
+                        //             node_stack.push((back, depth + 1));
+                        //             bbox
+                        //         }
+                        //         BspNode::Leaf { bbox, .. } => bbox,
+                        //         BspNode::Empty => continue,
+                        //     };
 
-                            let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
-                            mat.append_translation_mut(&(bbox.min + pt_gui.model.get_total_subobj_offset(id)).into());
-                            let color = 2.0 / (1.5f32.powf(depth as f32));
-                            let matrix = view_mat * mat;
-                            let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * matrix).into();
+                        //     let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
+                        //     mat.append_translation_mut(&(bbox.min + pt_gui.model.get_total_subobj_offset(id)).into());
+                        //     let color = 2.0 / (1.5f32.powf(depth as f32));
+                        //     let matrix = view_mat * mat;
+                        //     let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * matrix).into();
 
-                            let uniforms = glium::uniform! {
-                                vert_matrix: vert_matrix,
-                                lollipop_color: [color, color, color, 1.0f32],
-                            };
+                        //     let uniforms = glium::uniform! {
+                        //         vert_matrix: vert_matrix,
+                        //         lollipop_color: [color, color, color, 1.0f32],
+                        //     };
 
-                            target
-                                .draw(&box_verts, &box_indices, &lollipop_stick_shader, &uniforms, &lollipop_stick_params)
-                                .unwrap();
-                        }
+                        //     target
+                        //         .draw(&box_verts, &box_indices, &lollipop_stick_shader, &uniforms, &lollipop_stick_params)
+                        //         .unwrap();
+                        // }
                     }
 
                     // draw wireframe bounding boxes

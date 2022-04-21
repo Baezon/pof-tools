@@ -1482,7 +1482,7 @@ mk_versions! {
     V22_00(2200, "22.00"),
     /// External weapon angle offset compatible
     V22_01(2201, "22.01"),
-    /// Extended vertex and normal limits per subobject
+    /// Extended vertex and normal limits per subobject and file size optimizations
     V23_00(2300, "23.00"),
 }
 
@@ -1779,6 +1779,14 @@ impl Model {
             Some(())
         } else {
             None
+        }
+    }
+
+    pub fn max_verts_norms_per_subobj(&self) -> usize {
+        if self.version >= Version::V23_00 {
+            u32::MAX as usize
+        } else {
+            u16::MAX as usize
         }
     }
 }

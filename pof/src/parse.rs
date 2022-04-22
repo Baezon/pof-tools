@@ -1513,7 +1513,7 @@ impl<'a> ParseCtx<'a> for GltfContext {
                         macro_rules! on_indices {
                             ($indices:expr) => {{
                                 let mut iter = $indices.map(|i| PolyVertex {
-                                    vertex_id: VertexId(vertex_offset + i),
+                                    vertex_id: VertexId(i + vertex_offset),
                                     normal_id: normal_ids.get(i as usize).copied().unwrap_or_default(),
                                     uv: uvs.as_ref().map_or((0., 0.), |vec| vec[i as usize]),
                                 });
@@ -1524,7 +1524,7 @@ impl<'a> ParseCtx<'a> for GltfContext {
                         }
                         match reader.read_indices() {
                             Some(indices) => on_indices!(indices.into_u32()),
-                            None => on_indices!(0..vertices_out.len() as u32),
+                            None => on_indices!(0..(vertices_out.len() as u32) - vertex_offset),
                         }
                     }
                     _ => unreachable!(),

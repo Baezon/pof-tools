@@ -10,7 +10,7 @@ extern crate nalgebra_glm as glm;
 
 use crate::{
     BspData, BspNode, Dock, EyePoint, GlowPointBank, Insignia, Model, ObjVec, ObjectId, Path, ShieldData, ShieldNode, SpecialPoint, SubObject,
-    Texturing, ThrusterBank, Turret, Vec3d, Version, WeaponHardpoint,
+    ThrusterBank, Turret, Vec3d, Version, WeaponHardpoint,
 };
 
 pub(crate) trait Serialize {
@@ -129,7 +129,7 @@ pub(crate) fn write_shield_node(buf: &mut Vec<u8>, shield_node: &ShieldNode, chu
             write_chunk_type!(ShieldNode::SPLIT)?;
             let chunk_size_pointer = Fixup::new(buf, base)?;
 
-            bbox.sanitize().write_to(buf)?;
+            bbox.write_to(buf)?;
             let front_offset = Fixup::new(buf, base)?;
             let back_offset = Fixup::new(buf, base)?;
 
@@ -146,7 +146,7 @@ pub(crate) fn write_shield_node(buf: &mut Vec<u8>, shield_node: &ShieldNode, chu
             write_chunk_type!(ShieldNode::LEAF)?;
             let chunk_size_pointer = Fixup::new(buf, base)?;
 
-            bbox.sanitize().write_to(buf)?;
+            bbox.write_to(buf)?;
             poly_list.write_to(buf)?;
             chunk_size_pointer.finish(buf);
         }
@@ -179,22 +179,29 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
         match bsp_node {
             BspNode::Split { bbox, front, back } => {
                 let base = buf.len();
-                buf.write_u32::<LE>(BspData::SORTNORM)?;
+                if version >= Version::V23_00 {
+                    buf.write_u32::<LE>(BspData::SORTNORM2)?;
+                } else {
+                    buf.write_u32::<LE>(BspData::SORTNORM)?;
+                }
                 let chunk_size_pointer = Fixup::new(buf, base)?;
 
-                Vec3d::ZERO.write_to(buf)?; // plane_normal: unused
-                Vec3d::ZERO.write_to(buf)?; // plane_point: unused
-
-                buf.write_u32::<LE>(0)?;
+                if version < Version::V23_00 {
+                    Vec3d::ZERO.write_to(buf)?; // plane_normal: unused
+                    Vec3d::ZERO.write_to(buf)?; // plane_point: unused
+                    buf.write_u32::<LE>(0)?; // reserved: unused
+                }
 
                 let front_offset = Fixup::new(buf, base)?;
                 let back_offset = Fixup::new(buf, base)?;
 
-                buf.write_u32::<LE>(0)?;
-                buf.write_u32::<LE>(0)?;
-                buf.write_u32::<LE>(0)?;
+                if version < Version::V23_00 {
+                    buf.write_u32::<LE>(0)?; // prelist_offset: unused
+                    buf.write_u32::<LE>(0)?; // postlist_offset: unused
+                    buf.write_u32::<LE>(0)?; // online_offset: unused
+                }
                 if version >= Version::V20_00 {
-                    bbox.sanitize().write_to(buf)?;
+                    bbox.write_to(buf)?;
                 }
 
                 if !matches!(**front, BspNode::Empty) {
@@ -208,45 +215,65 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
                 } // otherwise back_offset = 0
 
                 chunk_size_pointer.finish(buf);
+
+                if version < Version::V23_00 {
+                    buf.write_u32::<LE>(BspData::ENDOFBRANCH)?;
+                    buf.write_u32::<LE>(0)?;
+                }
             }
             BspNode::Leaf { bbox, poly } => {
                 let base = buf.len();
-                buf.write_u32::<LE>(BspData::BOUNDBOX)?;
-                let chunk_size_pointer = Fixup::new(buf, base)?;
+                if version >= Version::V23_00 {
+                    buf.write_u32::<LE>(BspData::TMAPPOLY2)?;
+                    let chunk_size_pointer = Fixup::new(buf, base)?;
 
-                bbox.sanitize().write_to(buf)?;
-                chunk_size_pointer.finish(buf);
+                    bbox.write_to(buf)?;
 
-                let base = buf.len();
-                match &poly.texture {
-                    Texturing::Flat(_) => buf.write_u32::<LE>(BspData::FLATPOLY)?,
-                    Texturing::Texture(_) => buf.write_u32::<LE>(BspData::TMAPPOLY)?,
-                }
-                let chunk_size_pointer = Fixup::new(buf, base)?;
+                    poly.normal.write_to(buf)?;
+                    poly.texture.write_to(buf)?;
+                    (poly.verts.len() as u32).write_to(buf)?;
 
-                poly.normal.write_to(buf)?;
-                let center = Vec3d::average(poly.verts.iter().map(|polyvert| verts[polyvert.vertex_id.0 as usize]));
-                center.write_to(buf)?;
-                0f32.write_to(buf)?; // radius: unused
-                (poly.verts.len() as u32).write_to(buf)?;
-                poly.texture.write_to(buf)?;
-
-                for vert in &poly.verts {
-                    u16::try_from(vert.vertex_id.0).unwrap().write_to(buf)?;
-                    u16::try_from(vert.normal_id.0).unwrap().write_to(buf)?;
-                    if matches!(poly.texture, Texturing::Texture(_)) {
+                    for vert in &poly.verts {
+                        vert.vertex_id.0.write_to(buf)?;
+                        vert.normal_id.0.write_to(buf)?;
                         vert.uv.write_to(buf)?;
                     }
+
+                    chunk_size_pointer.finish(buf);
+                } else {
+                    buf.write_u32::<LE>(BspData::BOUNDBOX)?;
+                    let chunk_size_pointer = Fixup::new(buf, base)?;
+
+                    bbox.write_to(buf)?;
+                    chunk_size_pointer.finish(buf);
+
+                    let base = buf.len();
+                    buf.write_u32::<LE>(BspData::TMAPPOLY)?;
+                    let chunk_size_pointer = Fixup::new(buf, base)?;
+
+                    poly.normal.write_to(buf)?;
+                    Vec3d::ZERO.write_to(buf)?; // center: unused
+                    0f32.write_to(buf)?; // radius: unused
+                    (poly.verts.len() as u32).write_to(buf)?;
+                    poly.texture.write_to(buf)?;
+
+                    for vert in &poly.verts {
+                        u16::try_from(vert.vertex_id.0).unwrap().write_to(buf)?;
+                        u16::try_from(vert.normal_id.0).unwrap().write_to(buf)?;
+                        vert.uv.write_to(buf)?;
+                    }
+
+                    chunk_size_pointer.finish(buf);
+
+                    buf.write_u32::<LE>(BspData::ENDOFBRANCH)?;
+                    buf.write_u32::<LE>(0)?;
                 }
-
-                chunk_size_pointer.finish(buf);
             }
-            BspNode::Empty => {}
+            BspNode::Empty => {
+                buf.write_u32::<LE>(BspData::ENDOFBRANCH)?;
+                buf.write_u32::<LE>(0)?;
+            }
         }
-
-        buf.write_u32::<LE>(BspData::ENDOFBRANCH)?;
-        buf.write_u32::<LE>(0)?;
-
         Ok(())
     }
 
@@ -300,7 +327,7 @@ fn write_chunk_raw(w: &mut impl Write, chunk_name: &[u8; 4], f: impl FnOnce(&mut
 
     f(&mut buf)?;
 
-    w.write_u32::<LE>((buf.len()) as u32)?;
+    w.write_u32::<LE>(buf.len() as u32)?;
     //println!("writing chunk length {}", buf.len());
     w.write_all(&buf)
 }
@@ -360,7 +387,7 @@ impl Model {
                 self.header.max_radius.write_to(w)?;
                 self.header.obj_flags.write_to(w)?;
             }
-            self.header.bbox.sanitize().write_to(w)?;
+            self.header.bbox.write_to(w)?;
             self.header.detail_levels.write_to(w)?;
             self.sub_objects
                 .iter()
@@ -824,10 +851,7 @@ fn make_subobj_node(
     let mut prim_elems = vec![(vec![], vec![]); materials.len() + 1];
 
     for (_, poly) in subobj.bsp_data.collision_tree.leaves() {
-        let (vert_count, indices) = &mut prim_elems[match poly.texture {
-            Texturing::Flat(_) => 0,
-            Texturing::Texture(idx) => idx.0 as usize + 1,
-        }];
+        let (vert_count, indices) = &mut prim_elems[poly.texture.0 as usize + 1];
         vert_count.push(poly.verts.len() as u32);
         for vert in poly.verts.iter().rev() {
             indices.push(vert.vertex_id.0 as _);

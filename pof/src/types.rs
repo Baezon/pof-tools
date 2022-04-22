@@ -38,16 +38,20 @@ id_type! {NormalId, u32}
 id_type! {PolygonId, u32}
 id_type! {PathId, u32}
 
+impl TextureId {
+    /// Used temporarily during parsing to denote untextured polygons
+    /// before the "untextured" texture has been added
+    pub(crate) const UNTEXTURED: Self = Self(u32::MAX);
+}
+
 // what, a global?? in rust?????
 // this is how the current version is kept track of while writing pof to disk
 // much easier than having to pass around a version to every Serialize implementation despite it mattering in like 1% of cases
 thread_local! {
     pub(crate) static VERSION: Cell<Version> = Cell::new(Version::default());
 }
-macro_rules! get_version {
-    () => {
-        VERSION.with(|f| f.get())
-    };
+pub(crate) fn get_version() -> Version {
+    VERSION.with(|f| f.get())
 }
 
 // like a regular vector, but indexed with ObjectIds only, for some safety
@@ -438,11 +442,16 @@ impl Mat3d {
     }
 }
 
-mk_struct! {
-    #[derive(Default, Clone, Copy)]
-    pub struct BoundingBox {
-        pub min: Vec3d,
-        pub max: Vec3d,
+#[derive(Default, Clone, Copy)]
+pub struct BoundingBox {
+    pub min: Vec3d,
+    pub max: Vec3d,
+}
+impl Serialize for BoundingBox {
+    fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
+        let bbox = self.sanitize();
+        bbox.min.write_to(w)?;
+        bbox.max.write_to(w)
     }
 }
 impl Debug for BoundingBox {
@@ -583,7 +592,7 @@ pub struct Path {
 impl Serialize for Path {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         self.name.write_to(w)?;
-        if get_version!() >= Version::V20_02 {
+        if get_version() >= Version::V20_02 {
             self.parent.write_to(w)?;
         }
         self.points.write_to(w)
@@ -611,20 +620,6 @@ impl Serialize for PolyVertex<()> {
         self.vertex_id.write_to(w)?;
         0_u16.write_to(w)?;
         self.uv.write_to(w)
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum Texturing {
-    Flat(Color),
-    Texture(TextureId),
-}
-impl Serialize for Texturing {
-    fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
-        match self {
-            Texturing::Flat(color) => color.write_to(w),
-            Texturing::Texture(tmap) => tmap.write_to(w),
-        }
     }
 }
 
@@ -687,7 +682,7 @@ impl Serialize for ShieldNode {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         let mut buf = vec![];
 
-        crate::write::write_shield_node(&mut buf, self, get_version!() < Version::V22_00)?;
+        crate::write::write_shield_node(&mut buf, self, get_version() < Version::V22_00)?;
 
         w.write_u32::<LE>((buf.len()) as u32)?;
         w.write_all(&buf)
@@ -724,7 +719,7 @@ impl Serialize for WeaponHardpoint {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         self.position.write_to(w)?;
         self.normal.write_to(w)?;
-        let version = get_version!();
+        let version = get_version();
         if version >= Version::V21_18 && version != Version::V22_00 {
             self.offset.write_to(w)?;
         }
@@ -751,7 +746,7 @@ impl Serialize for ThrusterGlow {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         self.position.write_to(w)?;
         self.normal.write_to(w)?;
-        if get_version!() > Version::V20_04 {
+        if get_version() > Version::V20_04 {
             self.radius.write_to(w)?;
         }
         Ok(())
@@ -873,7 +868,10 @@ impl ShieldData {
 #[derive(Clone, Debug)]
 pub struct Polygon {
     pub normal: Vec3d,
-    pub texture: Texturing,
+    // this might be TextureId::UNTEXTURED during parsing which indicates untextured;
+    // this is cleaned up in `post_parse_fill_untextured_slot`
+    // with an explicit "untextured" texture id
+    pub texture: TextureId,
     pub verts: Vec<PolyVertex>,
 }
 
@@ -896,6 +894,10 @@ impl Default for BspNode {
     }
 }
 impl BspNode {
+    pub fn leaves_mut(&mut self) -> BspNodeIterMut<'_> {
+        BspNodeIterMut { stack: vec![self] }
+    }
+
     pub fn bbox(&self) -> &BoundingBox {
         match self {
             BspNode::Split { bbox, .. } | BspNode::Leaf { bbox, .. } => bbox,
@@ -943,6 +945,29 @@ impl BspNode {
     }
 }
 
+pub struct BspNodeIterMut<'a> {
+    stack: Vec<&'a mut BspNode>,
+}
+
+impl<'a> Iterator for BspNodeIterMut<'a> {
+    type Item = (&'a mut BoundingBox, &'a mut Polygon);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.stack.pop()? {
+                BspNode::Split { front, back, .. } => {
+                    self.stack.push(back);
+                    self.stack.push(front);
+                }
+                BspNode::Leaf { bbox, poly } => {
+                    return Some((bbox, poly));
+                }
+                BspNode::Empty => {}
+            }
+        }
+    }
+}
+
 pub struct BspNodeIter<'a> {
     stack: Vec<&'a BspNode>,
 }
@@ -979,10 +1004,12 @@ impl BspData {
     pub(crate) const TMAPPOLY: u32 = 3;
     pub(crate) const SORTNORM: u32 = 4;
     pub(crate) const BOUNDBOX: u32 = 5;
+    pub(crate) const TMAPPOLY2: u32 = 6;
+    pub(crate) const SORTNORM2: u32 = 7;
 }
 impl BspData {
     pub fn recalculate(verts: &[Vec3d], polygons: impl Iterator<Item = Polygon>) -> BspNode {
-        // first go over the polygons, filling some data, and exporting their bboxes, which is important for the actual BSP generation
+        // first go over the polygons, filling some data, and exporting their bboxes and centers, which is important for the actual BSP generation
         let polygons = polygons
             .map(|mut poly| {
                 let vert_iter = poly.verts.iter().map(|polyvert| verts[polyvert.vertex_id.0 as usize]);
@@ -1044,7 +1071,7 @@ impl Serialize for BspData {
 
         let mut buf = vec![];
 
-        crate::write::write_bsp_data(&mut buf, get_version!(), self)?;
+        crate::write::write_bsp_data(&mut buf, get_version(), self)?;
 
         w.write_u32::<LE>(buf.len() as u32)?;
         w.write_all(&buf)
@@ -1059,7 +1086,7 @@ pub struct ThrusterBank {
 impl Serialize for ThrusterBank {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         (self.glows.len() as u32).write_to(w)?;
-        if get_version!() >= Version::V21_17 {
+        if get_version() >= Version::V21_17 {
             self.properties.write_to(w)?;
         }
         for glow in &self.glows {
@@ -1213,7 +1240,7 @@ impl SubObject {
 }
 impl Serialize for SubObject {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
-        let version = get_version!();
+        let version = get_version();
         self.obj_id.write_to(w)?;
         if version >= Version::V21_16 {
             self.radius.write_to(w)?;
@@ -1454,6 +1481,8 @@ mk_versions! {
     V22_00(2200, "22.00"),
     /// External weapon angle offset compatible
     V22_01(2201, "22.01"),
+    /// Extended vertex and normal limits per subobject and file size optimizations
+    V23_00(2300, "23.00"),
 }
 
 #[derive(Debug, Default)]
@@ -1477,6 +1506,7 @@ pub struct Model {
     pub shield_data: Option<ShieldData>,
 
     pub path_to_file: PathBuf,
+    pub untextured_idx: Option<TextureId>,
 }
 impl Model {
     pub fn get_total_subobj_offset(&self, id: ObjectId) -> Vec3d {
@@ -1749,6 +1779,39 @@ impl Model {
         } else {
             None
         }
+    }
+
+    pub fn max_verts_norms_per_subobj(&self) -> usize {
+        if self.version >= Version::V23_00 {
+            u32::MAX as usize
+        } else {
+            u16::MAX as usize
+        }
+    }
+}
+
+pub fn post_parse_fill_untextured_slot(sub_objects: &mut Vec<SubObject>, textures: &mut Vec<String>) -> Option<TextureId> {
+    let max_texture = TextureId(textures.len().try_into().unwrap());
+    let untextured_id = match textures.iter().position(|tex| tex == "Untextured") {
+        Some(index) => TextureId(index.try_into().unwrap()),
+        None => max_texture,
+    };
+    let mut has_untextured = false;
+    for subobj in sub_objects.iter_mut() {
+        for (_, poly) in subobj.bsp_data.collision_tree.leaves_mut() {
+            if poly.texture >= max_texture {
+                has_untextured = true;
+                poly.texture = untextured_id;
+            }
+        }
+    }
+    if untextured_id < max_texture {
+        Some(untextured_id)
+    } else if has_untextured {
+        textures.push(format!("Untextured"));
+        Some(untextured_id)
+    } else {
+        None
     }
 }
 

@@ -571,9 +571,9 @@ checksum = "b365fabc795046672053e29c954733ec3b05e4be654ab130fe8f1f94d7051f35"
 
 [[package]]
 name = "dae-parser"
-version = "0.8.6"
+version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b6790ec544e179e18266a2862bf4bcdd462283c1e58f2885f1961ffa1b1245d"
+checksum = "af358aa99be41cc1602003cbcaf5bd19b1c09bb557230e78870c0e884faa7195"
 dependencies = [
  "chrono",
  "minidom",

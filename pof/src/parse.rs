@@ -435,11 +435,14 @@ impl<R: Read + Seek> Parser<R> {
             sub_objects[id].is_debris_model = true;
         }
 
+        let mut textures = textures.unwrap_or_default();
+        let untextured_idx = post_parse_fill_untextured_slot(&mut sub_objects, &mut textures);
+
         Ok(Model {
             version: self.version,
             header: header.expect("No header chunk found???"),
             sub_objects,
-            textures: textures.unwrap_or_default(),
+            textures,
             paths: paths.unwrap_or_default(),
             special_points: special_points.unwrap_or_default(),
             eye_points: eye_points.unwrap_or_default(),
@@ -454,6 +457,7 @@ impl<R: Read + Seek> Parser<R> {
             visual_center: visual_center.unwrap_or_default(),
             shield_data,
             path_to_file: path.canonicalize().unwrap_or(path),
+            untextured_idx,
         })
     }
 
@@ -548,15 +552,19 @@ fn parse_chunk_header(buf: &[u8], chunk_type_is_u8: bool) -> io::Result<(u32, &[
         pointer.read_u32::<LE>()?
     };
 
-    /*println!("found a {}", match chunk_type {
-        ENDOFBRANCH => "ENDOFBRANCH",
-        DEFFPOINTS => "DEFFPOINTS",
-        FLATPOLY => "FLATPOLY",
-        TMAPPOLY => "TMAPPOLY",
-        SORTNORM => "SORTNORM",
-        BOUNDBOX => "BOUNDBOX",
-        _ => "no i dont"
-    });*/
+    /*println!(
+        "found a {}",
+        match chunk_type {
+            BspData::ENDOFBRANCH => "ENDOFBRANCH",
+            BspData::DEFFPOINTS => "DEFFPOINTS",
+            BspData::FLATPOLY => "FLATPOLY",
+            BspData::TMAPPOLY => "TMAPPOLY",
+            BspData::SORTNORM => "SORTNORM",
+            BspData::SORTNORM2 => "SORTNORM2",
+            BspData::TMAPPOLY2 => "TMAPPOLY2",
+            _ => "no i dont",
+        }
+    );*/
     /*println!(
         "found a {}",
         match chunk_type {
@@ -575,13 +583,15 @@ fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
         let (chunk_type, mut chunk, next_chunk) = parse_chunk_header(buf, false)?;
         // the first chunk (after deffpoints) AND the chunks pointed to be SORTNORM's front and back branches should ALWAYS be either another
         // SORTNORM or a BOUNDBOX followed by some polygons
-        //dbg!(chunk_type);
+        // dbg!(chunk_type);
         Ok(Box::new(match chunk_type {
-            BspData::SORTNORM => BspNode::Split {
+            BspData::SORTNORM | BspData::SORTNORM2 => BspNode::Split {
                 front: {
-                    let _normal = read_vec3d(&mut chunk)?;
-                    let _point = read_vec3d(&mut chunk)?;
-                    let _reserved = chunk.read_u32::<LE>()?; // just to advance past it
+                    if chunk_type == BspData::SORTNORM {
+                        let _normal = read_vec3d(&mut chunk)?;
+                        let _point = read_vec3d(&mut chunk)?;
+                        let _reserved = chunk.read_u32::<LE>()?; // just to advance past it
+                    }
                     let offset = chunk.read_u32::<LE>()?;
                     if offset == 0 {
                         Box::new(BspNode::Empty)
@@ -598,12 +608,11 @@ fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
                     }
                 },
                 bbox: {
-                    let _prelist = chunk.read_u32::<LE>()?; //
-                    let _postlist = chunk.read_u32::<LE>()?; // All 3 completely unused, as far as I can tell
-                    let _online = chunk.read_u32::<LE>()?; //
-                    assert!(_prelist == 0 || buf[_prelist as usize] == 0); //
-                    assert!(_postlist == 0 || buf[_postlist as usize] == 0); // And so let's make sure that's the case, they should all lead to ENDOFBRANCH
-                    assert!(_online == 0 || buf[_online as usize] == 0); //
+                    if chunk_type == BspData::SORTNORM {
+                        let _prelist = chunk.read_u32::<LE>()?; //
+                        let _postlist = chunk.read_u32::<LE>()?; // All 3 completely unused, as far as I can tell
+                        let _online = chunk.read_u32::<LE>()?; //
+                    }
                     if version >= Version::V20_00 {
                         read_bbox(&mut chunk)?
                     } else {
@@ -624,7 +633,7 @@ fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
                             let _center = read_vec3d(&mut chunk)?;
                             let _radius = chunk.read_f32::<LE>()?;
                             let num_verts = chunk.read_u32::<LE>()?;
-                            let texture = Texturing::Texture(TextureId(chunk.read_u32::<LE>()?));
+                            let texture = TextureId(chunk.read_u32::<LE>()?);
                             let verts = read_list_n(num_verts as usize, &mut chunk, |chunk| {
                                 Ok(PolyVertex {
                                     vertex_id: VertexId(chunk.read_u16::<LE>()?.into()),
@@ -640,12 +649,8 @@ fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
                             let _center = read_vec3d(&mut chunk)?;
                             let _radius = chunk.read_f32::<LE>()?;
                             let num_verts = chunk.read_u32::<LE>()?;
-                            let texture = Texturing::Flat(Color {
-                                red: chunk.read_u8()?,
-                                green: chunk.read_u8()?,
-                                blue: chunk.read_u8()?,
-                            });
-                            let _ = chunk.read_u8()?; // get rid of padding byte
+                            let texture = TextureId::UNTEXTURED;
+                            let _color = chunk.read_u32::<LE>()?;
                             let verts = read_list_n(num_verts as usize, &mut chunk, |chunk| {
                                 Ok(PolyVertex {
                                     vertex_id: VertexId(chunk.read_u16::<LE>()?.into()),
@@ -672,6 +677,25 @@ fn parse_bsp_data(mut buf: &[u8], version: Version) -> io::Result<BspData> {
                     1 => BspNode::Leaf { bbox, poly: poly_list.into_iter().next().unwrap() },
                     _ => BspData::recalculate(verts, poly_list.into_iter()),
                 }
+            }
+
+            BspData::TMAPPOLY2 => {
+                let bbox = read_bbox(&mut chunk)?;
+                let poly = {
+                    let normal = read_vec3d(&mut chunk)?;
+                    let texture = TextureId(chunk.read_u32::<LE>()?);
+                    let num_verts = chunk.read_u32::<LE>()?;
+                    let verts = read_list_n(num_verts as usize, &mut chunk, |chunk| {
+                        Ok(PolyVertex {
+                            vertex_id: VertexId(chunk.read_u32::<LE>()?.into()),
+                            normal_id: NormalId(chunk.read_u32::<LE>()?.into()),
+                            uv: (chunk.read_f32::<LE>()?, chunk.read_f32::<LE>()?),
+                        })
+                    })?;
+
+                    Polygon { normal, verts, texture }
+                };
+                BspNode::Leaf { bbox, poly }
             }
             BspData::ENDOFBRANCH => BspNode::Empty,
             _ => {
@@ -803,7 +827,7 @@ fn dae_parse_properties(node: &Node, properties: &mut String) {
 // all translation should be removed and put into a separate offset of some kind
 fn dae_parse_geometry(
     node: &Node, local_maps: &LocalMaps, material_map: &HashMap<&String, TextureId>, up: UpAxis, transform: Mat4x4,
-) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(Texturing, Vec<PolyVertex>)>) {
+) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(TextureId, Vec<PolyVertex>)>) {
     let mut vertices_out: Vec<Vec3d> = vec![];
     let mut normals_out: Vec<Vec3d> = vec![];
     let mut normals_map: HashMap<Vec3d, NormalId> = HashMap::new();
@@ -821,11 +845,9 @@ fn dae_parse_geometry(
         for prim_elem in &geo.elements {
             match prim_elem {
                 dae_parser::Primitive::PolyList(polies) => {
-                    // println!("{:#?}, {:#?}", polies.material, material_map);
-                    let texture = match &polies.material {
-                        Some(mat) => Texturing::Texture(material_map[mat]),
-                        None => Texturing::Flat(Color::default()),
-                    };
+                    let texture = (polies.material.as_ref())
+                        .and_then(|mat| material_map.get(mat).copied())
+                        .unwrap_or(TextureId::UNTEXTURED);
 
                     let importer = polies.importer(local_maps, verts.clone()).unwrap();
 
@@ -848,11 +870,10 @@ fn dae_parse_geometry(
                     }
                 }
                 dae_parser::Primitive::Triangles(tris) => {
-                    // println!("{:#?}, {:#?}", tris.material, material_map);
-                    let texture = match &tris.material {
-                        Some(mat) => Texturing::Texture(material_map[mat]),
-                        None => Texturing::Flat(Color::default()),
-                    };
+                    let texture = (tris.material.as_ref())
+                        .and_then(|mat| material_map.get(mat).copied())
+                        .unwrap_or(TextureId::UNTEXTURED);
+
                     let importer = tris.importer(local_maps, verts.clone()).unwrap();
 
                     vert_ctx.normal_ids = vec![];
@@ -1421,6 +1442,8 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
         textures[id.0 as usize] = tex.strip_suffix("-material").unwrap_or(tex).to_string();
     }
 
+    let untextured_idx = post_parse_fill_untextured_slot(&mut sub_objects, &mut textures);
+
     let mut model = Model {
         version: Version::LATEST,
         header: ObjHeader {
@@ -1444,6 +1467,7 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
         insignias,
         shield_data,
         path_to_file: path.canonicalize().unwrap_or(path),
+        untextured_idx,
     };
 
     model.recalc_radius();

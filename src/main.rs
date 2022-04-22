@@ -20,7 +20,7 @@ use glium::{
 use glm::Mat4x4;
 use native_dialog::FileDialog;
 use pof::{
-    BspData, Insignia, Model, NormalId, ObjVec, ObjectId, Parser, PolyVertex, Polygon, ShieldData, SubObject, TextureId, Texturing, Vec3d, VertexId,
+    BspData, BspNode, Insignia, Model, NormalId, ObjVec, ObjectId, Parser, PolyVertex, Polygon, ShieldData, SubObject, TextureId, Vec3d, VertexId,
 };
 use simplelog::*;
 use std::{
@@ -312,22 +312,17 @@ struct GlObjectBuffers {
 impl GlObjectBuffers {
     fn new(display: &Display, object: &SubObject, num_textures: usize) -> Self {
         let mut textures = Vec::from_iter(std::iter::repeat_with(GlObjectsBuilder::default).take(num_textures));
-        let mut no_texture = GlObjectsBuilder::default();
 
         let bsp_data = &object.bsp_data;
 
         for (_, poly) in bsp_data.collision_tree.leaves() {
-            match poly.texture {
-                Texturing::Texture(tex) => textures[tex.0 as usize].push(bsp_data, poly),
-                Texturing::Flat(_) => no_texture.push(bsp_data, poly),
-            }
+            textures[poly.texture.0 as usize].push(bsp_data, poly);
         }
 
         let mut buffers = vec![];
         for (i, builder) in textures.into_iter().enumerate() {
             builder.finish(display, object, Some(TextureId(i as u32)), &mut buffers)
         }
-        no_texture.finish(display, object, None, &mut buffers);
         Self { obj_id: object.obj_id, buffers }
     }
 }
@@ -963,7 +958,7 @@ fn main() {
                         //      This is quite useful but incredibly ineffcient
                         //      TODO make this more efficient
                         //
-                        // let mut node_stack = vec![(&pt_gui.model.sub_objects[obj_id].bsp_data.collision_tree, 0u32)];
+                        // let mut node_stack = vec![(&pt_gui.model.sub_objects[id].bsp_data.collision_tree, 0u32)];
                         // while let Some((node, depth)) = node_stack.pop() {
                         //     let bbox = match node {
                         //         BspNode::Split { bbox, front, back, .. } => {
@@ -972,16 +967,17 @@ fn main() {
                         //             bbox
                         //         }
                         //         BspNode::Leaf { bbox, .. } => bbox,
+                        //         BspNode::Empty => continue,
                         //     };
 
                         //     let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
-                        //     mat.append_translation_mut(&(bbox.min + pt_gui.model.get_total_subobj_offset(obj_id)).into());
+                        //     mat.append_translation_mut(&(bbox.min + pt_gui.model.get_total_subobj_offset(id)).into());
                         //     let color = 2.0 / (1.5f32.powf(depth as f32));
+                        //     let matrix = view_mat * mat;
+                        //     let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * matrix).into();
 
                         //     let uniforms = glium::uniform! {
-                        //         model: <[[f32; 4]; 4]>::from(mat),
-                        //         view: view_mat,
-                        //         perspective: perspective_matrix,
+                        //         vert_matrix: vert_matrix,
                         //         lollipop_color: [color, color, color, 1.0f32],
                         //     };
 

@@ -1159,14 +1159,14 @@ impl GltfBuilder {
         Index::new(n.try_into().unwrap())
     }
 
-    fn push_buffer_view(&mut self, offset: usize, size: usize, count: usize, target: Target) -> Index<json::buffer::View> {
+    fn push_buffer_view(&mut self, offset: usize, size: usize, packed: bool, count: usize, target: Target) -> Index<json::buffer::View> {
         Self::push(
             &mut self.root.buffer_views,
             json::buffer::View {
                 buffer: json::Index::new(0),
                 byte_length: (size * count) as u32,
                 byte_offset: Some(offset.try_into().unwrap()),
-                byte_stride: Some(size as u32),
+                byte_stride: if packed { None } else { Some(size as u32) },
                 extensions: None,
                 extras: Default::default(),
                 name: None,
@@ -1213,7 +1213,7 @@ impl GltfBuilder {
 
     fn make_insignia_node(&mut self, insignia: &Insignia, id: usize, up: UpAxis) -> NodeIndex {
         let start = self.buffer.len();
-        let view = self.push_buffer_view(start, size_of::<Vec3d>(), insignia.vertices.len(), Target::ArrayBuffer);
+        let view = self.push_buffer_view(start, size_of::<Vec3d>(), true, insignia.vertices.len(), Target::ArrayBuffer);
         let bbox = BoundingBox::from_vectors(insignia.vertices.iter().map(|vert| {
             let vert = vert.to_coord(up);
             vert.write_to(&mut self.buffer).unwrap();
@@ -1222,7 +1222,7 @@ impl GltfBuilder {
 
         let indices = self.buffer.len();
         let count = 3 * insignia.faces.len();
-        let indices = self.push_buffer_view(indices, size_of::<u16>(), count, Target::ArrayBuffer);
+        let indices = self.push_buffer_view(indices, size_of::<u16>(), true, count, Target::ElementArrayBuffer);
         let indices = self.push_accessor(indices, 0, count, ComponentType::U16, json::accessor::Type::Scalar, None);
 
         for (polyvert1, polyvert2, polyvert3) in &insignia.faces {
@@ -1256,7 +1256,7 @@ impl GltfBuilder {
     fn make_shield_node(&mut self, shield: &ShieldData, up: UpAxis) -> NodeIndex {
         let start = self.buffer.len();
         let count = 3 * shield.polygons.len();
-        let view = self.push_buffer_view(start, size_of::<(Vec3d, Vec3d)>(), count, Target::ArrayBuffer);
+        let view = self.push_buffer_view(start, size_of::<(Vec3d, Vec3d)>(), false, count, Target::ArrayBuffer);
 
         let mut bbox_pos = BoundingBox::EMPTY;
         let mut bbox_norm = BoundingBox::EMPTY;
@@ -1322,7 +1322,7 @@ impl GltfBuilder {
             .map(|(material, prim_elem)| {
                 let start = self.buffer.len();
                 let count = 3 * prim_elem.len();
-                let view = self.push_buffer_view(start, size_of::<(Vec3d, Vec3d, [f32; 2])>(), count, Target::ArrayBuffer);
+                let view = self.push_buffer_view(start, size_of::<(Vec3d, Vec3d, [f32; 2])>(), false, count, Target::ArrayBuffer);
                 let mut bbox_pos = BoundingBox::EMPTY;
                 for vert in prim_elem.into_iter().flatten() {
                     let position = subobj.bsp_data.verts[vert.vertex_id.0 as usize].to_coord(up);
@@ -1407,9 +1407,35 @@ impl GltfBuilder {
 
     pub fn build_gltf(&mut self, model: &Model) {
         let up = UpAxis::YUp;
-        self.root.materials.extend(model.textures.iter().map(|tex| json::Material {
-            name: Some(format!("{}-material", tex)),
-            ..Default::default()
+        self.root.materials.extend(model.textures.iter().map(|tex| {
+            let image = json::Image {
+                uri: Some(tex.into()),
+                buffer_view: Default::default(),
+                mime_type: Default::default(),
+                name: Default::default(),
+                extensions: Default::default(),
+                extras: Default::default(),
+            };
+            let texture = json::Texture {
+                name: Some(format!("{}-texture", tex)),
+                source: Self::push(&mut self.root.images, image),
+                sampler: Default::default(),
+                extensions: Default::default(),
+                extras: Default::default(),
+            };
+            json::Material {
+                name: Some(format!("{}-material", tex)),
+                pbr_metallic_roughness: json::material::PbrMetallicRoughness {
+                    base_color_texture: Some(json::texture::Info {
+                        index: Self::push(&mut self.root.textures, texture),
+                        tex_coord: 0,
+                        extensions: Default::default(),
+                        extras: Default::default(),
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
         }));
 
         let mut nodes = vec![];

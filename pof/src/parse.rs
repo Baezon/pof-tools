@@ -3,7 +3,6 @@ use byteorder::{ReadBytesExt, LE};
 use core::panic;
 use dae_parser as dae;
 use glm::Mat4x4;
-use nalgebra::Point3;
 use nalgebra_glm as glm;
 use std::collections::HashMap;
 use std::convert::TryInto;
@@ -1477,6 +1476,7 @@ impl<'a> ParseCtx<'a> for GltfContext {
     type Node = gltf::Node<'a>;
     fn parse_geometry(&self, node: &Self::Node, transform: Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(TextureId, Vec<PolyVertex>)>) {
         let mut vertices_out: Vec<Vec3d> = vec![];
+        let mut vertices_map: HashMap<Vec3d, VertexId> = HashMap::new();
         let mut normals_out: Vec<Vec3d> = vec![];
         let mut normals_map: HashMap<Vec3d, NormalId> = HashMap::new();
         let mut polygons_out = vec![];
@@ -1484,10 +1484,13 @@ impl<'a> ParseCtx<'a> for GltfContext {
         if let Some(mesh) = node.mesh() {
             for primitive in mesh.primitives() {
                 let reader = primitive.reader(|b| Some(&self.buffers[b.index()]));
-                let vertex_offset = vertices_out.len() as u32;
-
+                let mut vertex_ids = vec![];
                 for position in reader.read_positions().unwrap() {
-                    vertices_out.push((&transform * Vec3d::from(position)).from_coord(UpAxis::YUp));
+                    vertex_ids.push(*vertices_map.entry(position.into()).or_insert_with(|| {
+                        let id = VertexId(vertices_out.len().try_into().unwrap());
+                        vertices_out.push((&transform * Vec3d::from(position)).from_coord(UpAxis::YUp));
+                        id
+                    }));
                 }
                 let texture = match primitive.material().index() {
                     Some(idx) => TextureId(idx as u32),
@@ -1513,7 +1516,7 @@ impl<'a> ParseCtx<'a> for GltfContext {
                         macro_rules! on_indices {
                             ($indices:expr) => {{
                                 let mut iter = $indices.map(|i| PolyVertex {
-                                    vertex_id: VertexId(i + vertex_offset),
+                                    vertex_id: vertex_ids[i as usize],
                                     normal_id: normal_ids.get(i as usize).copied().unwrap_or_default(),
                                     uv: uvs.as_ref().map_or((0., 0.), |vec| vec[i as usize]),
                                 });
@@ -1524,7 +1527,7 @@ impl<'a> ParseCtx<'a> for GltfContext {
                         }
                         match reader.read_indices() {
                             Some(indices) => on_indices!(indices.into_u32()),
-                            None => on_indices!(0..(vertices_out.len() as u32) - vertex_offset),
+                            None => on_indices!(0..vertex_ids.len() as u32),
                         }
                     }
                     _ => unreachable!(),

@@ -3,7 +3,7 @@ use glium::{
     texture::{RawImage2d, SrgbTexture2d},
     Display,
 };
-use pof::{Model, SubObject, TextureId, Vec3d, Version};
+use pof::{BoundingBox, Model, SubObject, TextureId, Vec3d, Version};
 use std::{
     collections::{BTreeSet, HashMap},
     sync::mpsc::Receiver,
@@ -1244,7 +1244,7 @@ impl PofToolsGui {
                 warnings.insert(Warning::BBoxTooSmall(None));
             }
 
-            if model.header.bbox.is_inverted() {
+            if model.header.bbox.is_inverted() && model.header.bbox != BoundingBox::EMPTY {
                 warnings.insert(Warning::InvertedBBox(None));
             }
 
@@ -1253,7 +1253,7 @@ impl PofToolsGui {
                     warnings.insert(Warning::BBoxTooSmall(Some(subobj.obj_id)));
                 }
 
-                if subobj.bbox.is_inverted() {
+                if subobj.bbox.is_inverted() && subobj.bbox != BoundingBox::EMPTY {
                     warnings.insert(Warning::InvertedBBox(Some(subobj.obj_id)));
                 }
             }

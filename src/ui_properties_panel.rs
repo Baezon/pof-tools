@@ -944,6 +944,7 @@ impl PofToolsGui {
                 }
                 if bbox_changed {
                     PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::BBoxTooSmall(None)));
+                    PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::InvertedBBox(None)));
                 }
 
                 ui.separator();
@@ -1096,6 +1097,7 @@ impl PofToolsGui {
 
                 if bbox_changed {
                     PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::BBoxTooSmall(selected_id)));
+                    PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::InvertedBBox(selected_id)));
                 }
 
                 ui.add_space(5.0);
@@ -1319,7 +1321,13 @@ impl PofToolsGui {
                 };
 
                 ui.label("Texture Name:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, tex, texture_name);
+                if UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, tex, texture_name).changed()
+                    && self.model.untextured_idx.is_some()
+                    && self.ui_state.tree_view_selection == TreeSelection::Textures(TextureSelection::Texture(self.model.untextured_idx.unwrap()))
+                {
+                    self.model.untextured_idx = None;
+                    PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::UntexturedPolygons));
+                }
             }
             PropertiesPanel::Thruster {
                 engine_subsys_string,

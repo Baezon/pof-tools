@@ -3,7 +3,7 @@ use glium::{
     texture::{RawImage2d, SrgbTexture2d},
     Display,
 };
-use pof::{Model, SubObject, TextureId, Vec3d, Version};
+use pof::{BoundingBox, Model, SubObject, TextureId, Vec3d, Version};
 use std::{
     collections::{BTreeSet, HashMap},
     sync::mpsc::Receiver,
@@ -408,6 +408,8 @@ pub(crate) enum Warning {
     DockingBayWithoutPath(usize),
     ThrusterPropertiesInvalidVersion(usize),
     WeaponOffsetInvalidVersion(WeaponSelection),
+    InvertedBBox(Option<ObjectId>),
+    UntexturedPolygons,
     // path with no parent
     // thruster with no engine subsys
     // turret uvec != turret normal
@@ -737,6 +739,13 @@ impl PofToolsGui {
                                     );
                                     ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
                                 }
+                                Warning::InvertedBBox(id_opt) => {
+                                    let str = format!(
+                                        "⚠ {}'s bounding box is inverted",
+                                        id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
+                                    );
+                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                                }
                                 Warning::DockingBayWithoutPath(bay_num) => {
                                     let str = format!(
                                         "⚠ Docking bay {} cannot be used by ships without a path",
@@ -753,6 +762,12 @@ impl PofToolsGui {
                                     let str = format!(
                                         "⚠ {} has an external angle offset, which the currently selected version does not support",
                                         weapon_selection
+                                    );
+                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                                }
+                                Warning::UntexturedPolygons => {
+                                    let str = format!(
+                                        "⚠ This model has untextured polygons (A texture slot has been added which corresponds to these polygons)"
                                     );
                                     ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
                                 }
@@ -1197,6 +1212,14 @@ impl PofToolsGui {
                         }
                     }
                 }
+                Warning::InvertedBBox(id_opt) => {
+                    if let Some(id) = id_opt {
+                        model.sub_objects[id].bbox.is_inverted()
+                    } else {
+                        model.header.bbox.is_inverted()
+                    }
+                }
+                Warning::UntexturedPolygons => model.untextured_idx.is_some(),
             };
 
             let existing_warning = warnings.contains(&warning);
@@ -1220,9 +1243,18 @@ impl PofToolsGui {
             if PofToolsGui::bbox_test_failed(model, None) {
                 warnings.insert(Warning::BBoxTooSmall(None));
             }
+
+            if model.header.bbox.is_inverted() && model.header.bbox != BoundingBox::EMPTY {
+                warnings.insert(Warning::InvertedBBox(None));
+            }
+
             for subobj in &model.sub_objects {
                 if PofToolsGui::bbox_test_failed(model, Some(subobj.obj_id)) {
                     warnings.insert(Warning::BBoxTooSmall(Some(subobj.obj_id)));
+                }
+
+                if subobj.bbox.is_inverted() && subobj.bbox != BoundingBox::EMPTY {
+                    warnings.insert(Warning::InvertedBBox(Some(subobj.obj_id)));
                 }
             }
 
@@ -1255,6 +1287,10 @@ impl PofToolsGui {
                         }
                     }
                 }
+            }
+
+            if model.untextured_idx.is_some() {
+                warnings.insert(Warning::UntexturedPolygons);
             }
         }
     }

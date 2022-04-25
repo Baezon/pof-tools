@@ -442,7 +442,7 @@ impl Mat3d {
     }
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, PartialEq)]
 pub struct BoundingBox {
     pub min: Vec3d,
     pub max: Vec3d,
@@ -538,9 +538,9 @@ impl BoundingBox {
         true
     }
 
-    /// Replaces inverted bounding boxes with `Self::ZERO`.
+    /// Replaces `Self::EMPTY` with `Self::ZERO`.
     pub fn sanitize(&self) -> &Self {
-        if self.is_inverted() {
+        if *self == Self::EMPTY {
             &Self::ZERO
         } else {
             self

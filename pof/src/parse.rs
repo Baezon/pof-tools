@@ -6,7 +6,8 @@ use glm::Mat4x4;
 use nalgebra_glm as glm;
 use std::collections::HashMap;
 use std::convert::TryInto;
-use std::io::{self, ErrorKind, Read, Seek, SeekFrom};
+use std::fs::File;
+use std::io::{self, BufReader, ErrorKind, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
 pub struct Parser<R> {
@@ -1544,12 +1545,59 @@ impl<'a> ParseCtx<'a> for GltfContext {
 }
 
 pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
-    let (gltf, buffers, _) = gltf::import(&path).unwrap();
-
+    let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
+    let reader = BufReader::new(File::open(&path).unwrap());
+    let gltf::Gltf { document: gltf, blob } = gltf::Gltf::from_reader(reader).unwrap();
+    // let buffers = gltf::import::import_buffer_data(&gltf, Some(base), blob).unwrap();
+    let buffers = import_buffer_data(&gltf, &base, blob);
     let mut model = Box::new(Model::default());
     model.path_to_file = path.canonicalize().unwrap_or(path);
     model.textures = gltf.materials().map(|mat| mat.name().unwrap().to_string()).collect();
 
     GltfContext { buffers }.parse_top_level_nodes(&mut model, gltf.default_scene().unwrap().nodes());
     model
+}
+
+// Polyfill for https://github.com/gltf-rs/gltf/pull/341 - delete me
+fn import_buffer_data(document: &gltf::Document, base: &std::path::Path, mut blob: Option<Vec<u8>>) -> Vec<gltf::buffer::Data> {
+    fn read_to_end(path: impl AsRef<std::path::Path>) -> Vec<u8> {
+        let file = File::open(path.as_ref()).unwrap();
+        let length = file.metadata().map(|x| x.len() + 1).unwrap_or(0);
+        let mut reader = io::BufReader::new(file);
+        let mut data = Vec::with_capacity(length as usize);
+        reader.read_to_end(&mut data).unwrap();
+        data
+    }
+
+    let mut buffers = Vec::new();
+    for buffer in document.buffers() {
+        let mut data = match buffer.source() {
+            gltf::buffer::Source::Uri(uri) => {
+                if uri.contains(':') {
+                    if let Some(rest) = uri.strip_prefix("data:") {
+                        let mut it = rest.split(";base64,");
+                        match (it.next(), it.next()) {
+                            (_, Some(base64)) | (Some(base64), _) => base64::decode(&base64).unwrap(),
+                            _ => panic!(),
+                        }
+                    } else if let Some(rest) = uri.strip_prefix("file://") {
+                        read_to_end(rest)
+                    } else if let Some(rest) = uri.strip_prefix("file:") {
+                        read_to_end(rest)
+                    } else {
+                        panic!()
+                    }
+                } else {
+                    read_to_end(base.join(&*urlencoding::decode(uri).unwrap()))
+                }
+            }
+            gltf::buffer::Source::Bin => blob.take().unwrap(),
+        };
+        while data.len() % 4 != 0 {
+            data.push(0);
+        }
+        assert!(data.len() >= buffer.length());
+        buffers.push(gltf::buffer::Data(data));
+    }
+    buffers
 }

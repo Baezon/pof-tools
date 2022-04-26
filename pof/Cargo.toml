@@ -14,6 +14,7 @@ nalgebra = "0.30.1"
 nalgebra-glm = "0.16"
 # for... gltf
 gltf = "1.0"
+urlencoding = "2.1"
 gltf-json = "1.0"
 base64 = "0.13"
 [[bin]]

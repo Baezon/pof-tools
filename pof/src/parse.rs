@@ -6,6 +6,7 @@ use glm::Mat4x4;
 use nalgebra_glm as glm;
 use std::collections::HashMap;
 use std::convert::TryInto;
+use std::fmt::Debug;
 use std::fs::File;
 use std::io::{self, BufReader, ErrorKind, Read, Seek, SeekFrom};
 use std::path::PathBuf;
@@ -781,7 +782,7 @@ trait IsNode<'a>: Clone {
 
     // given a node, using its transforms return a position, normal and radius
     // things commonly needed by various pof points
-    fn parse_point(&self, mut transform: Mat4x4, up: UpAxis) -> (Vec3d, Vec3d, f32) {
+    fn parse_point(&self, &(mut transform): &Mat4x4, up: UpAxis) -> (Vec3d, Vec3d, f32) {
         self.prepend_transforms(&mut transform);
         let zero = Vec3d::ZERO.into();
         let offset = transform.transform_point(&zero) - zero;
@@ -886,22 +887,21 @@ trait ParseCtx<'a> {
         UpAxis::YUp
     }
 
-    fn parse_geometry(&self, node: &Self::Node, transform: Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(TextureId, Vec<PolyVertex>)>);
+    fn parse_geometry(&self, node: &Self::Node, transform: &Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(TextureId, Vec<PolyVertex>)>);
 
-    fn parse_subobject_recursive(&self, model: &mut Model, node: Self::Node, parent: ObjectId, detail_level: Option<u32>, parent_transform: Mat4x4) {
+    fn parse_subobject_recursive(&self, model: &mut Model, node: Self::Node, parent: ObjectId, detail_level: Option<u32>, parent_transform: &Mat4x4) {
         let name = match node.name() {
             None => return, // subobjects must have names!
             Some(name) => name,
         };
-
-        let local_transform = parent_transform * node.transform();
+        let mut transform = parent_transform * node.transform();
         let zero = Vec3d::ZERO.into();
-        let center = local_transform.transform_point(&zero) - zero;
-        let local_transform = local_transform.append_translation(&(-center));
+        let center = transform.transform_point(&zero) - zero;
+        transform.append_translation_mut(&(-center));
         let up = self.up();
         let offset = Vec3d::from(center).from_coord(up);
 
-        let (vertices_out, normals_out, polygons_out) = self.parse_geometry(&node, local_transform);
+        let (vertices_out, normals_out, polygons_out) = self.parse_geometry(&node, &transform);
 
         // ignore subobjects with no geo
         // metadata (empties with names like #properties) are handled below directly
@@ -967,17 +967,17 @@ trait ParseCtx<'a> {
                     }
                 }
 
-                self.parse_subobject_recursive(model, node, obj_id, detail_level, local_transform);
+                self.parse_subobject_recursive(model, node, obj_id, detail_level, &transform);
             }
         }
     }
 
     fn parse_top_level_nodes(&self, model: &mut Model, nodes: impl IntoIterator<Item = Self::Node>) {
         for node in nodes {
-            let mut local_transform = node.transform();
+            let mut transform = node.transform();
             let zero = Vec3d::ZERO.into();
-            let center = local_transform.transform_point(&zero) - zero;
-            local_transform = local_transform.append_translation(&(-center));
+            let center = transform.transform_point(&zero) - zero;
+            transform.append_translation_mut(&(-center));
             let up = self.up();
             let offset = Vec3d::from(center).from_coord(up);
 
@@ -986,7 +986,7 @@ trait ParseCtx<'a> {
                 None => continue,
             };
 
-            let (vertices_out, normals_out, polygons_out) = self.parse_geometry(&node, local_transform);
+            let (vertices_out, normals_out, polygons_out) = self.parse_geometry(&node, &transform);
             if !polygons_out.is_empty() {
                 if name.to_lowercase() == "shield" {
                     let mut polygons = vec![];
@@ -1056,7 +1056,7 @@ trait ParseCtx<'a> {
                     }
 
                     for node in node.children() {
-                        self.parse_subobject_recursive(model, node, obj_id, detail_level, local_transform);
+                        self.parse_subobject_recursive(model, node, obj_id, detail_level, &transform);
                     }
                 }
             } else if name == "#thrusters" {
@@ -1069,7 +1069,7 @@ trait ParseCtx<'a> {
                         } else if name.contains("point") {
                             let mut new_point = ThrusterGlow::default();
 
-                            let (pos, norm, rad) = node.parse_point(local_transform, up);
+                            let (pos, norm, rad) = node.parse_point(&transform, up);
                             new_point.position = pos;
                             new_point.normal = norm;
                             new_point.radius = rad;
@@ -1096,7 +1096,7 @@ trait ParseCtx<'a> {
                         } else if name.contains("point") {
                             let mut new_point = PathPoint::default();
 
-                            let (pos, _, rad) = node.parse_point(local_transform, up);
+                            let (pos, _, rad) = node.parse_point(&transform, up);
                             new_point.position = pos;
                             new_point.radius = rad;
 
@@ -1113,7 +1113,7 @@ trait ParseCtx<'a> {
                     for (node, _) in node_children_with_keyword(node, "point") {
                         let mut new_point = WeaponHardpoint::default();
 
-                        let (pos, norm, _) = node.parse_point(local_transform, up);
+                        let (pos, norm, _) = node.parse_point(&transform, up);
                         new_point.position = pos;
                         new_point.normal = norm.try_into().unwrap_or_default();
 
@@ -1208,7 +1208,7 @@ trait ParseCtx<'a> {
                         } else if name.contains("point") {
                             let mut new_point = GlowPoint::default();
 
-                            let (pos, norm, rad) = node.parse_point(local_transform, up);
+                            let (pos, norm, rad) = node.parse_point(&transform, up);
                             new_point.position = pos;
                             new_point.normal = if name.contains("omni") { Vec3d::ZERO } else { norm };
                             new_point.radius = rad;
@@ -1227,7 +1227,7 @@ trait ParseCtx<'a> {
                         new_point.name = format!("{}", &name[(idx + 1)..]);
                     }
 
-                    let (pos, _, rad) = node.parse_point(local_transform, up);
+                    let (pos, _, rad) = node.parse_point(&transform, up);
                     new_point.position = pos;
                     new_point.radius = rad;
 
@@ -1241,7 +1241,7 @@ trait ParseCtx<'a> {
                 for (node, _) in node_children_with_keyword(node, "point") {
                     let mut new_point = EyePoint::default();
 
-                    let (pos, norm, _) = node.parse_point(local_transform, up);
+                    let (pos, norm, _) = node.parse_point(&transform, up);
                     new_point.offset = pos;
                     new_point.normal = norm.try_into().unwrap_or_default();
 
@@ -1257,7 +1257,7 @@ trait ParseCtx<'a> {
                     model.eye_points.push(new_point);
                 }
             } else if name == "#visual-center" {
-                let (pos, _, _) = node.parse_point(local_transform, up);
+                let (pos, _, _) = node.parse_point(&transform, up);
                 model.visual_center = pos;
             }
         }
@@ -1316,7 +1316,7 @@ impl<'a> ParseCtx<'a> for DaeContext<'a> {
     fn up(&self) -> UpAxis {
         self.up
     }
-    fn parse_geometry(&self, node: &&'a dae::Node, transform: Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(TextureId, Vec<PolyVertex>)>) {
+    fn parse_geometry(&self, node: &&'a dae::Node, transform: &Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(TextureId, Vec<PolyVertex>)>) {
         let mut vertices_out: Vec<Vec3d> = vec![];
         let mut normals_out: Vec<Vec3d> = vec![];
         let mut normals_map: HashMap<Vec3d, NormalId> = HashMap::new();
@@ -1352,8 +1352,8 @@ impl<'a> ParseCtx<'a> for DaeContext<'a> {
             let verts = geo.vertices.as_ref().unwrap().importer(&self.local_maps).unwrap();
             let mut vert_ctx = VertexContext { vertex_offset: vertices_out.len() as u32, normal_ids: vec![] };
 
-            for position in Clone::clone(verts.position_importer().unwrap()) {
-                vertices_out.push((&transform * Vec3d::from(position)).from_coord(self.up));
+            for position in Clone::clone(verts.position_importer().unwrap()).map(Vec3d::from) {
+                vertices_out.push((transform * position).from_coord(self.up));
             }
 
             for prim_elem in &geo.elements {
@@ -1369,10 +1369,10 @@ impl<'a> ParseCtx<'a> for DaeContext<'a> {
 
                         vert_ctx.normal_ids = vec![];
                         if let Some(normal_importer) = importer.normal_importer() {
-                            for normal in Clone::clone(normal_importer) {
-                                vert_ctx.normal_ids.push(*normals_map.entry(normal.into()).or_insert_with(|| {
+                            for normal in Clone::clone(normal_importer).map(Vec3d::from) {
+                                vert_ctx.normal_ids.push(*normals_map.entry(normal).or_insert_with(|| {
                                     let id = NormalId(normals_out.len().try_into().unwrap());
-                                    normals_out.push((&transform * Vec3d::from(normal)).from_coord(self.up));
+                                    normals_out.push((transform * normal).from_coord(self.up));
                                     id
                                 }));
                             }
@@ -1398,7 +1398,7 @@ impl<'a> ParseCtx<'a> for DaeContext<'a> {
                             for normal in Clone::clone(normal_importer) {
                                 vert_ctx.normal_ids.push(*normals_map.entry(normal.into()).or_insert_with(|| {
                                     let id = NormalId(normals_out.len().try_into().unwrap());
-                                    normals_out.push((&transform * Vec3d::from(normal)).from_coord(self.up));
+                                    normals_out.push((transform * Vec3d::from(normal)).from_coord(self.up));
                                     id
                                 }));
                             }
@@ -1475,7 +1475,7 @@ struct GltfContext {
 
 impl<'a> ParseCtx<'a> for GltfContext {
     type Node = gltf::Node<'a>;
-    fn parse_geometry(&self, node: &Self::Node, transform: Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(TextureId, Vec<PolyVertex>)>) {
+    fn parse_geometry(&self, node: &Self::Node, transform: &Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(TextureId, Vec<PolyVertex>)>) {
         let mut vertices_out: Vec<Vec3d> = vec![];
         let mut vertices_map: HashMap<Vec3d, VertexId> = HashMap::new();
         let mut normals_out: Vec<Vec3d> = vec![];
@@ -1486,10 +1486,10 @@ impl<'a> ParseCtx<'a> for GltfContext {
             for primitive in mesh.primitives() {
                 let reader = primitive.reader(|b| Some(&self.buffers[b.index()]));
                 let mut vertex_ids = vec![];
-                for position in reader.read_positions().unwrap() {
-                    vertex_ids.push(*vertices_map.entry(position.into()).or_insert_with(|| {
+                for position in reader.read_positions().unwrap().map(Vec3d::from) {
+                    vertex_ids.push(*vertices_map.entry(position).or_insert_with(|| {
                         let id = VertexId(vertices_out.len().try_into().unwrap());
-                        vertices_out.push((&transform * Vec3d::from(position)).from_coord(UpAxis::YUp));
+                        vertices_out.push((transform * position).from_coord(UpAxis::YUp));
                         id
                     }));
                 }
@@ -1505,10 +1505,10 @@ impl<'a> ParseCtx<'a> for GltfContext {
                     gltf::mesh::Mode::Triangles => {
                         let mut normal_ids = vec![];
                         if let Some(normal_iter) = reader.read_normals() {
-                            for normal in normal_iter {
-                                normal_ids.push(*normals_map.entry(normal.into()).or_insert_with(|| {
+                            for normal in normal_iter.map(Vec3d::from) {
+                                normal_ids.push(*normals_map.entry(normal).or_insert_with(|| {
                                     let id = NormalId(normals_out.len().try_into().unwrap());
-                                    normals_out.push((&transform * Vec3d::from(normal)).from_coord(UpAxis::YUp));
+                                    normals_out.push((transform * normal).from_coord(UpAxis::YUp));
                                     id
                                 }));
                             }

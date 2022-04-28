@@ -19,9 +19,7 @@ use glium::{
 };
 use glm::Mat4x4;
 use native_dialog::FileDialog;
-use pof::{
-    BspData, BspNode, Insignia, Model, NormalId, ObjVec, ObjectId, Parser, PolyVertex, Polygon, ShieldData, SubObject, TextureId, Vec3d, VertexId,
-};
+use pof::{BspData, Insignia, Model, NormalId, ObjVec, ObjectId, Parser, PolyVertex, Polygon, ShieldData, SubObject, TextureId, Vec3d, VertexId};
 use simplelog::*;
 use std::{
     collections::HashMap,
@@ -357,16 +355,20 @@ impl PofToolsGui {
             s.spawn(|_| {
                 let path = FileDialog::new()
                     .set_filename(&model.path_to_file.file_name().unwrap_or_default().to_string_lossy())
-                    .add_filter("All Supported Files", &["pof", "dae"])
+                    .add_filter("All Supported Files", &["pof", "dae", "gltf", "glb"])
                     .add_filter("Parallax Object File", &["pof"])
                     .add_filter("Digital Asset Exchange file", &["dae"])
+                    .add_filter("GL Transmission Format (Embedded)", &["gltf"])
+                    .add_filter("GL Transmission Format (Binary)", &["glb"])
                     .show_save_single_file();
                 if let Ok(Some(path)) = path {
                     let mut file = File::create(path.clone()).unwrap();
-                    if path.extension().map_or(false, |s| s == "dae") {
-                        model.write_dae(&mut file).unwrap();
-                    } else {
-                        model.write(&mut file).unwrap();
+                    match path.extension() {
+                        Some(s) if s == "glb" => model.write_gltf(&mut file, true).unwrap(),
+                        Some(s) if s == "gltf" => model.write_gltf(&mut file, false).unwrap(),
+                        Some(s) if s == "dae" => model.write_dae(&mut file).unwrap(),
+                        Some(s) if s == "pof" => model.write(&mut file).unwrap(),
+                        s => panic!("unexpected extension {:?}", s),
                     }
                     out = Some(path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string());
                 }
@@ -386,9 +388,10 @@ impl PofToolsGui {
             let model = std::panic::catch_unwind(move || {
                 let path = filepath.or_else(|| {
                     FileDialog::new()
-                        .add_filter("All supported files", &["pof", "dae"])
+                        .add_filter("All supported files", &["pof", "dae", "gltf", "glb"])
                         .add_filter("COLLADA", &["dae"])
                         .add_filter("Parallax Object File", &["pof"])
+                        .add_filter("GL Transmission Format", &["gltf", "glb"])
                         .show_open_single_file()
                         .unwrap()
                 });
@@ -399,6 +402,7 @@ impl PofToolsGui {
                     info!("Attempting to load {}", filename);
                     match ext.as_ref().and_then(|ext| ext.to_str()) {
                         Some("dae") => pof::parse_dae(path),
+                        Some("gltf" | "glb") => pof::parse_gltf(path),
                         Some("pof") => {
                             let file = File::open(&path).expect("TODO invalid file or smth i dunno");
                             let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");

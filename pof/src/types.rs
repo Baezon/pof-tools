@@ -1832,7 +1832,7 @@ fn properties_delete_field(properties: &mut String, field: &str) {
     }
 }
 
-fn properties_find_field(properties: &String, field: &str) -> Option<(usize, usize)> {
+fn properties_find_field(properties: &str, field: &str) -> Option<(usize, usize)> {
     if let Some(mut start_idx) = properties.find(field) {
         let end_idx = if let Some(idx) = properties[start_idx..].chars().position(|d| d.is_ascii_control()) {
             start_idx + idx
@@ -1840,7 +1840,7 @@ fn properties_find_field(properties: &String, field: &str) -> Option<(usize, usi
             start_idx + properties[start_idx..].len()
         };
 
-        start_idx = start_idx + field.len();
+        start_idx += field.len();
 
         let mut chars = properties[start_idx..].chars();
         while chars.next().map_or(false, |c| c == '=' || c.is_whitespace()) {

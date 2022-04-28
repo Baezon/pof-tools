@@ -1,5 +1,7 @@
 /target
 *.dae
+*.gltf
+*.glb
 *.pof
 *.txt
 *.log

@@ -6,7 +6,6 @@ use glm::Mat4x4;
 use nalgebra_glm as glm;
 use std::collections::HashMap;
 use std::convert::TryInto;
-use std::fmt::Debug;
 use std::fs::File;
 use std::io::{self, BufReader, ErrorKind, Read, Seek, SeekFrom};
 use std::path::PathBuf;

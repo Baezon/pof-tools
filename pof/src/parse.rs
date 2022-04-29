@@ -6,7 +6,6 @@ use glm::Mat4x4;
 use nalgebra_glm as glm;
 use std::collections::HashMap;
 use std::convert::TryInto;
-use std::fmt::Debug;
 use std::fs::File;
 use std::io::{self, BufReader, ErrorKind, Read, Seek, SeekFrom};
 use std::path::PathBuf;
@@ -1552,7 +1551,10 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
     let buffers = import_buffer_data(&gltf, &base, blob);
     let mut model = Box::new(Model::default());
     model.path_to_file = path.canonicalize().unwrap_or(path);
-    model.textures = gltf.materials().map(|mat| mat.name().unwrap().to_string()).collect();
+    model.textures = gltf
+        .materials()
+        .map(|mat| mat.name().unwrap().strip_suffix("-material").unwrap_or(mat.name().unwrap()).to_string())
+        .collect();
 
     GltfContext { buffers }.parse_top_level_nodes(&mut model, gltf.default_scene().unwrap().nodes());
     model

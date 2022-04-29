@@ -1424,7 +1424,7 @@ impl GltfBuilder {
                 extras: Default::default(),
             };
             json::Material {
-                name: Some(format!("{}-material", tex)),
+                name: Some(tex.clone()),
                 pbr_metallic_roughness: json::material::PbrMetallicRoughness {
                     base_color_texture: Some(json::texture::Info {
                         index: Self::push(&mut self.root.textures, texture),

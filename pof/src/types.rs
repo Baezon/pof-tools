@@ -1237,7 +1237,21 @@ impl SubObject {
         //     BspNode::Leaf { bbox, .. } => bbox,
         // };
     }
+
+    pub fn uvec_fvec(&self) -> Option<(Vec3d, Vec3d)> {
+        parse_uvec_fvec(&self.properties)
+    }
 }
+
+fn parse_uvec_fvec(props: &str) -> Option<(Vec3d, Vec3d)> {
+    let should_trim = |ch: char| !ch.is_numeric() && ch != '.' && ch != '-';
+    let uvec = Vec3d::from_str(props.split("$uvec").skip(1).next()?
+        .split('$').next()?.trim_start_matches(should_trim)).ok()?;
+    let fvec = Vec3d::from_str(props.split("$fvec").skip(1).next()?
+        .split('$').next()?.trim_start_matches(should_trim)).ok()?;
+    Some((uvec, fvec))
+}
+
 impl Serialize for SubObject {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         let version = get_version();

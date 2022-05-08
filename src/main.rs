@@ -363,7 +363,7 @@ impl PofToolsGui {
                     .show_save_single_file();
                 if let Ok(Some(path)) = path {
                     let mut file = File::create(path.clone()).unwrap();
-                    match path.extension() {
+                    match path.extension().map(|ext| ext.to_ascii_lowercase()) {
                         Some(s) if s == "glb" => model.write_gltf(&mut file, true).unwrap(),
                         Some(s) if s == "gltf" => model.write_gltf(&mut file, false).unwrap(),
                         Some(s) if s == "dae" => model.write_dae(&mut file).unwrap(),

@@ -559,6 +559,8 @@ impl Serialize for BspLightKind {
     }
 }
 
+pub const MAX_EYES: usize = 9;
+
 mk_struct! {
     #[derive(Debug)]
     // this is pretty much unused by the engine
@@ -1341,13 +1343,26 @@ impl Dock {
     }
 }
 
+pub const MAX_TURRET_POINTS: usize = 10;
+
 mk_struct! {
-    #[derive(Clone, Default)]
+    #[derive(Clone)]
     pub struct Turret {
         pub base_obj: ObjectId,
         pub gun_obj: ObjectId,
         pub normal: NormalVec3,
         pub fire_points: Vec<Vec3d>,
+    }
+}
+
+impl Default for Turret {
+    fn default() -> Self {
+        Self {
+            base_obj: Default::default(),
+            gun_obj: Default::default(),
+            normal: Default::default(),
+            fire_points: vec![Vec3d::default()],
+        }
     }
 }
 
@@ -1410,6 +1425,12 @@ impl Serialize for GlowPointBank {
         Ok(())
     }
 }
+
+pub const MAX_TEXTURES: usize = 64;
+
+pub const MAX_NAME_LEN: usize = 32;
+
+pub const MAX_PROPERTIES_LEN: usize = 256;
 
 macro_rules! mk_versions {
     (@latest $last:ident) => { Self::$last };

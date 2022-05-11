@@ -14,7 +14,7 @@ use pof::ObjectId;
 
 use crate::{ui_properties_panel::PropertiesPanel, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers, POF_TOOLS_VERSION};
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, PartialOrd, Ord)]
 pub(crate) enum TreeSelection {
     Header,
     SubObjects(SubObjectSelection),
@@ -102,7 +102,7 @@ impl TreeSelection {
     //     }
     // }
 }
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
 pub(crate) enum InsigniaSelection {
     Header,
     Insignia(usize), // insignia idx
@@ -124,7 +124,7 @@ impl InsigniaSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
 pub(crate) enum EyeSelection {
     Header,
     EyePoint(usize), // eye idx
@@ -146,7 +146,7 @@ impl EyeSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
 pub(crate) enum PathSelection {
     Header,
     Path(usize),             // path idx
@@ -176,7 +176,7 @@ impl PathSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
 pub(crate) enum TurretSelection {
     Header,
     Turret(usize),             // turret idx
@@ -207,7 +207,7 @@ impl TurretSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
 pub(crate) enum SpecialPointSelection {
     Header,
     Point(usize),
@@ -229,7 +229,7 @@ impl SpecialPointSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
 pub(crate) enum GlowSelection {
     Header,
     Bank(usize),             // bank idx
@@ -260,7 +260,7 @@ impl GlowSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
 pub(crate) enum DockingSelection {
     Header,
     Bay(usize), // bank idx
@@ -324,7 +324,7 @@ impl WeaponSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
 pub(crate) enum TextureSelection {
     Header,
     Texture(TextureId),
@@ -338,7 +338,7 @@ impl std::fmt::Display for TextureSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
 pub(crate) enum ThrusterSelection {
     Header,
     Bank(usize),             // bank idx
@@ -368,7 +368,7 @@ impl ThrusterSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
 pub(crate) enum SubObjectSelection {
     Header,
     SubObject(ObjectId),
@@ -401,21 +401,35 @@ pub enum Error {
     // all turret base/gun objects must be disjoint!
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Debug)]
 pub(crate) enum Warning {
     RadiusTooSmall(Option<ObjectId>),
     BBoxTooSmall(Option<ObjectId>),
+    InvertedBBox(Option<ObjectId>),
+    UntexturedPolygons,
     DockingBayWithoutPath(usize),
     ThrusterPropertiesInvalidVersion(usize),
     WeaponOffsetInvalidVersion(WeaponSelection),
-    InvertedBBox(Option<ObjectId>),
-    UntexturedPolygons,
+    TooFewTurretFirePoints(usize),
+    TooManyTurretFirePoints(usize),
+    DuplicatePathName(usize), // for each duplicated name, only contains the *first* path idx with that name
+    TooManyEyePoints,
+    TooManyTextures,
+
+    PathNameTooLong(usize),
+    SpecialPointNameTooLong(usize),
+    SubObjectNameTooLong(ObjectId),
+    DockingBayNameTooLong(usize),
+
+    SubObjectPropertiesTooLong(ObjectId),
+    ThrusterPropertiesTooLong(usize),
+    DockingBayPropertiesTooLong(usize),
+    GlowBankPropertiesTooLong(usize),
+    SpecialPointPropertiesTooLong(usize),
     // path with no parent
-    // thruster with no engine subsys
+    // thruster with no engine subsys (and an engine subsys exists)
     // turret uvec != turret normal
-    // subobject vert/norm overbudget
     // turret subobject properties not set up for a turret
-    // untextured polygons
 }
 
 #[derive(PartialEq, Eq)]
@@ -592,7 +606,7 @@ impl PofToolsGui {
                     // we only need to recheck verson-specific warnings, but since those are parameterized, there's no easy way to say
                     // 'those specific warnings but for all their parameters' so just do them all i guess
                     if changed {
-                        PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All);
+                        PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All); // FIX
                         PofToolsGui::recheck_errors(&mut self.errors, &self.model, All);
                     }
                 });
@@ -642,23 +656,11 @@ impl PofToolsGui {
                     .auto_shrink([false, false])
                     .min_scrolled_height(10.0)
                     .show(ui, |ui| {
+                        let mut first_warning = true;
                         for error in &self.errors {
-                            match *error {
+                            let str = match *error {
                                 Error::InvalidTurretGunSubobject(turret_num) => {
-                                    let turret_name = if self.model.sub_objects[self.model.turrets[turret_num].base_obj]
-                                        .name
-                                        .to_lowercase()
-                                        .starts_with("turret")
-                                    {
-                                        ""
-                                    } else {
-                                        "turret "
-                                    };
-                                    let str = format!(
-                                        "⊗ {}{} has an invalid gun object",
-                                        turret_name, self.model.sub_objects[self.model.turrets[turret_num].base_obj].name
-                                    );
-                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::RED)));
+                                    format!("⊗ {} has an invalid gun object", self.model.sub_objects[self.model.turrets[turret_num].base_obj].name)
                                 }
                                 Error::TooManyDebrisObjects => {
                                     let mut num_debris = 0;
@@ -667,110 +669,198 @@ impl PofToolsGui {
                                             num_debris += 1;
                                         }
                                     }
-                                    ui.add(Label::new(
-                                        RichText::new(format!(
-                                            "⊗ This model has too many debris objects ({}/{})",
-                                            num_debris,
-                                            pof::MAX_DEBRIS_OBJECTS
-                                        ))
-                                        .text_style(TextStyle::Button)
-                                        .color(Color32::RED),
-                                    ));
+                                    format!("⊗ This model has too many debris objects ({}/{})", num_debris, pof::MAX_DEBRIS_OBJECTS)
                                 }
                                 Error::DetailObjWithParent(id) => {
-                                    ui.add(Label::new(
-                                        RichText::new(format!(
-                                            "⊗ Detail {} object ({}) must be at the top of the heirarchy (no object parent)",
-                                            self.model.header.detail_levels.iter().position(|detail_id| *detail_id == id).unwrap(),
-                                            self.model.sub_objects[id].name,
-                                        ))
-                                        .text_style(TextStyle::Button)
-                                        .color(Color32::RED),
-                                    ));
+                                    format!(
+                                        "⊗ Detail {} object ({}) must be at the top of the hierarchy (no object parent)",
+                                        self.model.header.detail_levels.iter().position(|detail_id| *detail_id == id).unwrap(),
+                                        self.model.sub_objects[id].name,
+                                    )
                                 }
                                 Error::DetailAndDebrisObj(id) => {
-                                    ui.add(Label::new(
-                                        RichText::new(format!(
-                                            "⊗ Detail {} object ({}) cannot also be a debris object",
-                                            self.model.header.detail_levels.iter().position(|detail_id| *detail_id == id).unwrap(),
-                                            self.model.sub_objects[id].name,
-                                        ))
-                                        .text_style(TextStyle::Button)
-                                        .color(Color32::RED),
-                                    ));
+                                    format!(
+                                        "⊗ Detail {} object ({}) cannot also be a debris object",
+                                        self.model.header.detail_levels.iter().position(|detail_id| *detail_id == id).unwrap(),
+                                        self.model.sub_objects[id].name,
+                                    )
                                 }
                                 Error::TooManyVerts(id) => {
-                                    ui.add(Label::new(
-                                        RichText::new(format!(
-                                            "⊗ Subobject {} has more than the {} vertices supported by the currently selected pof version",
-                                            self.model.sub_objects[id].name,
-                                            self.model.max_verts_norms_per_subobj(),
-                                        ))
-                                        .text_style(TextStyle::Button)
-                                        .color(Color32::RED),
-                                    ));
+                                    format!(
+                                        "⊗ Subobject {} has more than the {} vertices supported by the currently selected pof version",
+                                        self.model.sub_objects[id].name,
+                                        self.model.max_verts_norms_per_subobj(),
+                                    )
                                 }
                                 Error::TooManyNorms(id) => {
-                                    ui.add(Label::new(
-                                        RichText::new(format!(
-                                            "⊗ Subobject {} has more than the {} normals supported by the currently selected pof version",
-                                            self.model.sub_objects[id].name,
-                                            self.model.max_verts_norms_per_subobj(),
-                                        ))
-                                        .text_style(TextStyle::Button)
-                                        .color(Color32::RED),
-                                    ));
+                                    format!(
+                                        "⊗ Subobject {} has more than the {} normals supported by the currently selected pof version",
+                                        self.model.sub_objects[id].name,
+                                        self.model.max_verts_norms_per_subobj(),
+                                    )
                                 }
+                            };
+
+                            if first_warning {
+                                println!("1");
+                                ui.horizontal(|ui| {
+                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::RED)));
+                                    ui.with_layout(egui::Layout::right_to_left(), |ui| {
+                                        if !self.errors.is_empty() {
+                                            ui.add(Label::new(
+                                                RichText::new(format!("{} ⊗", self.errors.len()))
+                                                    .text_style(TextStyle::Button)
+                                                    .color(Color32::RED),
+                                            ));
+                                        }
+
+                                        if !self.warnings.is_empty() {
+                                            ui.add(Label::new(
+                                                RichText::new(format!("{} ⚠", self.warnings.len()))
+                                                    .text_style(TextStyle::Button)
+                                                    .color(Color32::YELLOW),
+                                            ));
+                                        }
+                                    });
+                                });
+                                first_warning = false;
+                            } else {
+                                println!("2");
+                                ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::RED)));
                             }
                         }
+
                         for warning in &self.warnings {
-                            match warning {
-                                Warning::RadiusTooSmall(id_opt) => {
-                                    let str = format!(
-                                        "⚠ {}'s radius does not encompass all of its geometry",
-                                        id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
-                                    );
-                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
-                                }
-                                Warning::BBoxTooSmall(id_opt) => {
-                                    let str = format!(
-                                        "⚠ {}'s bounding box does not encompass all of its geometry",
-                                        id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
-                                    );
-                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
-                                }
+                            let str = match *warning {
                                 Warning::InvertedBBox(id_opt) => {
-                                    let str = format!(
-                                        "⚠ {}'s bounding box is inverted",
-                                        id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
-                                    );
-                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                                    format!("⚠ {}'s bounding box is inverted", id_opt.map_or("The header", |id| &self.model.sub_objects[id].name))
                                 }
                                 Warning::DockingBayWithoutPath(bay_num) => {
-                                    let str = format!(
+                                    format!(
                                         "⚠ Docking bay {} cannot be used by ships without a path",
-                                        self.model.docking_bays[*bay_num].get_name().unwrap_or(&(bay_num + 1).to_string())
-                                    );
-                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                                        self.model.docking_bays[bay_num].get_name().unwrap_or(&(bay_num + 1).to_string())
+                                    )
                                 }
                                 Warning::ThrusterPropertiesInvalidVersion(idx) => {
-                                    let str =
-                                        format!("⚠ Thruster bank {} has properties, which the currently selected version does not support", idx + 1);
-                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                                    format!("⚠ Thruster bank {} has properties, which the currently selected version does not support", idx + 1)
                                 }
                                 Warning::WeaponOffsetInvalidVersion(weapon_selection) => {
-                                    let str = format!(
+                                    format!(
                                         "⚠ {} has an external angle offset, which the currently selected version does not support",
                                         weapon_selection
-                                    );
-                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                                    )
                                 }
                                 Warning::UntexturedPolygons => {
-                                    let str = format!(
+                                    format!(
                                         "⚠ This model has untextured polygons (A texture slot has been added which corresponds to these polygons)"
-                                    );
-                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                                    )
                                 }
+                                Warning::TooManyEyePoints => {
+                                    format!("⚠ You cannot have more than 9 eye points.")
+                                }
+                                Warning::TooManyTextures => {
+                                    format!("⚠ You cannot have more than 64 textures.")
+                                }
+                                Warning::TooFewTurretFirePoints(idx) => {
+                                    format!("⚠ {} must have at least 1 fire point.", self.model.sub_objects[self.model.turrets[idx].base_obj].name)
+                                }
+                                Warning::TooManyTurretFirePoints(idx) => {
+                                    format!("⚠ {} must have at most 10 fire points.", self.model.sub_objects[self.model.turrets[idx].base_obj].name)
+                                }
+                                Warning::RadiusTooSmall(id_opt) => {
+                                    format!(
+                                        "⚠ {}'s radius does not encompass all of its geometry",
+                                        id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
+                                    )
+                                }
+                                Warning::BBoxTooSmall(id_opt) => {
+                                    format!(
+                                        "⚠ {}'s bounding box does not encompass all of its geometry",
+                                        id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
+                                    )
+                                }
+                                Warning::DuplicatePathName(path_idx) => {
+                                    format!("⚠ More than one path shares the name '{}'", self.model.paths[path_idx].name)
+                                }
+                                Warning::PathNameTooLong(_)
+                                | Warning::SubObjectNameTooLong(_)
+                                | Warning::SpecialPointNameTooLong(_)
+                                | Warning::DockingBayNameTooLong(_) => {
+                                    let field = match warning {
+                                        Warning::PathNameTooLong(idx) => {
+                                            format!("Path name '{}'", self.model.paths[*idx].name)
+                                        }
+                                        Warning::SubObjectNameTooLong(id) => {
+                                            format!("Subobject name '{}'", self.model.sub_objects[*id].name)
+                                        }
+                                        Warning::SpecialPointNameTooLong(idx) => {
+                                            format!("Special point name '{}'", self.model.special_points[*idx].name)
+                                        }
+                                        Warning::DockingBayNameTooLong(idx) => {
+                                            format!("Docking bay name '{}'", self.model.special_points[*idx].name)
+                                        }
+                                        _ => unreachable!(),
+                                    };
+                                    format!("⚠ {} is too long (max 31 bytes)", field)
+                                }
+                                Warning::GlowBankPropertiesTooLong(_)
+                                | Warning::ThrusterPropertiesTooLong(_)
+                                | Warning::SubObjectPropertiesTooLong(_)
+                                | Warning::DockingBayPropertiesTooLong(_)
+                                | Warning::SpecialPointPropertiesTooLong(_) => {
+                                    let field = match warning {
+                                        Warning::GlowBankPropertiesTooLong(idx) => {
+                                            format!(
+                                                "Glow bank {} ({}) properties",
+                                                *idx,
+                                                pof::properties_get_field(&self.model.glow_banks[*idx].properties, "$glow_texture")
+                                                    .unwrap_or_default()
+                                            )
+                                        }
+                                        Warning::ThrusterPropertiesTooLong(idx) => {
+                                            format!("Thruster bank {} properties", *idx + 1)
+                                        }
+                                        Warning::SubObjectPropertiesTooLong(id) => {
+                                            format!("Subobject {} properties", self.model.sub_objects[*id].name)
+                                        }
+                                        Warning::DockingBayPropertiesTooLong(idx) => {
+                                            format!("Docking bay {} properties", *idx + 1)
+                                        }
+                                        Warning::SpecialPointPropertiesTooLong(idx) => {
+                                            format!("Special point {} properties", self.model.special_points[*idx].name)
+                                        }
+                                        _ => unreachable!(),
+                                    };
+                                    format!("⚠ {} is too long (max 255 bytes)", field)
+                                }
+                            };
+
+                            if first_warning {
+                                println!("3");
+                                ui.horizontal(|ui| {
+                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                                    ui.with_layout(egui::Layout::right_to_left(), |ui| {
+                                        if !self.errors.is_empty() {
+                                            ui.add(Label::new(
+                                                RichText::new(format!("{} ⊗", self.errors.len()))
+                                                    .text_style(TextStyle::Button)
+                                                    .color(Color32::RED),
+                                            ));
+                                        }
+
+                                        if !self.warnings.is_empty() {
+                                            ui.add(Label::new(
+                                                RichText::new(format!("{} ⚠", self.warnings.len()))
+                                                    .text_style(TextStyle::Button)
+                                                    .color(Color32::YELLOW),
+                                            ));
+                                        }
+                                    });
+                                });
+                                first_warning = false;
+                            } else {
+                                println!("4");
+                                ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
                             }
                         }
                     });
@@ -1123,7 +1213,7 @@ impl PofToolsGui {
             });
     }
 
-    // rechecks just one or all of the warnings on the model
+    // rechecks just one or all of the errors on the model
     pub fn recheck_errors(errors: &mut BTreeSet<Error>, model: &Model, error_to_check: Set<Error>) {
         if let One(error) = error_to_check {
             let failed_check = match error {
@@ -1197,16 +1287,18 @@ impl PofToolsGui {
             let failed_check = match warning {
                 Warning::RadiusTooSmall(subobj_opt) => PofToolsGui::radius_test_failed(model, subobj_opt),
                 Warning::BBoxTooSmall(subobj_opt) => PofToolsGui::bbox_test_failed(model, subobj_opt),
-                Warning::DockingBayWithoutPath(bay_num) => model.docking_bays[bay_num].path.is_none(),
+                Warning::DockingBayWithoutPath(bay_num) => bay_num < model.docking_bays.len() && model.docking_bays[bay_num].path.is_none(),
                 Warning::ThrusterPropertiesInvalidVersion(bank_idx) => {
-                    model.version <= Version::V21_16 && !model.thruster_banks[bank_idx].properties.is_empty()
+                    model.version <= Version::V21_16 && bank_idx < model.thruster_banks.len() && !model.thruster_banks[bank_idx].properties.is_empty()
                 }
                 Warning::WeaponOffsetInvalidVersion(weapon_select) => {
                     (model.version <= Version::V21_17 || model.version == Version::V22_00) && {
                         if let WeaponSelection::PriBankPoint(bank, point) = weapon_select {
-                            model.primary_weps[bank][point].offset != 0.0
+                            bank < model.primary_weps.len() && point < model.primary_weps[bank].len() && model.primary_weps[bank][point].offset != 0.0
                         } else if let WeaponSelection::SecBankPoint(bank, point) = weapon_select {
-                            model.secondary_weps[bank][point].offset != 0.0
+                            bank < model.secondary_weps.len()
+                                && point < model.secondary_weps[bank].len()
+                                && model.secondary_weps[bank][point].offset != 0.0
                         } else {
                             false
                         }
@@ -1220,6 +1312,27 @@ impl PofToolsGui {
                     }
                 }
                 Warning::UntexturedPolygons => model.untextured_idx.is_some(),
+                Warning::TooManyEyePoints => model.eye_points.len() > pof::MAX_EYES,
+                Warning::TooManyTextures => model.textures.len() > pof::MAX_TEXTURES,
+                Warning::TooFewTurretFirePoints(idx) => model.turrets[idx].fire_points.is_empty(),
+                Warning::TooManyTurretFirePoints(idx) => model.turrets[idx].fire_points.len() > pof::MAX_TURRET_POINTS,
+                Warning::DuplicatePathName(idx) => model.paths.iter().any(|path| path.name == model.paths[idx].name),
+
+                Warning::PathNameTooLong(idx) => model.paths[idx].name.len() >= pof::MAX_NAME_LEN,
+                Warning::SubObjectNameTooLong(id) => model.sub_objects[id].name.len() >= pof::MAX_NAME_LEN,
+                Warning::SpecialPointNameTooLong(idx) => model.special_points[idx].name.len() >= pof::MAX_NAME_LEN,
+                Warning::DockingBayNameTooLong(idx) => {
+                    pof::properties_get_field(&model.docking_bays[idx].properties, "$name")
+                        .unwrap_or_default()
+                        .len()
+                        >= pof::MAX_NAME_LEN
+                }
+
+                Warning::GlowBankPropertiesTooLong(idx) => model.glow_banks[idx].properties.len() >= pof::MAX_PROPERTIES_LEN,
+                Warning::ThrusterPropertiesTooLong(idx) => model.thruster_banks[idx].properties.len() >= pof::MAX_PROPERTIES_LEN,
+                Warning::SubObjectPropertiesTooLong(id) => model.sub_objects[id].properties.len() >= pof::MAX_PROPERTIES_LEN,
+                Warning::DockingBayPropertiesTooLong(idx) => model.docking_bays[idx].properties.len() >= pof::MAX_PROPERTIES_LEN,
+                Warning::SpecialPointPropertiesTooLong(idx) => model.special_points[idx].properties.len() >= pof::MAX_PROPERTIES_LEN,
             };
 
             let existing_warning = warnings.contains(&warning);
@@ -1233,11 +1346,6 @@ impl PofToolsGui {
 
             if PofToolsGui::radius_test_failed(model, None) {
                 warnings.insert(Warning::RadiusTooSmall(None));
-            }
-            for subobj in &model.sub_objects {
-                if PofToolsGui::radius_test_failed(model, Some(subobj.obj_id)) {
-                    warnings.insert(Warning::RadiusTooSmall(Some(subobj.obj_id)));
-                }
             }
 
             if PofToolsGui::bbox_test_failed(model, None) {
@@ -1253,8 +1361,20 @@ impl PofToolsGui {
                     warnings.insert(Warning::BBoxTooSmall(Some(subobj.obj_id)));
                 }
 
+                if PofToolsGui::radius_test_failed(model, Some(subobj.obj_id)) {
+                    warnings.insert(Warning::RadiusTooSmall(Some(subobj.obj_id)));
+                }
+
                 if subobj.bbox.is_inverted() && subobj.bbox != BoundingBox::EMPTY {
                     warnings.insert(Warning::InvertedBBox(Some(subobj.obj_id)));
+                }
+
+                if subobj.name.len() >= pof::MAX_NAME_LEN {
+                    warnings.insert(Warning::SubObjectNameTooLong(subobj.obj_id));
+                }
+
+                if subobj.properties.len() >= pof::MAX_PROPERTIES_LEN {
+                    warnings.insert(Warning::SubObjectPropertiesTooLong(subobj.obj_id));
                 }
             }
 
@@ -1262,12 +1382,24 @@ impl PofToolsGui {
                 if dock.path.is_none() {
                     warnings.insert(Warning::DockingBayWithoutPath(i));
                 }
+
+                if dock.properties.len() >= pof::MAX_PROPERTIES_LEN {
+                    warnings.insert(Warning::DockingBayPropertiesTooLong(i));
+                }
+
+                if pof::properties_get_field(&dock.properties, "$name").unwrap_or_default().len() >= pof::MAX_NAME_LEN {
+                    warnings.insert(Warning::DockingBayNameTooLong(i));
+                }
             }
 
-            if model.version <= Version::V21_16 {
-                for (i, bank) in model.thruster_banks.iter().enumerate() {
-                    if !bank.properties.is_empty() {
+            for (i, bank) in model.thruster_banks.iter().enumerate() {
+                if !bank.properties.is_empty() {
+                    if model.version <= Version::V21_16 {
                         warnings.insert(Warning::ThrusterPropertiesInvalidVersion(i));
+                    }
+
+                    if bank.properties.len() >= pof::MAX_PROPERTIES_LEN {
+                        warnings.insert(Warning::ThrusterPropertiesTooLong(i));
                     }
                 }
             }
@@ -1289,8 +1421,60 @@ impl PofToolsGui {
                 }
             }
 
+            for (i, turret) in model.turrets.iter().enumerate() {
+                if turret.fire_points.is_empty() {
+                    warnings.insert(Warning::TooFewTurretFirePoints(i));
+                } else if turret.fire_points.len() > pof::MAX_TURRET_POINTS {
+                    warnings.insert(Warning::TooManyTurretFirePoints(i));
+                }
+            }
+
+            for (i, glow_bank) in model.glow_banks.iter().enumerate() {
+                if glow_bank.properties.len() >= pof::MAX_PROPERTIES_LEN {
+                    warnings.insert(Warning::GlowBankPropertiesTooLong(i));
+                }
+            }
+
+            for (i, special_point) in model.special_points.iter().enumerate() {
+                if special_point.name.len() >= pof::MAX_NAME_LEN {
+                    warnings.insert(Warning::SpecialPointNameTooLong(i));
+                }
+
+                if special_point.properties.len() >= pof::MAX_PROPERTIES_LEN {
+                    warnings.insert(Warning::SpecialPointPropertiesTooLong(i));
+                }
+            }
+
+            for (i, path) in model.paths.iter().enumerate() {
+                if path.name.len() >= pof::MAX_NAME_LEN {
+                    warnings.insert(Warning::PathNameTooLong(i));
+                }
+            }
+
+            let mut path_ids: Vec<usize> = (0..model.paths.len()).collect();
+            path_ids.sort_by_key(|id| model.paths[*id].name.clone());
+
+            //let paths_len = path_ids.len();
+            for i in 0..path_ids.len() {
+                //println!("{}, {}", i, path_ids[i]);
+                if i != (path_ids.len() - 1)
+                    && model.paths[path_ids[i]].name == model.paths[path_ids[i + 1]].name
+                    && (i == 0 || model.paths[path_ids[i]].name != model.paths[path_ids[i - 1]].name)
+                {
+                    warnings.insert(Warning::DuplicatePathName(path_ids[i]));
+                }
+            }
+
             if model.untextured_idx.is_some() {
                 warnings.insert(Warning::UntexturedPolygons);
+            }
+
+            if model.eye_points.len() > pof::MAX_EYES {
+                warnings.insert(Warning::TooManyEyePoints);
+            }
+
+            if model.textures.len() > pof::MAX_TEXTURES {
+                warnings.insert(Warning::TooManyTextures);
             }
         }
     }

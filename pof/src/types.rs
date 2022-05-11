@@ -1428,9 +1428,9 @@ impl Serialize for GlowPointBank {
 
 pub const MAX_TEXTURES: usize = 64;
 
-pub const MAX_NAME_LEN: usize = 32;
+pub const MAX_NAME_LEN: usize = 31;
 
-pub const MAX_PROPERTIES_LEN: usize = 256;
+pub const MAX_PROPERTIES_LEN: usize = 255;
 
 macro_rules! mk_versions {
     (@latest $last:ident) => { Self::$last };

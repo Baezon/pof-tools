@@ -803,7 +803,7 @@ impl PofToolsGui {
                                         }
                                         _ => unreachable!(),
                                     };
-                                    format!("⚠ {} is too long (max {} bytes)", field, pof::MAX_NAME_LEN - 1)
+                                    format!("⚠ {} is too long (max {} bytes)", field, pof::MAX_NAME_LEN)
                                 }
                                 Warning::GlowBankPropertiesTooLong(_)
                                 | Warning::ThrusterPropertiesTooLong(_)
@@ -833,7 +833,7 @@ impl PofToolsGui {
                                         }
                                         _ => unreachable!(),
                                     };
-                                    format!("⚠ {} is too long (max {} bytes)", field, pof::MAX_PROPERTIES_LEN - 1)
+                                    format!("⚠ {} is too long (max {} bytes)", field, pof::MAX_PROPERTIES_LEN)
                                 }
                             };
 
@@ -1318,21 +1318,21 @@ impl PofToolsGui {
                 Warning::TooManyTurretFirePoints(idx) => model.turrets[idx].fire_points.len() > pof::MAX_TURRET_POINTS,
                 Warning::DuplicatePathName(idx) => model.paths.iter().any(|path| path.name == model.paths[idx].name),
 
-                Warning::PathNameTooLong(idx) => model.paths[idx].name.len() >= pof::MAX_NAME_LEN,
-                Warning::SubObjectNameTooLong(id) => model.sub_objects[id].name.len() >= pof::MAX_NAME_LEN,
-                Warning::SpecialPointNameTooLong(idx) => model.special_points[idx].name.len() >= pof::MAX_NAME_LEN,
+                Warning::PathNameTooLong(idx) => model.paths[idx].name.len() > pof::MAX_NAME_LEN,
+                Warning::SubObjectNameTooLong(id) => model.sub_objects[id].name.len() > pof::MAX_NAME_LEN,
+                Warning::SpecialPointNameTooLong(idx) => model.special_points[idx].name.len() > pof::MAX_NAME_LEN,
                 Warning::DockingBayNameTooLong(idx) => {
                     pof::properties_get_field(&model.docking_bays[idx].properties, "$name")
                         .unwrap_or_default()
                         .len()
-                        >= pof::MAX_NAME_LEN
+                        > pof::MAX_NAME_LEN
                 }
 
-                Warning::GlowBankPropertiesTooLong(idx) => model.glow_banks[idx].properties.len() >= pof::MAX_PROPERTIES_LEN,
-                Warning::ThrusterPropertiesTooLong(idx) => model.thruster_banks[idx].properties.len() >= pof::MAX_PROPERTIES_LEN,
-                Warning::SubObjectPropertiesTooLong(id) => model.sub_objects[id].properties.len() >= pof::MAX_PROPERTIES_LEN,
-                Warning::DockingBayPropertiesTooLong(idx) => model.docking_bays[idx].properties.len() >= pof::MAX_PROPERTIES_LEN,
-                Warning::SpecialPointPropertiesTooLong(idx) => model.special_points[idx].properties.len() >= pof::MAX_PROPERTIES_LEN,
+                Warning::GlowBankPropertiesTooLong(idx) => model.glow_banks[idx].properties.len() > pof::MAX_PROPERTIES_LEN,
+                Warning::ThrusterPropertiesTooLong(idx) => model.thruster_banks[idx].properties.len() > pof::MAX_PROPERTIES_LEN,
+                Warning::SubObjectPropertiesTooLong(id) => model.sub_objects[id].properties.len() > pof::MAX_PROPERTIES_LEN,
+                Warning::DockingBayPropertiesTooLong(idx) => model.docking_bays[idx].properties.len() > pof::MAX_PROPERTIES_LEN,
+                Warning::SpecialPointPropertiesTooLong(idx) => model.special_points[idx].properties.len() > pof::MAX_PROPERTIES_LEN,
             };
 
             let existing_warning = warnings.contains(&warning);
@@ -1369,11 +1369,11 @@ impl PofToolsGui {
                     warnings.insert(Warning::InvertedBBox(Some(subobj.obj_id)));
                 }
 
-                if subobj.name.len() >= pof::MAX_NAME_LEN {
+                if subobj.name.len() > pof::MAX_NAME_LEN {
                     warnings.insert(Warning::SubObjectNameTooLong(subobj.obj_id));
                 }
 
-                if subobj.properties.len() >= pof::MAX_PROPERTIES_LEN {
+                if subobj.properties.len() > pof::MAX_PROPERTIES_LEN {
                     warnings.insert(Warning::SubObjectPropertiesTooLong(subobj.obj_id));
                 }
             }
@@ -1383,11 +1383,11 @@ impl PofToolsGui {
                     warnings.insert(Warning::DockingBayWithoutPath(i));
                 }
 
-                if dock.properties.len() >= pof::MAX_PROPERTIES_LEN {
+                if dock.properties.len() > pof::MAX_PROPERTIES_LEN {
                     warnings.insert(Warning::DockingBayPropertiesTooLong(i));
                 }
 
-                if pof::properties_get_field(&dock.properties, "$name").unwrap_or_default().len() >= pof::MAX_NAME_LEN {
+                if pof::properties_get_field(&dock.properties, "$name").unwrap_or_default().len() > pof::MAX_NAME_LEN {
                     warnings.insert(Warning::DockingBayNameTooLong(i));
                 }
             }
@@ -1398,7 +1398,7 @@ impl PofToolsGui {
                         warnings.insert(Warning::ThrusterPropertiesInvalidVersion(i));
                     }
 
-                    if bank.properties.len() >= pof::MAX_PROPERTIES_LEN {
+                    if bank.properties.len() > pof::MAX_PROPERTIES_LEN {
                         warnings.insert(Warning::ThrusterPropertiesTooLong(i));
                     }
                 }
@@ -1430,23 +1430,23 @@ impl PofToolsGui {
             }
 
             for (i, glow_bank) in model.glow_banks.iter().enumerate() {
-                if glow_bank.properties.len() >= pof::MAX_PROPERTIES_LEN {
+                if glow_bank.properties.len() > pof::MAX_PROPERTIES_LEN {
                     warnings.insert(Warning::GlowBankPropertiesTooLong(i));
                 }
             }
 
             for (i, special_point) in model.special_points.iter().enumerate() {
-                if special_point.name.len() >= pof::MAX_NAME_LEN {
+                if special_point.name.len() > pof::MAX_NAME_LEN {
                     warnings.insert(Warning::SpecialPointNameTooLong(i));
                 }
 
-                if special_point.properties.len() >= pof::MAX_PROPERTIES_LEN {
+                if special_point.properties.len() > pof::MAX_PROPERTIES_LEN {
                     warnings.insert(Warning::SpecialPointPropertiesTooLong(i));
                 }
             }
 
             for (i, path) in model.paths.iter().enumerate() {
-                if path.name.len() >= pof::MAX_NAME_LEN {
+                if path.name.len() > pof::MAX_NAME_LEN {
                     warnings.insert(Warning::PathNameTooLong(i));
                 }
             }

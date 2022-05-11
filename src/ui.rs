@@ -833,7 +833,7 @@ impl PofToolsGui {
                                         }
                                         _ => unreachable!(),
                                     };
-                                    format!("⚠ {} is too long (max {} bytes)", field, pof::MAX_PROPERTIES_LEN)
+                                    format!("⚠ {} is too long (max {} bytes)", field, pof::MAX_PROPERTIES_LEN - 1)
                                 }
                             };
 

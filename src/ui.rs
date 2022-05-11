@@ -702,7 +702,6 @@ impl PofToolsGui {
                             };
 
                             if first_warning {
-                                println!("1");
                                 ui.horizontal(|ui| {
                                     ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::RED)));
                                     ui.with_layout(egui::Layout::right_to_left(), |ui| {

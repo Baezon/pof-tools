@@ -724,7 +724,6 @@ impl PofToolsGui {
                                 });
                                 first_warning = false;
                             } else {
-                                println!("2");
                                 ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::RED)));
                             }
                         }
@@ -755,16 +754,20 @@ impl PofToolsGui {
                                     )
                                 }
                                 Warning::TooManyEyePoints => {
-                                    format!("⚠ You cannot have more than 9 eye points.")
+                                    format!("⚠ You cannot have more than {} eye points.", pof::MAX_EYES)
                                 }
                                 Warning::TooManyTextures => {
-                                    format!("⚠ You cannot have more than 64 textures.")
+                                    format!("⚠ You cannot have more than {} textures.", pof::MAX_TEXTURES)
                                 }
                                 Warning::TooFewTurretFirePoints(idx) => {
                                     format!("⚠ {} must have at least 1 fire point.", self.model.sub_objects[self.model.turrets[idx].base_obj].name)
                                 }
                                 Warning::TooManyTurretFirePoints(idx) => {
-                                    format!("⚠ {} must have at most 10 fire points.", self.model.sub_objects[self.model.turrets[idx].base_obj].name)
+                                    format!(
+                                        "⚠ {} must have at most {} fire points.",
+                                        self.model.sub_objects[self.model.turrets[idx].base_obj].name,
+                                        pof::MAX_TURRET_POINTS
+                                    )
                                 }
                                 Warning::RadiusTooSmall(id_opt) => {
                                     format!(
@@ -800,7 +803,7 @@ impl PofToolsGui {
                                         }
                                         _ => unreachable!(),
                                     };
-                                    format!("⚠ {} is too long (max 31 bytes)", field)
+                                    format!("⚠ {} is too long (max {} bytes)", field, pof::MAX_NAME_LEN - 1)
                                 }
                                 Warning::GlowBankPropertiesTooLong(_)
                                 | Warning::ThrusterPropertiesTooLong(_)
@@ -830,12 +833,11 @@ impl PofToolsGui {
                                         }
                                         _ => unreachable!(),
                                     };
-                                    format!("⚠ {} is too long (max 255 bytes)", field)
+                                    format!("⚠ {} is too long (max {} bytes)", field, pof::MAX_PROPERTIES_LEN)
                                 }
                             };
 
                             if first_warning {
-                                println!("3");
                                 ui.horizontal(|ui| {
                                     ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
                                     ui.with_layout(egui::Layout::right_to_left(), |ui| {
@@ -858,7 +860,6 @@ impl PofToolsGui {
                                 });
                                 first_warning = false;
                             } else {
-                                println!("4");
                                 ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
                             }
                         }

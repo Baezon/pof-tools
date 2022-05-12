@@ -1287,18 +1287,16 @@ impl PofToolsGui {
             let failed_check = match warning {
                 Warning::RadiusTooSmall(subobj_opt) => PofToolsGui::radius_test_failed(model, subobj_opt),
                 Warning::BBoxTooSmall(subobj_opt) => PofToolsGui::bbox_test_failed(model, subobj_opt),
-                Warning::DockingBayWithoutPath(bay_num) => bay_num < model.docking_bays.len() && model.docking_bays[bay_num].path.is_none(),
+                Warning::DockingBayWithoutPath(bay_num) => model.docking_bays.get(bay_num).map_or(false, |bay| bay.path.is_none()),
                 Warning::ThrusterPropertiesInvalidVersion(bank_idx) => {
-                    model.version <= Version::V21_16 && bank_idx < model.thruster_banks.len() && !model.thruster_banks[bank_idx].properties.is_empty()
+                    model.version <= Version::V21_16 && model.thruster_banks.get(bank_idx).map_or(false, |bank| !bank.properties.is_empty())
                 }
                 Warning::WeaponOffsetInvalidVersion(weapon_select) => {
                     (model.version <= Version::V21_17 || model.version == Version::V22_00) && {
                         if let WeaponSelection::PriBankPoint(bank, point) = weapon_select {
-                            bank < model.primary_weps.len() && point < model.primary_weps[bank].len() && model.primary_weps[bank][point].offset != 0.0
+                            bank < model.primary_weps.len() && model.primary_weps[bank].get(point).map_or(false, |point| point.offset != 0.0)
                         } else if let WeaponSelection::SecBankPoint(bank, point) = weapon_select {
-                            bank < model.secondary_weps.len()
-                                && point < model.secondary_weps[bank].len()
-                                && model.secondary_weps[bank][point].offset != 0.0
+                            bank < model.secondary_weps.len() && model.secondary_weps[bank].get(point).map_or(false, |point| point.offset != 0.0)
                         } else {
                             false
                         }
@@ -1314,25 +1312,44 @@ impl PofToolsGui {
                 Warning::UntexturedPolygons => model.untextured_idx.is_some(),
                 Warning::TooManyEyePoints => model.eye_points.len() > pof::MAX_EYES,
                 Warning::TooManyTextures => model.textures.len() > pof::MAX_TEXTURES,
-                Warning::TooFewTurretFirePoints(idx) => model.turrets[idx].fire_points.is_empty(),
-                Warning::TooManyTurretFirePoints(idx) => model.turrets[idx].fire_points.len() > pof::MAX_TURRET_POINTS,
-                Warning::DuplicatePathName(idx) => model.paths.iter().any(|path| path.name == model.paths[idx].name),
+                Warning::TooFewTurretFirePoints(idx) => model.turrets.get(idx).map_or(false, |turret| turret.fire_points.is_empty()),
+                Warning::TooManyTurretFirePoints(idx) => model
+                    .turrets
+                    .get(idx)
+                    .map_or(false, |turret| turret.fire_points.len() > pof::MAX_TURRET_POINTS),
+                Warning::DuplicatePathName(idx) => model
+                    .paths
+                    .get(idx)
+                    .map_or(false, |path1| model.paths.iter().any(|path2| path1.name == path2.name)),
 
-                Warning::PathNameTooLong(idx) => model.paths[idx].name.len() > pof::MAX_NAME_LEN,
+                Warning::PathNameTooLong(idx) => model.paths.get(idx).map_or(false, |path| path.name.len() > pof::MAX_NAME_LEN),
                 Warning::SubObjectNameTooLong(id) => model.sub_objects[id].name.len() > pof::MAX_NAME_LEN,
-                Warning::SpecialPointNameTooLong(idx) => model.special_points[idx].name.len() > pof::MAX_NAME_LEN,
-                Warning::DockingBayNameTooLong(idx) => {
-                    pof::properties_get_field(&model.docking_bays[idx].properties, "$name")
-                        .unwrap_or_default()
-                        .len()
-                        > pof::MAX_NAME_LEN
-                }
+                Warning::SpecialPointNameTooLong(idx) => model
+                    .special_points
+                    .get(idx)
+                    .map_or(false, |spec_point| spec_point.name.len() > pof::MAX_NAME_LEN),
+                Warning::DockingBayNameTooLong(idx) => model
+                    .docking_bays
+                    .get(idx)
+                    .map_or(false, |dock| pof::properties_get_field(&dock.properties, "$name").unwrap_or_default().len() > pof::MAX_NAME_LEN),
 
-                Warning::GlowBankPropertiesTooLong(idx) => model.glow_banks[idx].properties.len() > pof::MAX_PROPERTIES_LEN,
-                Warning::ThrusterPropertiesTooLong(idx) => model.thruster_banks[idx].properties.len() > pof::MAX_PROPERTIES_LEN,
+                Warning::GlowBankPropertiesTooLong(idx) => model
+                    .glow_banks
+                    .get(idx)
+                    .map_or(false, |bank| bank.properties.len() > pof::MAX_PROPERTIES_LEN),
+                Warning::ThrusterPropertiesTooLong(idx) => model
+                    .thruster_banks
+                    .get(idx)
+                    .map_or(false, |bank| bank.properties.len() > pof::MAX_PROPERTIES_LEN),
                 Warning::SubObjectPropertiesTooLong(id) => model.sub_objects[id].properties.len() > pof::MAX_PROPERTIES_LEN,
-                Warning::DockingBayPropertiesTooLong(idx) => model.docking_bays[idx].properties.len() > pof::MAX_PROPERTIES_LEN,
-                Warning::SpecialPointPropertiesTooLong(idx) => model.special_points[idx].properties.len() > pof::MAX_PROPERTIES_LEN,
+                Warning::DockingBayPropertiesTooLong(idx) => model
+                    .docking_bays
+                    .get(idx)
+                    .map_or(false, |bank| bank.properties.len() > pof::MAX_PROPERTIES_LEN),
+                Warning::SpecialPointPropertiesTooLong(idx) => model
+                    .special_points
+                    .get(idx)
+                    .map_or(false, |spec_point| spec_point.properties.len() > pof::MAX_PROPERTIES_LEN),
             };
 
             let existing_warning = warnings.contains(&warning);

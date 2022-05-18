@@ -1003,7 +1003,9 @@ impl PofToolsGui {
 
                 ui.label("Name:");
                 if let Some(id) = selected_id {
-                    ui.add(egui::TextEdit::singleline(&mut self.model.sub_objects[id].name));
+                    if ui.add(egui::TextEdit::singleline(&mut self.model.sub_objects[id].name)).changed() {
+                        PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::SubObjectNameTooLong(id)));
+                    }
                 } else {
                     ui.add_enabled(false, egui::TextEdit::singleline(name));
                 }
@@ -1243,7 +1245,12 @@ impl PofToolsGui {
 
                 ui.label("Properties:");
                 if let Some(id) = selected_id {
-                    ui.add(egui::TextEdit::multiline(&mut self.model.sub_objects[id].properties).desired_rows(2));
+                    if ui
+                        .add(egui::TextEdit::multiline(&mut self.model.sub_objects[id].properties).desired_rows(2))
+                        .changed()
+                    {
+                        PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::SubObjectPropertiesTooLong(id)));
+                    }
                 } else {
                     ui.add_enabled(false, egui::TextEdit::multiline(&mut blank_string).desired_rows(2));
                 }
@@ -1356,6 +1363,8 @@ impl PofToolsGui {
                         }
                         if ui.text_edit_singleline(engine_subsys_string).changed() {
                             pof::properties_update_field(&mut self.model.thruster_banks[bank].properties, "$engine_subsystem", engine_subsys_string);
+                            PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::ThrusterPropertiesTooLong(bank)));
+                            PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::ThrusterPropertiesInvalidVersion(bank)));
                         }
                         UiState::reset_widget_color(ui);
                     } else {
@@ -1372,6 +1381,7 @@ impl PofToolsGui {
                             .add(egui::TextEdit::multiline(&mut self.model.thruster_banks[bank].properties).desired_rows(1))
                             .changed()
                         {
+                            PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::ThrusterPropertiesTooLong(bank)));
                             PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::ThrusterPropertiesInvalidVersion(bank)));
                         }
                         UiState::reset_widget_color(ui);
@@ -1404,6 +1414,7 @@ impl PofToolsGui {
 
                 if let Some(response) = bank_idx_response {
                     let new_idx = response.apply(&mut self.model.thruster_banks);
+                    PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All); //FIX
 
                     self.ui_state.tree_view_selection = TreeSelection::Thrusters(ThrusterSelection::bank(new_idx));
                     properties_panel_dirty = true;
@@ -1501,12 +1512,16 @@ impl PofToolsGui {
                     let (weapon_system, is_primary) = weapon_system.unwrap();
                     let new_idx = response.apply(weapon_system);
 
+                    PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All); // FIX
+
                     self.ui_state.tree_view_selection = TreeSelection::Weapons(WeaponSelection::bank(is_primary, new_idx));
                     properties_panel_dirty = true;
                     self.ui_state.viewport_3d_dirty = true;
                 } else if let Some(response) = point_idx_response {
                     let (weapon_system, is_primary) = weapon_system.unwrap();
                     let new_idx = response.apply(&mut weapon_system[bank_num.unwrap()]);
+
+                    PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All); // FIX
 
                     self.ui_state.tree_view_selection = TreeSelection::Weapons(WeaponSelection::bank_point(is_primary, bank_num.unwrap(), new_idx));
                     properties_panel_dirty = true;
@@ -1541,6 +1556,8 @@ impl PofToolsGui {
                     if let Some(bay) = bay_num {
                         if ui.text_edit_singleline(name_string).changed() {
                             pof::properties_update_field(&mut self.model.docking_bays[bay].properties, "$name", name_string);
+                            PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::DockingBayNameTooLong(bay)));
+                            PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::DockingBayPropertiesTooLong(bay)));
                         }
                     } else {
                         ui.add_enabled(false, egui::TextEdit::singleline(&mut blank_string));
@@ -1567,6 +1584,7 @@ impl PofToolsGui {
                         "$parent_submodel",
                         &subobj_names_list[new_subobj],
                     );
+                    PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::DockingBayPropertiesTooLong(bay_num.unwrap())));
                     self.ui_state.viewport_3d_dirty = true;
                 }
 
@@ -1595,7 +1613,7 @@ impl PofToolsGui {
                         } else {
                             self.model.docking_bays[bay_num.unwrap()].path = Some(PathId(*path_num as u32))
                         }
-                        PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All);
+                        PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::DockingBayWithoutPath(bay_num.unwrap())));
                     }
                 });
 
@@ -1610,6 +1628,8 @@ impl PofToolsGui {
                             if let Some(new_name) = pof::properties_get_field(&self.model.docking_bays[bay].properties, "$name") {
                                 *name_string = new_name.to_string();
                             }
+                            PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::DockingBayNameTooLong(bay)));
+                            PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::DockingBayPropertiesTooLong(bay)));
                         }
                     } else {
                         ui.add_enabled(false, egui::TextEdit::multiline(&mut String::new()).desired_rows(1));
@@ -1666,6 +1686,8 @@ impl PofToolsGui {
                 if let Some(response) = bay_idx_response {
                     let new_idx = response.apply(&mut self.model.docking_bays);
 
+                    PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All); // FIX
+
                     self.ui_state.tree_view_selection = TreeSelection::DockingBays(DockingSelection::bay(new_idx));
                     properties_panel_dirty = true;
                     self.ui_state.viewport_3d_dirty = true;
@@ -1702,6 +1724,7 @@ impl PofToolsGui {
                 if let Some(bank) = bank_num {
                     if ui.add(egui::TextEdit::singleline(glow_texture_string).desired_rows(1)).changed() {
                         pof::properties_update_field(&mut self.model.glow_banks[bank].properties, "$glow_texture", glow_texture_string);
+                        PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::GlowBankPropertiesTooLong(bank)));
                     }
                 } else {
                     ui.add_enabled(false, egui::TextEdit::singleline(&mut blank_string).desired_rows(1));
@@ -1764,7 +1787,7 @@ impl PofToolsGui {
                             .add(egui::TextEdit::multiline(&mut self.model.glow_banks[bank].properties).desired_rows(1))
                             .changed()
                         {
-                            println!("{}", &self.model.glow_banks[bank].properties);
+                            PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::GlowBankPropertiesTooLong(bank)));
                         }
                     } else {
                         ui.add_enabled(false, egui::TextEdit::multiline(&mut String::new()).desired_rows(1));
@@ -1803,12 +1826,14 @@ impl PofToolsGui {
                 if let Some(response) = bank_idx_response {
                     let new_idx = response.apply(&mut self.model.glow_banks);
 
+                    PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All); // FIX
                     self.ui_state.tree_view_selection = TreeSelection::Glows(GlowSelection::bank(new_idx));
                     properties_panel_dirty = true;
                     self.ui_state.viewport_3d_dirty = true;
                 } else if let Some(response) = point_idx_response {
                     let new_idx = response.apply(&mut self.model.glow_banks[bank_num.unwrap()].glow_points);
 
+                    PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All); // FIX
                     self.ui_state.tree_view_selection = TreeSelection::Glows(GlowSelection::bank_point(bank_num.unwrap(), new_idx));
                     properties_panel_dirty = true;
                     self.ui_state.viewport_3d_dirty = true;
@@ -1830,7 +1855,9 @@ impl PofToolsGui {
                 ui.horizontal(|ui| {
                     ui.label("Name:");
                     if let Some(point) = point_num {
-                        ui.add(egui::TextEdit::singleline(&mut self.model.special_points[point].name));
+                        if ui.add(egui::TextEdit::singleline(&mut self.model.special_points[point].name)).changed() {
+                            PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::SpecialPointNameTooLong(point)));
+                        }
                     } else {
                         ui.add_enabled(false, egui::TextEdit::singleline(name_string));
                     }
@@ -1859,6 +1886,7 @@ impl PofToolsGui {
                         });
                         if changed {
                             pof::properties_update_field(&mut self.model.special_points[point].properties, "$special", types[idx]);
+                            PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::SpecialPointPropertiesTooLong(point)));
                         }
                     } else {
                         egui::ComboBox::from_label("Type").show_ui(ui, |ui| {
@@ -1876,6 +1904,7 @@ impl PofToolsGui {
                             if let Some(new_name) = pof::properties_get_field(&self.model.special_points[point].properties, "$name") {
                                 *name_string = new_name.to_string();
                             }
+                            PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::SpecialPointPropertiesTooLong(point)));
                         }
                     } else {
                         ui.add_enabled(false, egui::TextEdit::multiline(&mut String::new()).desired_rows(1));
@@ -1900,6 +1929,7 @@ impl PofToolsGui {
                 if let Some(response) = spec_point_idx_response {
                     let new_idx = response.apply(&mut self.model.special_points);
 
+                    PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All); // FIX
                     self.ui_state.tree_view_selection = TreeSelection::SpecialPoints(SpecialPointSelection::point(new_idx));
                     properties_panel_dirty = true;
                     self.ui_state.viewport_3d_dirty = true;
@@ -1995,15 +2025,15 @@ impl PofToolsGui {
 
                 if let Some(response) = turret_idx_response {
                     let new_idx = response.apply(&mut self.model.turrets);
-                    PofToolsGui::recheck_errors(&mut self.errors, &self.model, All);
 
+                    PofToolsGui::recheck_errors(&mut self.errors, &self.model, All); // FIX
                     self.ui_state.tree_view_selection = TreeSelection::Turrets(TurretSelection::turret(new_idx));
                     properties_panel_dirty = true;
                     self.ui_state.viewport_3d_dirty = true;
                 } else if let Some(response) = point_idx_response {
                     let new_idx = response.apply(&mut self.model.turrets[turret_num.unwrap()].fire_points);
-                    PofToolsGui::recheck_errors(&mut self.errors, &self.model, All);
 
+                    PofToolsGui::recheck_errors(&mut self.errors, &self.model, All); // FIX
                     self.ui_state.tree_view_selection = TreeSelection::Turrets(TurretSelection::turret_point(turret_num.unwrap(), new_idx));
                     properties_panel_dirty = true;
                     self.ui_state.viewport_3d_dirty = true;
@@ -2025,14 +2055,21 @@ impl PofToolsGui {
 
                 ui.label("Name:");
                 if let Some(num) = path_num {
-                    ui.add(egui::TextEdit::multiline(&mut self.model.paths[num].name).desired_rows(1));
+                    if ui
+                        .add(egui::TextEdit::multiline(&mut self.model.paths[num].name).desired_rows(1))
+                        .changed()
+                    {
+                        PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::DuplicatePathName(num)));
+                        PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::PathNameTooLong(num)));
+                    };
                 } else {
                     ui.add_enabled(false, egui::TextEdit::multiline(name).desired_rows(1));
                 }
 
                 ui.label("Parent:");
                 if let Some(num) = path_num {
-                    ui.add(egui::TextEdit::multiline(&mut self.model.paths[num].parent).desired_rows(1));
+                    ui.add(egui::TextEdit::multiline(&mut self.model.paths[num].parent).desired_rows(1))
+                        .changed();
                 } else {
                     ui.add_enabled(false, egui::TextEdit::multiline(parent_string).desired_rows(1));
                 }
@@ -2059,9 +2096,10 @@ impl PofToolsGui {
                 if let Some(response) = path_idx_response {
                     if let IndexingButtonsResponse::Delete(idx) = response {
                         self.model.path_removal_fixup(PathId(idx as u32));
-                        PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All);
                     }
                     let new_idx = response.apply(&mut self.model.paths);
+
+                    PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All); // FIX
 
                     self.ui_state.tree_view_selection = TreeSelection::Paths(PathSelection::path(new_idx));
                     properties_panel_dirty = true;
@@ -2146,6 +2184,7 @@ impl PofToolsGui {
                 if let Some(response) = eye_idx_response {
                     let new_idx = response.apply(&mut self.model.eye_points);
 
+                    PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All); //FIX
                     self.ui_state.tree_view_selection = TreeSelection::EyePoints(EyeSelection::point(new_idx));
                     properties_panel_dirty = true;
                     self.ui_state.viewport_3d_dirty = true;

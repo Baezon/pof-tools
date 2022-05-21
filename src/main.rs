@@ -1288,12 +1288,29 @@ impl PofToolsGui {
                     }
 
                     let size = 0.05 * model.sub_objects[obj_id].radius;
+                    let pos = model.get_total_subobj_offset(obj_id);
 
                     let mut lollipop_origin = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_POINT_COLOR);
-                    lollipop_origin.push(model.get_total_subobj_offset(obj_id), Vec3d::ZERO, size);
+                    lollipop_origin.push(pos, Vec3d::ZERO, size);
                     let lollipop_origin = lollipop_origin.finish(display);
 
                     self.lollipops = vec![lollipop_origin];
+
+                    match model.sub_objects[obj_id].uvec_fvec() {
+                        Some((uvec, fvec)) => {
+                            // Blue lollipop for uvec
+                            let mut lollipop_uvec = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_BANK_COLOR);
+                            lollipop_uvec.push(pos, uvec * 5., 0.25);
+                            let lollipop_uvec = lollipop_uvec.finish(display);
+                            self.lollipops.push(lollipop_uvec);
+                            // Green lollipop for fvec
+                            let mut lollipop_fvec = GlLollipopsBuilder::new([0.15, 1.0, 0.15, 0.15]);
+                            lollipop_fvec.push(pos, fvec * 5., 0.25);
+                            let lollipop_fvec = lollipop_fvec.finish(display);
+                            self.lollipops.push(lollipop_fvec);
+                        },
+                        None => ()
+                    }
                 }
             }
             TreeSelection::Textures(TextureSelection::Texture(tex)) => {

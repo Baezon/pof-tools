@@ -1300,12 +1300,12 @@ impl PofToolsGui {
                         Some((uvec, fvec)) => {
                             // Blue lollipop for uvec
                             let mut lollipop_uvec = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_BANK_COLOR);
-                            lollipop_uvec.push(pos, uvec * 5., 0.25);
+                            lollipop_uvec.push(pos, uvec * 7., 0.25);
                             let lollipop_uvec = lollipop_uvec.finish(display);
                             self.lollipops.push(lollipop_uvec);
                             // Green lollipop for fvec
                             let mut lollipop_fvec = GlLollipopsBuilder::new([0.15, 1.0, 0.15, 0.15]);
-                            lollipop_fvec.push(pos, fvec * 5., 0.25);
+                            lollipop_fvec.push(pos, fvec * 7., 0.25);
                             let lollipop_fvec = lollipop_fvec.finish(display);
                             self.lollipops.push(lollipop_fvec);
                         },

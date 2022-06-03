@@ -620,7 +620,6 @@ pub struct PolyVertex<T = NormalId> {
 impl Serialize for PolyVertex<()> {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         self.vertex_id.write_to(w)?;
-        0_u16.write_to(w)?;
         self.uv.write_to(w)
     }
 }

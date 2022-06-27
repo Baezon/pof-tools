@@ -342,7 +342,11 @@ impl<R: Read + Seek> Parser<R> {
                         let path = paths.first().map(|&x| PathId(x));
                         // same thing here, only first 2 are used
                         let mut dockpoints = this.read_list(|this| Ok(DockingPoint { position: this.read_vec3d()?, normal: this.read_vec3d()? }))?;
-                        let mut iter = dockpoints.drain(..2);
+                        let mut iter = if dockpoints.len() >= 2 {
+                            dockpoints.drain(..2)
+                        } else {
+                            dockpoints.drain(..)
+                        };
                         let (p1, p2) = (iter.next().unwrap_or_default(), iter.next().unwrap_or_default());
                         let position = (p1.position + p2.position) / 2.0;
                         let fvec: NormalVec3 = p1.normal.try_into().unwrap_or_default();

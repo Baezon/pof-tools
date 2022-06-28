@@ -1112,6 +1112,7 @@ impl PofToolsGui {
 
                     if response.clicked() {
                         self.model.recalc_subobj_offset(selected_id.unwrap());
+                        PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, One(Warning::RadiusTooSmall(selected_id)));
 
                         self.ui_state.viewport_3d_dirty = true;
                         buffer_ids_to_rebuild.push(selected_id.unwrap());

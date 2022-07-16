@@ -1341,9 +1341,11 @@ impl<'a> ParseCtx<'a> for DaeContext<'a> {
                     self.normal_id = ctx.normal_ids[index as usize];
                 }
                 fn add_texcoord(&mut self, _: &VertexContext, reader: &SourceReader<'a, ST>, index: u32, set: Option<u32>) {
-                    assert!(set.map_or(true, |set| set == 0));
-                    let [u, v] = reader.get(index as usize);
-                    self.uv = (u, v);
+                    // maybe raise an import warning over this?
+                    if set == Some(0) {
+                        let [u, v] = reader.get(index as usize);
+                        self.uv = (u, v);
+                    }
                 }
             }
 

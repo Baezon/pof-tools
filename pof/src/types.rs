@@ -1238,7 +1238,18 @@ impl SubObject {
         //     BspNode::Leaf { bbox, .. } => bbox,
         // };
     }
+
+    pub fn uvec_fvec(&self) -> Option<(Vec3d, Vec3d)> {
+        parse_uvec_fvec(&self.properties)
+    }
 }
+
+fn parse_uvec_fvec(props: &str) -> Option<(Vec3d, Vec3d)> {
+    let uvec = Vec3d::from_str(properties_get_field(props, "$uvec")?).ok()?;
+    let fvec = Vec3d::from_str(properties_get_field(props, "$fvec")?).ok()?;
+    Some((uvec, fvec))
+}
+
 impl Serialize for SubObject {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         let version = get_version();
@@ -1857,13 +1868,13 @@ fn properties_find_field(properties: &str, field: &str) -> Option<(usize, usize)
         let end_idx = if let Some(idx) = properties[start_idx..].chars().position(|d| d.is_ascii_control()) {
             start_idx + idx
         } else {
-            start_idx + properties[start_idx..].len()
+            properties.len()
         };
 
         start_idx += field.len();
 
         let mut chars = properties[start_idx..].chars();
-        while chars.next().map_or(false, |c| c == '=' || c.is_whitespace()) {
+        while chars.next().map_or(false, |c| c == '=' || c == ':' || c.is_whitespace()) {
             start_idx += 1;
         }
 
@@ -1887,7 +1898,7 @@ pub fn properties_update_field(properties: &mut String, field: &str, val: &str) 
     }
 }
 
-pub fn properties_get_field<'a>(properties: &'a String, field: &str) -> Option<&'a str> {
+pub fn properties_get_field<'a>(properties: &'a str, field: &str) -> Option<&'a str> {
     if let Some((start_idx, end_idx)) = properties_find_field(properties, field) {
         Some(&properties[start_idx..end_idx])
     } else {

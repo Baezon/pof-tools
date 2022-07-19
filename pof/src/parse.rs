@@ -942,7 +942,7 @@ trait ParseCtx<'a> {
                         turret.gun_obj = obj_id;
                         turret.base_obj = if name.contains("gun") { parent } else { obj_id };
 
-                        let (pos, norm, _) = node.parse_point(parent_transform, up);
+                        let (pos, norm, _) = node.parse_point(&transform, up);
                         turret.fire_points.push(pos);
                         turret.normal = norm.try_into().unwrap_or_default();
                         continue;

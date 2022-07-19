@@ -1360,7 +1360,7 @@ impl Default for Turret {
             base_obj: Default::default(),
             gun_obj: Default::default(),
             normal: Default::default(),
-            fire_points: vec![Vec3d::default()],
+            fire_points: vec![],
         }
     }
 }

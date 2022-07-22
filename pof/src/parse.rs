@@ -1344,7 +1344,7 @@ impl<'a> ParseCtx<'a> for DaeContext<'a> {
                     // maybe raise an import warning over this?
                     if set == Some(0) {
                         let [u, v] = reader.get(index as usize);
-                        self.uv = (u, v);
+                        self.uv = (u, 1. - v);
                     }
                 }
             }

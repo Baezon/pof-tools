@@ -942,7 +942,7 @@ trait ParseCtx<'a> {
                         turret.gun_obj = obj_id;
                         turret.base_obj = if name.contains("gun") { parent } else { obj_id };
 
-                        let (pos, norm, _) = node.parse_point(parent_transform, up);
+                        let (pos, norm, _) = node.parse_point(&transform, up);
                         turret.fire_points.push(pos);
                         turret.normal = norm.try_into().unwrap_or_default();
                         continue;
@@ -1341,9 +1341,11 @@ impl<'a> ParseCtx<'a> for DaeContext<'a> {
                     self.normal_id = ctx.normal_ids[index as usize];
                 }
                 fn add_texcoord(&mut self, _: &VertexContext, reader: &SourceReader<'a, ST>, index: u32, set: Option<u32>) {
-                    assert!(set.map_or(true, |set| set == 0));
-                    let [u, v] = reader.get(index as usize);
-                    self.uv = (u, 1. - v);
+                    // maybe raise an import warning over this?
+                    if set == Some(0) {
+                        let [u, v] = reader.get(index as usize);
+                        self.uv = (u, 1. - v);
+                    }
                 }
             }
 

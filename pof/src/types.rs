@@ -1785,6 +1785,9 @@ impl Model {
 
     pub fn make_orphan(&mut self, would_be_orphan: ObjectId) {
         if let Some(parent_id) = self.sub_objects[would_be_orphan].parent {
+            // maintain it's current relative position to the whole model
+            self.sub_objects[would_be_orphan].offset = self.get_total_subobj_offset(would_be_orphan);
+
             let parent_children = &mut self.sub_objects[parent_id].children;
             parent_children.remove(parent_children.iter().position(|child_id| *child_id == would_be_orphan).unwrap());
         }
@@ -1795,6 +1798,11 @@ impl Model {
         if !self.is_obj_id_ancestor(new_parent, new_child) {
             self.sub_objects[new_parent].children.push(new_child);
             self.sub_objects[new_child].parent = Some(new_parent);
+
+            // maintain it's current relative position to the whole model
+            let offset_from_parents = self.get_total_subobj_offset(new_child) - self.sub_objects[new_child].offset;
+            self.sub_objects[new_child].offset -= offset_from_parents;
+
             Some(())
         } else {
             None

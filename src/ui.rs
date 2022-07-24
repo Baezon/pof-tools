@@ -1,12 +1,11 @@
-use egui::{collapsing_header::CollapsingState, CollapsingHeader, Color32, Id, Label, RichText};
+use egui::{collapsing_header::CollapsingState, Color32, Id, Label, RichText};
 use glium::{
     texture::{RawImage2d, SrgbTexture2d},
     Display,
 };
 use pof::{BoundingBox, Model, SubObject, TextureId, Vec3d, Version};
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
-    iter::Map,
+    collections::{BTreeSet, HashMap},
     sync::mpsc::Receiver,
 };
 

@@ -1418,6 +1418,7 @@ impl PofToolsGui {
                     PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All); //FIX
 
                     self.ui_state.tree_view_selection = TreeSelection::Thrusters(ThrusterSelection::bank(new_idx));
+                    self.ui_state.tree_view_force_open = Some(TreeSelection::Thrusters(ThrusterSelection::bank(new_idx)));
                     properties_panel_dirty = true;
                     self.ui_state.viewport_3d_dirty = true;
                 } else if let Some(response) = point_idx_response {
@@ -1516,6 +1517,7 @@ impl PofToolsGui {
                     PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All); // FIX
 
                     self.ui_state.tree_view_selection = TreeSelection::Weapons(WeaponSelection::bank(is_primary, new_idx));
+                    self.ui_state.tree_view_force_open = Some(TreeSelection::Weapons(WeaponSelection::bank(is_primary, new_idx)));
                     properties_panel_dirty = true;
                     self.ui_state.viewport_3d_dirty = true;
                 } else if let Some(response) = point_idx_response {
@@ -1829,6 +1831,7 @@ impl PofToolsGui {
 
                     PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All); // FIX
                     self.ui_state.tree_view_selection = TreeSelection::Glows(GlowSelection::bank(new_idx));
+                    self.ui_state.tree_view_force_open = Some(TreeSelection::Glows(GlowSelection::bank(new_idx)));
                     properties_panel_dirty = true;
                     self.ui_state.viewport_3d_dirty = true;
                 } else if let Some(response) = point_idx_response {

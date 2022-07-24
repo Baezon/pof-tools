@@ -6,11 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-eframe = "0.17"
-egui = "0.17.0"
+eframe = "0.18.0"
+egui = "0.18.1"
 epi = "0.17"
 glium = "0.31"
-egui_glium = "0.17"
+egui_glium = "0.18"
 pof = { path = "pof" }
 nalgebra-glm = "0.16.0"
 native-dialog = "0.6.3"

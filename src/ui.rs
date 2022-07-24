@@ -442,8 +442,10 @@ pub(crate) enum DisplayMode {
 #[derive(Default)]
 pub(crate) struct UiState {
     pub tree_view_selection: TreeSelection,
-    pub tree_view_toggle: Option<TreeSelection>, // toggles the expanded state of the given tree value next frame
-    pub tree_view_force_open: Option<TreeSelection>, // expands the given tree value next frame
+    /// toggles the expanded state of the given tree value next frame
+    pub tree_view_toggle: Option<TreeSelection>,
+    /// expands the given tree value next frame
+    pub tree_view_force_open: Option<TreeSelection>,
     pub viewport_3d_dirty: bool,
     pub last_selected_subobj: Option<ObjectId>,
     pub properties_panel: PropertiesPanel,

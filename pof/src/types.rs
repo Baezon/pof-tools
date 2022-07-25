@@ -1625,6 +1625,16 @@ impl Model {
         (out_vec, out_idx)
     }
 
+    pub fn do_for_recursive_subobj_children(&self, id: ObjectId, f: &mut impl FnMut(&SubObject)) {
+        f(&self.sub_objects[id]);
+
+        let children: Vec<_> = self.sub_objects[id].children().map(|id| *id).collect();
+        for child_id in children {
+            f(&self.sub_objects[child_id]);
+            self.do_for_recursive_subobj_children(child_id, f);
+        }
+    }
+
     pub fn num_debris_objects(&self) -> u32 {
         let mut num_debris = 0;
         for sobj in &self.sub_objects {

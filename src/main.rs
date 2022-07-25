@@ -1227,17 +1227,11 @@ fn get_list_of_display_subobjects(model: &Model, tree_selection: TreeSelection, 
             top_level_parent = id;
         }
 
-        fn display_subobject_recursive(display_subobjects: &mut ObjVec<bool>, subobjects: &ObjVec<SubObject>, id: ObjectId) {
-            display_subobjects[id] = true;
-
-            for child_id in subobjects[id].children() {
-                if !subobjects[*child_id].is_destroyed_model() {
-                    display_subobject_recursive(display_subobjects, subobjects, *child_id);
-                }
+        model.do_for_recursive_subobj_children(top_level_parent, &mut |subobj| {
+            if !subobj.is_destroyed_model() {
+                out[subobj.obj_id] = true;
             }
-        }
-
-        display_subobject_recursive(&mut out, &model.sub_objects, top_level_parent);
+        });
 
         // if they have debris selected show all the debris
         if model.sub_objects[last_selected_subobj].is_debris_model {

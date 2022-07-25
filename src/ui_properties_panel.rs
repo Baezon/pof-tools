@@ -278,17 +278,11 @@ impl UiState {
             match transform_window.transform_type {
                 TransformType::Rotate => {
                     ui.horizontal(|ui| {
-                        if ui.button("X-axis").clicked() {
-                            transform_window.vector = format!("1, 0, 0");
-                        }
+                        ui.selectable_value(&mut transform_window.vector, format!("1, 0, 0"), "X-axis");
                         ui.separator();
-                        if ui.button("Y-axis").clicked() {
-                            transform_window.vector = format!("0, 1, 0");
-                        }
+                        ui.selectable_value(&mut transform_window.vector, format!("0, 1, 0"), "Y-axis");
                         ui.separator();
-                        if ui.button("Z-axis").clicked() {
-                            transform_window.vector = format!("0, 0, 1");
-                        }
+                        ui.selectable_value(&mut transform_window.vector, format!("0, 0, 1"), "Z-axis");
                         ui.separator();
                     });
                     ui.separator();
@@ -1201,7 +1195,9 @@ impl PofToolsGui {
                         self.model.apply_transform(id, &matrix, false);
                         self.ui_state.viewport_3d_dirty = true;
                         properties_panel_dirty = true;
-                        buffer_ids_to_rebuild.push(id);
+
+                        self.model
+                            .do_for_recursive_subobj_children(id, &mut |subobj| buffer_ids_to_rebuild.push(subobj.obj_id));
                     }
                 }
 

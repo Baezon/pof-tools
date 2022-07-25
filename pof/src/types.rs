@@ -1625,11 +1625,10 @@ impl Model {
         (out_vec, out_idx)
     }
 
-    pub fn do_for_recursive_subobj_children(&self, id: ObjectId, f: &mut impl FnMut(&SubObject)) {
+    pub fn do_for_recursive_subobj_children<'a>(&'a self, id: ObjectId, f: &mut impl FnMut(&'a SubObject)) {
         f(&self.sub_objects[id]);
 
-        let children: Vec<_> = self.sub_objects[id].children().map(|id| *id).collect();
-        for child_id in children {
+        for &child_id in self.sub_objects[id].children() {
             f(&self.sub_objects[child_id]);
             self.do_for_recursive_subobj_children(child_id, f);
         }

@@ -1,4 +1,4 @@
-use egui::{CollapsingHeader, Color32, Label, RichText};
+use egui::{collapsing_header::CollapsingState, Color32, Id, Label, RichText};
 use glium::{
     texture::{RawImage2d, SrgbTexture2d},
     Display,
@@ -442,6 +442,10 @@ pub(crate) enum DisplayMode {
 #[derive(Default)]
 pub(crate) struct UiState {
     pub tree_view_selection: TreeSelection,
+    /// toggles the expanded state of the given tree value next frame
+    pub tree_view_toggle: Option<TreeSelection>,
+    /// expands the given tree value next frame
+    pub tree_view_force_open: Option<TreeSelection>,
     pub viewport_3d_dirty: bool,
     pub last_selected_subobj: Option<ObjectId>,
     pub properties_panel: PropertiesPanel,
@@ -534,25 +538,35 @@ impl UiState {
     }
 
     fn tree_collapsing_item(&mut self, model: &Model, ui: &mut Ui, name: &str, tree_value: TreeSelection, f: impl FnOnce(&mut UiState, &mut Ui)) {
-        let response = CollapsingHeader::new(name)
-            .selectable(true)
-            .id_source(&tree_value)
-            .selected(tree_value == self.tree_view_selection)
-            .show(ui, |ui| f(self, ui));
-        if response.header_response.clicked() {
-            self.tree_view_selection = tree_value;
-            self.refresh_properties_panel(model);
-            self.viewport_3d_dirty = true;
-
-            info!("Switched to {}", self.tree_view_selection);
-
-            // maybe update last selected object
-            if let TreeSelection::SubObjects(SubObjectSelection::SubObject(id)) = self.tree_view_selection {
-                self.last_selected_subobj = Some(id);
-            } else if let TreeSelection::SubObjects(SubObjectSelection::Header) | TreeSelection::Header = self.tree_view_selection {
-                self.last_selected_subobj = model.header.detail_levels.first().copied();
-            }
+        let mut state = CollapsingState::load_with_default_open(ui.ctx(), Id::new(tree_value), false);
+        if self.tree_view_toggle == Some(tree_value) {
+            state.toggle(ui);
+            self.tree_view_toggle = None;
+        } else if self.tree_view_force_open == Some(tree_value) {
+            state.set_open(true);
+            self.tree_view_force_open = None;
         }
+        state
+            .show_header(ui, |ui| {
+                let response = ui.selectable_label(tree_value == self.tree_view_selection, name);
+                if response.double_clicked() {
+                    self.tree_view_toggle = Some(tree_value);
+                } else if response.clicked() {
+                    self.tree_view_selection = tree_value;
+                    self.refresh_properties_panel(model);
+                    self.viewport_3d_dirty = true;
+
+                    info!("Switched to {}", self.tree_view_selection);
+
+                    // maybe update last selected object
+                    if let TreeSelection::SubObjects(SubObjectSelection::SubObject(id)) = self.tree_view_selection {
+                        self.last_selected_subobj = Some(id);
+                    } else if let TreeSelection::SubObjects(SubObjectSelection::Header) | TreeSelection::Header = self.tree_view_selection {
+                        self.last_selected_subobj = model.header.detail_levels.first().copied();
+                    }
+                }
+            })
+            .body(|ui| f(self, ui));
     }
 }
 

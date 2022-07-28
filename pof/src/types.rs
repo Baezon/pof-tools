@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::collections::BTreeSet;
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display};
 use std::io::{self, Write};
@@ -1183,8 +1184,25 @@ pub struct SubObject {
     pub movement_axis: SubsysMovementAxis,
     pub bsp_data: BspData,
 
+    // the following fields are derived information
     pub(crate) children: Vec<ObjectId>,
     pub is_debris_model: bool,
+
+    // "semantic name links", fields derived specifically from their names
+    // recalculated by recalc_semantic_name_links
+    /// opposite of intact_version
+    pub destroyed_version: Option<ObjectId>,
+    /// opposite of destroyed_version
+    pub intact_version: Option<ObjectId>,
+
+    pub live_debris: Vec<ObjectId>,
+    /// if this subobject is debris of another, which one that is
+    pub live_debris_of: Option<ObjectId>,
+
+    /// NOT ordered
+    pub detail_levels: Vec<ObjectId>,
+    /// if this subobject is a detail level of another, this indicates highest detail object
+    pub detail_level_of: Option<ObjectId>,
 }
 impl SubObject {
     pub fn parent(&self) -> Option<ObjectId> {
@@ -1527,8 +1545,349 @@ pub struct Model {
 
     pub path_to_file: PathBuf,
     pub untextured_idx: Option<TextureId>,
+    pub warnings: BTreeSet<Warning>,
+    pub errors: BTreeSet<Error>,
 }
 impl Model {
+    // rechecks just one or all of the errors on the model
+    pub fn recheck_errors(&mut self, error_to_check: Set<Error>) {
+        if let Set::One(error) = error_to_check {
+            let failed_check = match error {
+                Error::InvalidTurretGunSubobject(turret) => self.turret_gun_subobj_not_valid(turret),
+                Error::TooManyDebrisObjects => self.num_debris_objects() > MAX_DEBRIS_OBJECTS,
+                Error::DetailAndDebrisObj(id) => self.header.detail_levels.contains(&id) && self.sub_objects[id].is_debris_model,
+                Error::DetailObjWithParent(id) => self.header.detail_levels.contains(&id) && self.sub_objects[id].parent().is_some(),
+                Error::TooManyVerts(id) => self.sub_objects[id].bsp_data.verts.len() > self.max_verts_norms_per_subobj(),
+                Error::TooManyNorms(id) => self.sub_objects[id].bsp_data.norms.len() > self.max_verts_norms_per_subobj(),
+            };
+
+            let existing_warning = self.errors.contains(&error);
+            if existing_warning && !failed_check {
+                self.errors.remove(&error);
+            } else if !existing_warning && failed_check {
+                self.errors.insert(error);
+            }
+        } else {
+            self.errors.clear();
+
+            for i in 0..self.turrets.len() {
+                if self.turret_gun_subobj_not_valid(i) {
+                    self.errors.insert(Error::InvalidTurretGunSubobject(i));
+                }
+            }
+
+            if self.num_debris_objects() > MAX_DEBRIS_OBJECTS {
+                self.errors.insert(Error::TooManyDebrisObjects);
+            }
+
+            for &id in &self.header.detail_levels {
+                let subobj = &self.sub_objects[id];
+                if subobj.parent().is_some() {
+                    self.errors.insert(Error::DetailObjWithParent(id));
+                }
+                if subobj.is_debris_model {
+                    self.errors.insert(Error::DetailAndDebrisObj(id));
+                }
+            }
+
+            for subobj in &self.sub_objects {
+                if subobj.bsp_data.verts.len() > self.max_verts_norms_per_subobj() {
+                    self.errors.insert(Error::TooManyVerts(subobj.obj_id));
+                }
+
+                if subobj.bsp_data.norms.len() > self.max_verts_norms_per_subobj() {
+                    self.errors.insert(Error::TooManyNorms(subobj.obj_id));
+                }
+            }
+        }
+    }
+
+    fn turret_gun_subobj_not_valid(&self, turret_num: usize) -> bool {
+        let turret = &self.turrets[turret_num];
+        if turret.base_obj == turret.gun_obj {
+            return false;
+        }
+
+        for &child_id in self.sub_objects[turret.base_obj].children() {
+            if child_id == turret.gun_obj {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    // rechecks just one or all of the warnings on the model
+    pub fn recheck_warnings(&mut self, warning_to_check: Set<Warning>) {
+        if let Set::One(warning) = warning_to_check {
+            let failed_check = match warning {
+                Warning::RadiusTooSmall(subobj_opt) => self.radius_test_failed(subobj_opt),
+                Warning::BBoxTooSmall(subobj_opt) => self.bbox_test_failed(subobj_opt),
+                Warning::DockingBayWithoutPath(bay_num) => self.docking_bays.get(bay_num).map_or(false, |bay| bay.path.is_none()),
+                Warning::ThrusterPropertiesInvalidVersion(bank_idx) => {
+                    self.version <= Version::V21_16 && self.thruster_banks.get(bank_idx).map_or(false, |bank| !bank.properties.is_empty())
+                }
+                Warning::WeaponOffsetInvalidVersion { primary, bank, point } => {
+                    (self.version <= Version::V21_17 || self.version == Version::V22_00) && {
+                        if primary {
+                            bank < self.primary_weps.len() && self.primary_weps[bank].get(point).map_or(false, |point| point.offset != 0.0)
+                        } else {
+                            bank < self.secondary_weps.len() && self.secondary_weps[bank].get(point).map_or(false, |point| point.offset != 0.0)
+                        }
+                    }
+                }
+                Warning::InvertedBBox(id_opt) => {
+                    if let Some(id) = id_opt {
+                        self.sub_objects[id].bbox.is_inverted()
+                    } else {
+                        self.header.bbox.is_inverted()
+                    }
+                }
+                Warning::UntexturedPolygons => self.untextured_idx.is_some(),
+                Warning::TooManyEyePoints => self.eye_points.len() > MAX_EYES,
+                Warning::TooManyTextures => self.textures.len() > MAX_TEXTURES,
+                Warning::TooFewTurretFirePoints(idx) => self.turrets.get(idx).map_or(false, |turret| turret.fire_points.is_empty()),
+                Warning::TooManyTurretFirePoints(idx) => self.turrets.get(idx).map_or(false, |turret| turret.fire_points.len() > MAX_TURRET_POINTS),
+                Warning::DuplicatePathName(idx) => self
+                    .paths
+                    .get(idx)
+                    .map_or(false, |path1| self.paths.iter().any(|path2| path1.name == path2.name)),
+
+                Warning::PathNameTooLong(idx) => self.paths.get(idx).map_or(false, |path| path.name.len() > MAX_NAME_LEN),
+                Warning::SubObjectNameTooLong(id) => self.sub_objects[id].name.len() > MAX_NAME_LEN,
+                Warning::SpecialPointNameTooLong(idx) => self
+                    .special_points
+                    .get(idx)
+                    .map_or(false, |spec_point| spec_point.name.len() > MAX_NAME_LEN),
+                Warning::DockingBayNameTooLong(idx) => self
+                    .docking_bays
+                    .get(idx)
+                    .map_or(false, |dock| properties_get_field(&dock.properties, "$name").unwrap_or_default().len() > MAX_NAME_LEN),
+
+                Warning::GlowBankPropertiesTooLong(idx) => self.glow_banks.get(idx).map_or(false, |bank| bank.properties.len() > MAX_PROPERTIES_LEN),
+                Warning::ThrusterPropertiesTooLong(idx) => self
+                    .thruster_banks
+                    .get(idx)
+                    .map_or(false, |bank| bank.properties.len() > MAX_PROPERTIES_LEN),
+                Warning::SubObjectPropertiesTooLong(id) => self.sub_objects[id].properties.len() > MAX_PROPERTIES_LEN,
+                Warning::DockingBayPropertiesTooLong(idx) => self
+                    .docking_bays
+                    .get(idx)
+                    .map_or(false, |bank| bank.properties.len() > MAX_PROPERTIES_LEN),
+                Warning::SpecialPointPropertiesTooLong(idx) => self
+                    .special_points
+                    .get(idx)
+                    .map_or(false, |spec_point| spec_point.properties.len() > MAX_PROPERTIES_LEN),
+            };
+
+            let existing_warning = self.warnings.contains(&warning);
+            if existing_warning && !failed_check {
+                self.warnings.remove(&warning);
+            } else if !existing_warning && failed_check {
+                self.warnings.insert(warning);
+            }
+        } else {
+            self.warnings.clear();
+
+            if self.radius_test_failed(None) {
+                self.warnings.insert(Warning::RadiusTooSmall(None));
+            }
+
+            if self.bbox_test_failed(None) {
+                self.warnings.insert(Warning::BBoxTooSmall(None));
+            }
+
+            if self.header.bbox.is_inverted() && self.header.bbox != BoundingBox::EMPTY {
+                self.warnings.insert(Warning::InvertedBBox(None));
+            }
+
+            for subobj in &self.sub_objects {
+                if self.bbox_test_failed(Some(subobj.obj_id)) {
+                    self.warnings.insert(Warning::BBoxTooSmall(Some(subobj.obj_id)));
+                }
+
+                if self.radius_test_failed(Some(subobj.obj_id)) {
+                    self.warnings.insert(Warning::RadiusTooSmall(Some(subobj.obj_id)));
+                }
+
+                if subobj.bbox.is_inverted() && subobj.bbox != BoundingBox::EMPTY {
+                    self.warnings.insert(Warning::InvertedBBox(Some(subobj.obj_id)));
+                }
+
+                if subobj.name.len() > MAX_NAME_LEN {
+                    self.warnings.insert(Warning::SubObjectNameTooLong(subobj.obj_id));
+                }
+
+                if subobj.properties.len() > MAX_PROPERTIES_LEN {
+                    self.warnings.insert(Warning::SubObjectPropertiesTooLong(subobj.obj_id));
+                }
+            }
+
+            for (i, dock) in self.docking_bays.iter().enumerate() {
+                if dock.path.is_none() {
+                    self.warnings.insert(Warning::DockingBayWithoutPath(i));
+                }
+
+                if dock.properties.len() > MAX_PROPERTIES_LEN {
+                    self.warnings.insert(Warning::DockingBayPropertiesTooLong(i));
+                }
+
+                if properties_get_field(&dock.properties, "$name").unwrap_or_default().len() > MAX_NAME_LEN {
+                    self.warnings.insert(Warning::DockingBayNameTooLong(i));
+                }
+            }
+
+            for (i, bank) in self.thruster_banks.iter().enumerate() {
+                if !bank.properties.is_empty() {
+                    if self.version <= Version::V21_16 {
+                        self.warnings.insert(Warning::ThrusterPropertiesInvalidVersion(i));
+                    }
+
+                    if bank.properties.len() > MAX_PROPERTIES_LEN {
+                        self.warnings.insert(Warning::ThrusterPropertiesTooLong(i));
+                    }
+                }
+            }
+
+            if self.version <= Version::V21_17 || self.version == Version::V22_00 {
+                for (i, bank) in self.primary_weps.iter().enumerate() {
+                    for (j, point) in bank.iter().enumerate() {
+                        if point.offset != 0.0 {
+                            self.warnings
+                                .insert(Warning::WeaponOffsetInvalidVersion { primary: true, bank: i, point: j });
+                        }
+                    }
+                }
+                for (i, bank) in self.secondary_weps.iter().enumerate() {
+                    for (j, point) in bank.iter().enumerate() {
+                        if point.offset != 0.0 {
+                            self.warnings
+                                .insert(Warning::WeaponOffsetInvalidVersion { primary: false, bank: i, point: j });
+                        }
+                    }
+                }
+            }
+
+            for (i, turret) in self.turrets.iter().enumerate() {
+                if turret.fire_points.is_empty() {
+                    self.warnings.insert(Warning::TooFewTurretFirePoints(i));
+                } else if turret.fire_points.len() > MAX_TURRET_POINTS {
+                    self.warnings.insert(Warning::TooManyTurretFirePoints(i));
+                }
+            }
+
+            for (i, glow_bank) in self.glow_banks.iter().enumerate() {
+                if glow_bank.properties.len() > MAX_PROPERTIES_LEN {
+                    self.warnings.insert(Warning::GlowBankPropertiesTooLong(i));
+                }
+            }
+
+            for (i, special_point) in self.special_points.iter().enumerate() {
+                if special_point.name.len() > MAX_NAME_LEN {
+                    self.warnings.insert(Warning::SpecialPointNameTooLong(i));
+                }
+
+                if special_point.properties.len() > MAX_PROPERTIES_LEN {
+                    self.warnings.insert(Warning::SpecialPointPropertiesTooLong(i));
+                }
+            }
+
+            for (i, path) in self.paths.iter().enumerate() {
+                if path.name.len() > MAX_NAME_LEN {
+                    self.warnings.insert(Warning::PathNameTooLong(i));
+                }
+            }
+
+            let mut path_ids: Vec<usize> = (0..self.paths.len()).collect();
+            path_ids.sort_by_key(|id| self.paths[*id].name.clone());
+
+            //let paths_len = path_ids.len();
+            for i in 0..path_ids.len() {
+                //println!("{}, {}", i, path_ids[i]);
+                if i != (path_ids.len() - 1)
+                    && self.paths[path_ids[i]].name == self.paths[path_ids[i + 1]].name
+                    && (i == 0 || self.paths[path_ids[i]].name != self.paths[path_ids[i - 1]].name)
+                {
+                    self.warnings.insert(Warning::DuplicatePathName(path_ids[i]));
+                }
+            }
+
+            if self.untextured_idx.is_some() {
+                self.warnings.insert(Warning::UntexturedPolygons);
+            }
+
+            if self.eye_points.len() > MAX_EYES {
+                self.warnings.insert(Warning::TooManyEyePoints);
+            }
+
+            if self.textures.len() > MAX_TEXTURES {
+                self.warnings.insert(Warning::TooManyTextures);
+            }
+        }
+    }
+
+    // tests if the radius for a subobject or the header is too small for its geometry
+    // None means the header/entire model's radius
+    fn radius_test_failed(&self, subobj_opt: Option<ObjectId>) -> bool {
+        if let Some(subobj) = subobj_opt {
+            let subobj = &self.sub_objects[subobj];
+            let radius_with_margin = (1.0 + f32::EPSILON) * subobj.radius;
+            for vert in &subobj.bsp_data.verts {
+                if vert.magnitude() > radius_with_margin {
+                    return true;
+                }
+            }
+        } else {
+            let radius_with_margin = (1.0 + f32::EPSILON) * self.header.max_radius;
+            if let Some(&detail_0) = self.header.detail_levels.first() {
+                for subobj in &self.sub_objects {
+                    // we dont care about subobjects which aren't part of the detail0 hierarchy
+                    if !self.is_obj_id_ancestor(subobj.obj_id, detail_0) {
+                        continue;
+                    }
+
+                    let offset = self.get_total_subobj_offset(subobj.obj_id);
+                    for vert in &subobj.bsp_data.verts {
+                        if (*vert + offset).magnitude() > radius_with_margin {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    // tests if the bbox for a subobject or the header is too small for its geometry
+    // None means the header/entire model's radius
+    fn bbox_test_failed(&self, subobj_opt: Option<ObjectId>) -> bool {
+        if let Some(subobj) = subobj_opt {
+            let subobj = &self.sub_objects[subobj];
+            for vert in &subobj.bsp_data.verts {
+                if !subobj.bbox.contains(*vert) {
+                    return true;
+                }
+            }
+        } else if let Some(&detail_0) = self.header.detail_levels.first() {
+            for subobj in &self.sub_objects {
+                // we dont care about subobjects which aren't part of the detail0 hierarchy
+                if !self.is_obj_id_ancestor(subobj.obj_id, detail_0) {
+                    continue;
+                }
+
+                let offset = self.get_total_subobj_offset(subobj.obj_id);
+                for vert in &subobj.bsp_data.verts {
+                    if !self.header.bbox.contains(offset + *vert) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
     pub fn get_total_subobj_offset(&self, id: ObjectId) -> Vec3d {
         let mut subobj = &self.sub_objects[id];
         let mut out = subobj.offset;
@@ -1816,6 +2175,105 @@ impl Model {
             u16::MAX as usize
         }
     }
+
+    pub fn recalc_semantic_name_links(&mut self) {
+        // clear everything first
+        for subobj in self.sub_objects.iter_mut() {
+            subobj.destroyed_version = None;
+            subobj.intact_version = None;
+            subobj.live_debris = vec![];
+            subobj.live_debris_of = None;
+            subobj.detail_levels = vec![];
+            subobj.detail_level_of = None;
+        }
+
+        for i in 0..self.sub_objects.len() {
+            let subobj_name = self.sub_objects[ObjectId(i as u32)].name.clone();
+            let subobj_id = self.sub_objects[ObjectId(i as u32)].obj_id;
+            // tip-toeing artound the borrow checker >.>
+            for subobj2 in self.sub_objects.iter_mut() {
+                // check for destroyed models
+                if format!("{}-destroyed", subobj_name) == subobj2.name {
+                    subobj2.intact_version = Some(subobj_id);
+                } else if subobj_name.strip_suffix("-destroyed").map_or(false, |str| str == subobj2.name) {
+                    subobj2.destroyed_version = Some(subobj_id);
+                }
+
+                // check for submodel live debris
+                if subobj_name.contains(&format!("debris-{}", subobj2.name)) {
+                    subobj2.live_debris.push(subobj_id);
+                } else if subobj2.name.strip_prefix("debris-").map_or(false, |str| str.contains(&subobj_name)) {
+                    subobj2.live_debris_of = Some(subobj_id);
+                }
+
+                if subobj_name.len() == subobj2.name.len() {
+                    // zip them together and filter for equal characters, leaving only the remaining, differing characters
+                    let mut iter = subobj_name.chars().zip(subobj2.name.chars()).filter(|(c1, c2)| c1 != c2);
+                    // grab the characters that differ and dont continue if there's more than one
+                    if let (Some((c1, c2)), None) = (iter.next(), iter.next()) {
+                        // finally check that theyre 'a' and 'b'..'h'
+                        if c1 == 'a' && ('b'..'h').contains(&c2) {
+                            subobj2.detail_level_of = Some(subobj_id);
+                        } else if c2 == 'a' && ('b'..'h').contains(&c1) {
+                            subobj2.detail_levels.push(subobj_id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub enum Set<T> {
+    All,
+    One(T),
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone, Copy)]
+pub enum Error {
+    InvalidTurretGunSubobject(usize), // turret index
+    TooManyDebrisObjects,
+    DetailObjWithParent(ObjectId),
+    DetailAndDebrisObj(ObjectId),
+    TooManyVerts(ObjectId),
+    TooManyNorms(ObjectId),
+    // all turret base/gun objects must be disjoint!
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Debug)]
+pub enum Warning {
+    RadiusTooSmall(Option<ObjectId>),
+    BBoxTooSmall(Option<ObjectId>),
+    InvertedBBox(Option<ObjectId>),
+    UntexturedPolygons,
+    DockingBayWithoutPath(usize),
+    ThrusterPropertiesInvalidVersion(usize),
+    WeaponOffsetInvalidVersion {
+        primary: bool,
+        bank: usize,
+        point: usize,
+    },
+    TooFewTurretFirePoints(usize),
+    TooManyTurretFirePoints(usize),
+    /// for each duplicated name, only contains the *first* path idx with that name
+    DuplicatePathName(usize),
+    TooManyEyePoints,
+    TooManyTextures,
+
+    PathNameTooLong(usize),
+    SpecialPointNameTooLong(usize),
+    SubObjectNameTooLong(ObjectId),
+    DockingBayNameTooLong(usize),
+
+    SubObjectPropertiesTooLong(ObjectId),
+    ThrusterPropertiesTooLong(usize),
+    DockingBayPropertiesTooLong(usize),
+    GlowBankPropertiesTooLong(usize),
+    SpecialPointPropertiesTooLong(usize),
+    // path with no parent
+    // thruster with no engine subsys (and an engine subsys exists)
+    // turret uvec != turret normal
+    // turret subobject properties not set up for a turret
 }
 
 pub fn post_parse_fill_untextured_slot(sub_objects: &mut Vec<SubObject>, textures: &mut Vec<String>) -> Option<TextureId> {

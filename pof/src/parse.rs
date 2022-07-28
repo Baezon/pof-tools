@@ -191,9 +191,8 @@ impl<R: Read + Seek> Parser<R> {
                         movement_type,
                         movement_axis,
                         bsp_data,
-                        // these two are to be filled later once we've parsed all the subobjects
-                        children: vec![],
-                        is_debris_model: false,
+                        // these rest are to be filled later once we've parsed all the subobjects
+                        ..Default::default()
                     });
                     //println!("parsed subobject {:#?}", sub_objects[obj_id.0 as usize]);
                 }
@@ -444,7 +443,7 @@ impl<R: Read + Seek> Parser<R> {
         let mut textures = textures.unwrap_or_default();
         let untextured_idx = post_parse_fill_untextured_slot(&mut sub_objects, &mut textures);
 
-        Ok(Model {
+        let mut model = Model {
             version: self.version,
             header: header.expect("No header chunk found???"),
             sub_objects,
@@ -464,7 +463,14 @@ impl<R: Read + Seek> Parser<R> {
             shield_data,
             path_to_file: path.canonicalize().unwrap_or(path),
             untextured_idx,
-        })
+            warnings: Default::default(),
+            errors: Default::default(),
+        };
+        model.recheck_warnings(Set::All);
+        model.recheck_errors(Set::All);
+        model.recalc_semantic_name_links();
+
+        Ok(model)
     }
 
     fn read_list<T>(&mut self, f: impl FnMut(&mut Self) -> io::Result<T>) -> io::Result<Vec<T>> {
@@ -871,6 +877,7 @@ fn push_subobj(
         },
         children: Default::default(),
         is_debris_model,
+        ..Default::default()
     };
 
     new_subobj.recalc_bbox();

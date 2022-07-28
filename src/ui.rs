@@ -514,42 +514,33 @@ pub const LIGHT_BLUE: Color32 = Color32::from_rgb(0xA0, 0xD8, 0xFF);
 impl UiState {
     /// returns the RichText for a given tree value to be displayed, mostly for the purposes of coloring it specially
     fn tree_val_text(&self, model: &Model, tree_value: TreeValue, this_name: &str) -> RichText {
-        let mut text = RichText::new(this_name);
-        if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(selected_id)) = self.tree_view_selection {
-            if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(this_id)) = tree_value {
-                if model.sub_objects[this_id].destroyed_version == Some(selected_id) || model.sub_objects[this_id].intact_version == Some(selected_id)
-                {
-                    text = text.color(Color32::LIGHT_RED);
-                }
-
-                if model.sub_objects[this_id].live_debris_of == Some(selected_id) || model.sub_objects[this_id].live_debris.contains(&selected_id) {
-                    text = text.color(LIGHT_ORANGE);
-                }
-
-                if model.sub_objects[this_id].detail_level_of == Some(selected_id) || model.sub_objects[this_id].detail_levels.contains(&selected_id)
-                {
-                    text = text.color(LIGHT_BLUE);
-                }
-            }
-        }
-
-        let mut dont_bother = false;
+        let text = RichText::new(this_name);
         for error in &model.errors {
             if let Some(error_tree_value) = TreeValue::from_error(*error) {
                 if tree_value == error_tree_value || tree_value.is_ancestor_of(error_tree_value) {
-                    text = text.color(Color32::RED);
-                    dont_bother = true;
-                    break;
+                    return text.color(Color32::RED);
                 }
             }
         }
 
-        if !dont_bother {
-            for warning in &model.warnings {
-                if let Some(warning_tree_value) = TreeValue::from_warning(*warning) {
-                    if tree_value == warning_tree_value || tree_value.is_ancestor_of(warning_tree_value) {
-                        text = text.color(Color32::YELLOW);
-                        break;
+        for warning in &model.warnings {
+            if let Some(warning_tree_value) = TreeValue::from_warning(*warning) {
+                if tree_value == warning_tree_value || tree_value.is_ancestor_of(warning_tree_value) {
+                    return text.color(Color32::YELLOW);
+                }
+            }
+        }
+
+        if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(selected_id)) = self.tree_view_selection {
+            if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(this_id)) = tree_value {
+                for link in &model.sub_objects[this_id].name_links {
+                    match *link {
+                        pof::NameLink::DestroyedVersion(id) | pof::NameLink::DestroyedVersionOf(id) if id == selected_id => {
+                            return text.color(Color32::LIGHT_RED)
+                        }
+                        pof::NameLink::LiveDebris(id) | pof::NameLink::LiveDebrisOf(id) if id == selected_id => return text.color(LIGHT_ORANGE),
+                        pof::NameLink::DetailLevel(id) | pof::NameLink::DetailLevelOf(id) if id == selected_id => return text.color(LIGHT_BLUE),
+                        _ => {}
                     }
                 }
             }

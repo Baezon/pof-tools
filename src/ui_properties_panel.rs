@@ -1299,91 +1299,102 @@ impl PofToolsGui {
 
                 if let Some(id) = selected_id {
                     let subobj = &self.model.sub_objects[id];
-                    if subobj.detail_level_of.is_some()
-                        || !subobj.detail_levels.is_empty()
-                        || subobj.live_debris_of.is_some()
-                        || !subobj.live_debris.is_empty()
-                        || subobj.destroyed_version.is_some()
-                        || subobj.intact_version.is_some()
-                    {
+                    if !subobj.name_links.is_empty() {
                         ui.separator();
 
-                        if let Some(destroyed_id) = subobj.destroyed_version {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(RichText::new(format!("Has a destroyed version:")).weak().color(Color32::LIGHT_RED));
-                                if ui
-                                    .button(RichText::new(&self.model.sub_objects[destroyed_id].name).weak().color(Color32::LIGHT_RED))
-                                    .clicked()
-                                {
-                                    self.ui_state.tree_view_selection = TreeValue::SubObjects(SubObjectTreeValue::SubObject(destroyed_id));
-                                    properties_panel_dirty = true;
-                                    self.ui_state.viewport_3d_dirty = true;
+                        let mut has_live_debris = false;
+                        let mut has_detail_level = false;
+                        for link in &subobj.name_links {
+                            match *link {
+                                pof::NameLink::DestroyedVersion(destroyed_id) => {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(RichText::new(format!("Has a destroyed version:")).weak().color(Color32::LIGHT_RED));
+                                        if ui
+                                            .button(RichText::new(&self.model.sub_objects[destroyed_id].name).weak().color(Color32::LIGHT_RED))
+                                            .clicked()
+                                        {
+                                            self.ui_state.tree_view_selection = TreeValue::SubObjects(SubObjectTreeValue::SubObject(destroyed_id));
+                                            properties_panel_dirty = true;
+                                            self.ui_state.viewport_3d_dirty = true;
+                                        }
+                                    });
                                 }
-                            });
-                        } else if let Some(intact_id) = subobj.intact_version {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(RichText::new(format!("Is the destroyed version of: ")).weak().color(Color32::LIGHT_RED));
-                                if ui
-                                    .button(RichText::new(&self.model.sub_objects[intact_id].name).weak().color(Color32::LIGHT_RED))
-                                    .clicked()
-                                {
-                                    self.ui_state.tree_view_selection = TreeValue::SubObjects(SubObjectTreeValue::SubObject(intact_id));
-                                    properties_panel_dirty = true;
-                                    self.ui_state.viewport_3d_dirty = true;
+                                pof::NameLink::DestroyedVersionOf(intact_id) => {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(RichText::new(format!("Is the destroyed version of: ")).weak().color(Color32::LIGHT_RED));
+                                        if ui
+                                            .button(RichText::new(&self.model.sub_objects[intact_id].name).weak().color(Color32::LIGHT_RED))
+                                            .clicked()
+                                        {
+                                            self.ui_state.tree_view_selection = TreeValue::SubObjects(SubObjectTreeValue::SubObject(intact_id));
+                                            properties_panel_dirty = true;
+                                            self.ui_state.viewport_3d_dirty = true;
+                                        }
+                                    });
                                 }
-                            });
+                                pof::NameLink::LiveDebris(_) => has_live_debris = true,
+                                pof::NameLink::LiveDebrisOf(debris_parent_id) => {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(RichText::new(format!("Is a debris object of: ")).weak().color(LIGHT_ORANGE));
+                                        if ui
+                                            .button(RichText::new(&self.model.sub_objects[debris_parent_id].name).weak().color(LIGHT_ORANGE))
+                                            .clicked()
+                                        {
+                                            self.ui_state.tree_view_selection =
+                                                TreeValue::SubObjects(SubObjectTreeValue::SubObject(debris_parent_id));
+                                            properties_panel_dirty = true;
+                                            self.ui_state.viewport_3d_dirty = true;
+                                        }
+                                    });
+                                }
+                                pof::NameLink::DetailLevel(_) => has_detail_level = true,
+                                pof::NameLink::DetailLevelOf(detail_parent_id) => {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(RichText::new(format!("Is a detail object of: ")).weak().color(LIGHT_BLUE));
+                                        if ui
+                                            .button(RichText::new(&self.model.sub_objects[detail_parent_id].name).weak().color(LIGHT_BLUE))
+                                            .clicked()
+                                        {
+                                            self.ui_state.tree_view_selection =
+                                                TreeValue::SubObjects(SubObjectTreeValue::SubObject(detail_parent_id));
+                                            properties_panel_dirty = true;
+                                            self.ui_state.viewport_3d_dirty = true;
+                                        }
+                                    });
+                                }
+                            }
                         }
 
-                        if !subobj.live_debris.is_empty() {
+                        if has_live_debris {
                             ui.label(RichText::new(format!("Has sub-debris objects:")).weak().color(LIGHT_ORANGE));
-                            for &id in &subobj.live_debris {
-                                if ui
-                                    .button(RichText::new(&self.model.sub_objects[id].name).weak().color(LIGHT_ORANGE))
-                                    .clicked()
-                                {
-                                    self.ui_state.tree_view_selection = TreeValue::SubObjects(SubObjectTreeValue::SubObject(id));
-                                    properties_panel_dirty = true;
-                                    self.ui_state.viewport_3d_dirty = true;
+                            for link in &subobj.name_links {
+                                if let pof::NameLink::LiveDebris(id) = *link {
+                                    if ui
+                                        .button(RichText::new(&self.model.sub_objects[id].name).weak().color(LIGHT_ORANGE))
+                                        .clicked()
+                                    {
+                                        self.ui_state.tree_view_selection = TreeValue::SubObjects(SubObjectTreeValue::SubObject(id));
+                                        properties_panel_dirty = true;
+                                        self.ui_state.viewport_3d_dirty = true;
+                                    }
                                 }
                             }
-                        } else if let Some(debris_parent_id) = subobj.live_debris_of {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(RichText::new(format!("Is a debris object of: ")).weak().color(LIGHT_ORANGE));
-                                if ui
-                                    .button(RichText::new(&self.model.sub_objects[debris_parent_id].name).weak().color(LIGHT_ORANGE))
-                                    .clicked()
-                                {
-                                    self.ui_state.tree_view_selection = TreeValue::SubObjects(SubObjectTreeValue::SubObject(debris_parent_id));
-                                    properties_panel_dirty = true;
-                                    self.ui_state.viewport_3d_dirty = true;
-                                }
-                            });
                         }
 
-                        if !subobj.detail_levels.is_empty() {
+                        if has_detail_level {
                             ui.label(RichText::new(format!("Has detail level objects:")).weak().color(LIGHT_BLUE));
-                            for &id in &subobj.detail_levels {
-                                if ui
-                                    .button(RichText::new(&self.model.sub_objects[id].name).weak().color(LIGHT_BLUE))
-                                    .clicked()
-                                {
-                                    self.ui_state.tree_view_selection = TreeValue::SubObjects(SubObjectTreeValue::SubObject(id));
-                                    properties_panel_dirty = true;
-                                    self.ui_state.viewport_3d_dirty = true;
+                            for link in &subobj.name_links {
+                                if let pof::NameLink::DetailLevel(id) = *link {
+                                    if ui
+                                        .button(RichText::new(&self.model.sub_objects[id].name).weak().color(LIGHT_BLUE))
+                                        .clicked()
+                                    {
+                                        self.ui_state.tree_view_selection = TreeValue::SubObjects(SubObjectTreeValue::SubObject(id));
+                                        properties_panel_dirty = true;
+                                        self.ui_state.viewport_3d_dirty = true;
+                                    }
                                 }
                             }
-                        } else if let Some(detail_parent_id) = subobj.detail_level_of {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(RichText::new(format!("Is a detail object of: ")).weak().color(LIGHT_BLUE));
-                                if ui
-                                    .button(RichText::new(&self.model.sub_objects[detail_parent_id].name).weak().color(LIGHT_BLUE))
-                                    .clicked()
-                                {
-                                    self.ui_state.tree_view_selection = TreeValue::SubObjects(SubObjectTreeValue::SubObject(detail_parent_id));
-                                    properties_panel_dirty = true;
-                                    self.ui_state.viewport_3d_dirty = true;
-                                }
-                            });
                         }
                     }
                 }

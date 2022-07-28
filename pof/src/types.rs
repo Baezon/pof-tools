@@ -1170,6 +1170,25 @@ impl Default for SubsysMovementAxis {
 
 pub const MAX_DEBRIS_OBJECTS: u32 = 32;
 
+/// "semantic name links", fields derived specifically from their names
+/// recalculated by recalc_semantic_name_links
+#[derive(Debug, Copy, Clone)]
+pub enum NameLink {
+    /// points from a turret to its destroyed version
+    DestroyedVersion(ObjectId),
+    /// back-link for [`DestroyedVersion`]
+    DestroyedVersionOf(ObjectId),
+    /// points to the debris version of this object
+    LiveDebris(ObjectId),
+    /// back-link for [`LiveDebris`]
+    LiveDebrisOf(ObjectId),
+    /// Points from the highest detail level object to one of the lower detail levels.
+    /// Repeats for each lower detail version; they are in arbitrary order
+    DetailLevel(ObjectId),
+    /// back-link for [`DetailLevel`]: points from lower detail to highest detail version
+    DetailLevelOf(ObjectId),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SubObject {
     pub obj_id: ObjectId,
@@ -1190,19 +1209,7 @@ pub struct SubObject {
 
     // "semantic name links", fields derived specifically from their names
     // recalculated by recalc_semantic_name_links
-    /// opposite of intact_version
-    pub destroyed_version: Option<ObjectId>,
-    /// opposite of destroyed_version
-    pub intact_version: Option<ObjectId>,
-
-    pub live_debris: Vec<ObjectId>,
-    /// if this subobject is debris of another, which one that is
-    pub live_debris_of: Option<ObjectId>,
-
-    /// NOT ordered
-    pub detail_levels: Vec<ObjectId>,
-    /// if this subobject is a detail level of another, this indicates highest detail object
-    pub detail_level_of: Option<ObjectId>,
+    pub name_links: Vec<NameLink>,
 }
 impl SubObject {
     pub fn parent(&self) -> Option<ObjectId> {
@@ -2179,44 +2186,38 @@ impl Model {
     pub fn recalc_semantic_name_links(&mut self) {
         // clear everything first
         for subobj in self.sub_objects.iter_mut() {
-            subobj.destroyed_version = None;
-            subobj.intact_version = None;
-            subobj.live_debris = vec![];
-            subobj.live_debris_of = None;
-            subobj.detail_levels = vec![];
-            subobj.detail_level_of = None;
+            subobj.name_links.clear();
         }
 
-        for i in 0..self.sub_objects.len() {
-            let subobj_name = self.sub_objects[ObjectId(i as u32)].name.clone();
-            let subobj_id = self.sub_objects[ObjectId(i as u32)].obj_id;
-            // tip-toeing artound the borrow checker >.>
-            for subobj2 in self.sub_objects.iter_mut() {
-                // check for destroyed models
-                if format!("{}-destroyed", subobj_name) == subobj2.name {
-                    subobj2.intact_version = Some(subobj_id);
-                } else if subobj_name.strip_suffix("-destroyed").map_or(false, |str| str == subobj2.name) {
-                    subobj2.destroyed_version = Some(subobj_id);
+        for i in (0..self.sub_objects.len()).map(|i| ObjectId(i as u32)) {
+            let mut name1 = &self.sub_objects[i].name;
+            if let Some((_, debris_of)) = name1.split_once("debris-") {
+                if let Some(obj) = self.sub_objects.iter().find(|obj| debris_of.starts_with(&obj.name)) {
+                    let j = obj.obj_id;
+                    self.sub_objects[j].name_links.push(NameLink::LiveDebris(i));
+                    self.sub_objects[i].name_links.push(NameLink::LiveDebrisOf(j));
+                    name1 = &self.sub_objects[i].name;
                 }
-
-                // check for submodel live debris
-                if subobj_name.contains(&format!("debris-{}", subobj2.name)) {
-                    subobj2.live_debris.push(subobj_id);
-                } else if subobj2.name.strip_prefix("debris-").map_or(false, |str| str.contains(&subobj_name)) {
-                    subobj2.live_debris_of = Some(subobj_id);
+            }
+            if let Some(destroyed_of) = name1.strip_suffix("-destroyed") {
+                if let Some(obj) = self.sub_objects.iter().find(|obj| obj.name == destroyed_of) {
+                    let j = obj.obj_id;
+                    self.sub_objects[j].name_links.push(NameLink::DestroyedVersion(i));
+                    self.sub_objects[i].name_links.push(NameLink::DestroyedVersionOf(j));
+                    name1 = &self.sub_objects[i].name;
                 }
-
-                if subobj_name.len() == subobj2.name.len() {
+            }
+            for j in (0..self.sub_objects.len()).map(|i| ObjectId(i as u32)) {
+                let name2 = &self.sub_objects[j].name;
+                if name1.len() == name2.len() {
                     // zip them together and filter for equal characters, leaving only the remaining, differing characters
-                    let mut iter = subobj_name.chars().zip(subobj2.name.chars()).filter(|(c1, c2)| c1 != c2);
-                    // grab the characters that differ and dont continue if there's more than one
-                    if let (Some((c1, c2)), None) = (iter.next(), iter.next()) {
-                        // finally check that theyre 'a' and 'b'..'h'
-                        if c1 == 'a' && ('b'..'h').contains(&c2) {
-                            subobj2.detail_level_of = Some(subobj_id);
-                        } else if c2 == 'a' && ('b'..'h').contains(&c1) {
-                            subobj2.detail_levels.push(subobj_id);
-                        }
+                    let mut iter = name1.chars().zip(name2.chars()).filter(|(c1, c2)| c1 != c2);
+                    // grab the characters that differ and don't continue if there's more than one,
+                    // and check that they're 'a' and 'b'..='h' respectively
+                    if let (Some(('a', 'b'..='h')), None) = (iter.next(), iter.next()) {
+                        self.sub_objects[j].name_links.push(NameLink::DetailLevelOf(i));
+                        self.sub_objects[i].name_links.push(NameLink::DetailLevel(j));
+                        name1 = &self.sub_objects[i].name;
                     }
                 }
             }

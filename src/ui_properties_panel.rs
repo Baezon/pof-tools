@@ -1347,8 +1347,8 @@ impl PofToolsGui {
                                         }
                                     });
                                 }
-                                pof::NameLink::DetailLevel(_) => has_detail_level = true,
-                                pof::NameLink::DetailLevelOf(detail_parent_id) => {
+                                pof::NameLink::DetailLevel(..) => has_detail_level = true,
+                                pof::NameLink::DetailLevelOf(detail_parent_id, _) => {
                                     ui.horizontal_wrapped(|ui| {
                                         ui.label(RichText::new(format!("Is a detail object of: ")).weak().color(LIGHT_BLUE));
                                         if ui
@@ -1384,7 +1384,7 @@ impl PofToolsGui {
                         if has_detail_level {
                             ui.label(RichText::new(format!("Has detail level objects:")).weak().color(LIGHT_BLUE));
                             for link in &subobj.name_links {
-                                if let pof::NameLink::DetailLevel(id) = *link {
+                                if let pof::NameLink::DetailLevel(id, _) = *link {
                                     if ui
                                         .button(RichText::new(&self.model.sub_objects[id].name).weak().color(LIGHT_BLUE))
                                         .clicked()

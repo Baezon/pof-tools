@@ -1184,9 +1184,9 @@ pub enum NameLink {
     LiveDebrisOf(ObjectId),
     /// Points from the highest detail level object to one of the lower detail levels.
     /// Repeats for each lower detail version; they are in arbitrary order
-    DetailLevel(ObjectId),
+    DetailLevel(ObjectId, u8),
     /// back-link for [`DetailLevel`]: points from lower detail to highest detail version
-    DetailLevelOf(ObjectId),
+    DetailLevelOf(ObjectId, u8),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -2214,9 +2214,10 @@ impl Model {
                     let mut iter = name1.chars().zip(name2.chars()).filter(|(c1, c2)| c1 != c2);
                     // grab the characters that differ and don't continue if there's more than one,
                     // and check that they're 'a' and 'b'..='h' respectively
-                    if let (Some(('a', 'b'..='h')), None) = (iter.next(), iter.next()) {
-                        self.sub_objects[j].name_links.push(NameLink::DetailLevelOf(i));
-                        self.sub_objects[i].name_links.push(NameLink::DetailLevel(j));
+                    if let (Some(('a', ch @ 'b'..='h')), None) = (iter.next(), iter.next()) {
+                        let level = ch as u8 - 'a' as u8;
+                        self.sub_objects[j].name_links.push(NameLink::DetailLevelOf(i, level));
+                        self.sub_objects[i].name_links.push(NameLink::DetailLevel(j, level));
                         name1 = &self.sub_objects[i].name;
                     }
                 }

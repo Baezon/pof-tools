@@ -539,7 +539,9 @@ impl UiState {
                             return text.color(Color32::LIGHT_RED)
                         }
                         pof::NameLink::LiveDebris(id) | pof::NameLink::LiveDebrisOf(id) if id == selected_id => return text.color(LIGHT_ORANGE),
-                        pof::NameLink::DetailLevel(id) | pof::NameLink::DetailLevelOf(id) if id == selected_id => return text.color(LIGHT_BLUE),
+                        pof::NameLink::DetailLevel(id, _) | pof::NameLink::DetailLevelOf(id, _) if id == selected_id => {
+                            return text.color(LIGHT_BLUE)
+                        }
                         _ => {}
                     }
                 }

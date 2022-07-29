@@ -2209,7 +2209,7 @@ impl Model {
             }
             for j in (0..self.sub_objects.len()).map(|i| ObjectId(i as u32)) {
                 let name2 = &self.sub_objects[j].name;
-                if name1.len() == name2.len() {
+                if name1.len() == name2.len() && self.sub_objects[j].parent.is_some() && self.sub_objects[i].parent.is_some() {
                     // zip them together and filter for equal characters, leaving only the remaining, differing characters
                     let mut iter = name1.chars().zip(name2.chars()).filter(|(c1, c2)| c1 != c2);
                     // grab the characters that differ and don't continue if there's more than one,

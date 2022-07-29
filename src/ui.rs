@@ -697,8 +697,8 @@ impl PofToolsGui {
         });
         let mut warnings = egui::TopBottomPanel::bottom("info bar")
             .resizable(true)
-            .default_height(16.0)
-            .height_range(16.0..=500.0)
+            .default_height(23.0)
+            .height_range(23.0..=500.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])

@@ -71,9 +71,12 @@ impl TreeValue {
     // returns what, if any, tree_value best corresponds to a given warning
     fn from_warning(warning: Warning) -> Option<TreeValue> {
         match warning {
-            Warning::RadiusTooSmall(id_opt) => Some(TreeValue::SubObjects(SubObjectTreeValue::subobject(id_opt))),
-            Warning::BBoxTooSmall(id_opt) => Some(TreeValue::SubObjects(SubObjectTreeValue::subobject(id_opt))),
-            Warning::InvertedBBox(id_opt) => Some(TreeValue::SubObjects(SubObjectTreeValue::subobject(id_opt))),
+            Warning::RadiusTooSmall(None) => Some(TreeValue::Header),
+            Warning::BBoxTooSmall(None) => Some(TreeValue::Header),
+            Warning::InvertedBBox(None) => Some(TreeValue::Header),
+            Warning::RadiusTooSmall(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            Warning::BBoxTooSmall(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            Warning::InvertedBBox(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
             Warning::UntexturedPolygons => None,
             Warning::DockingBayWithoutPath(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(idx))),
             Warning::ThrusterPropertiesInvalidVersion(idx) => Some(TreeValue::Thrusters(ThrusterTreeValue::Bank(idx))),

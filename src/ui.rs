@@ -3,6 +3,7 @@ use glium::{
     texture::{RawImage2d, SrgbTexture2d},
     Display,
 };
+use itertools::Itertools;
 use pof::{BoundingBox, Model, SubObject, TextureId, Vec3d, Version};
 use std::{
     collections::{BTreeSet, HashMap},
@@ -413,6 +414,7 @@ pub(crate) enum Warning {
     TooFewTurretFirePoints(usize),
     TooManyTurretFirePoints(usize),
     DuplicatePathName(usize), // for each duplicated name, only contains the *first* path idx with that name
+    DuplicateDetailLevels(ObjectId),
     TooManyEyePoints,
     TooManyTextures,
 
@@ -797,6 +799,9 @@ impl PofToolsGui {
                                 }
                                 Warning::DuplicatePathName(path_idx) => {
                                     format!("⚠ More than one path shares the name '{}'", self.model.paths[path_idx].name)
+                                }
+                                Warning::DuplicateDetailLevels(id) => {
+                                    format!("⚠ Subobject '{}' belongs to more than one detail level", self.model.sub_objects[id].name)
                                 }
                                 Warning::PathNameTooLong(_)
                                 | Warning::SubObjectNameTooLong(_)
@@ -1335,6 +1340,7 @@ impl PofToolsGui {
                     .paths
                     .get(idx)
                     .map_or(false, |path1| model.paths.iter().any(|path2| path1.name == path2.name)),
+                Warning::DuplicateDetailLevels(duped_id) => model.header.detail_levels.iter().filter(|id| duped_id == **id).count() > 1,
 
                 Warning::PathNameTooLong(idx) => model.paths.get(idx).map_or(false, |path| path.name.len() > pof::MAX_NAME_LEN),
                 Warning::SubObjectNameTooLong(id) => model.sub_objects[id].name.len() > pof::MAX_NAME_LEN,
@@ -1485,15 +1491,17 @@ impl PofToolsGui {
             let mut path_ids: Vec<usize> = (0..model.paths.len()).collect();
             path_ids.sort_by_key(|id| model.paths[*id].name.clone());
 
-            //let paths_len = path_ids.len();
             for i in 0..path_ids.len() {
-                //println!("{}, {}", i, path_ids[i]);
                 if i != (path_ids.len() - 1)
                     && model.paths[path_ids[i]].name == model.paths[path_ids[i + 1]].name
                     && (i == 0 || model.paths[path_ids[i]].name != model.paths[path_ids[i - 1]].name)
                 {
                     warnings.insert(Warning::DuplicatePathName(path_ids[i]));
                 }
+            }
+
+            for duped_id in model.header.detail_levels.iter().duplicates() {
+                warnings.insert(Warning::DuplicateDetailLevels(*duped_id));
             }
 
             if model.untextured_idx.is_some() {

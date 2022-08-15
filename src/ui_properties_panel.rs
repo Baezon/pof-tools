@@ -977,7 +977,7 @@ impl PofToolsGui {
                         listed_objects.push(self.model.sub_objects[id].name.clone());
                     }
 
-                    if self.warnings.contains(&Warning::DuplicateDetailLevels(id)) {
+                    if self.model.warnings.contains(&Warning::DuplicateDetailLevel(id)) {
                         active_warning_idx = Some(combo_idx);
                     }
 
@@ -1045,7 +1045,7 @@ impl PofToolsGui {
                         self.model.header.detail_levels.truncate(level);
                     }
 
-                    PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All);
+                    self.model.recheck_warnings(All);
                     // FIX
                 }
 

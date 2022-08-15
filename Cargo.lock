@@ -1755,6 +1755,7 @@ dependencies = [
  "dae-parser",
  "gltf",
  "gltf-json",
+ "itertools",
  "nalgebra",
  "nalgebra-glm",
  "urlencoding",

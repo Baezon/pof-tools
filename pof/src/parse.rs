@@ -1306,7 +1306,7 @@ impl<'a> IsNode<'a> for &'a dae::Node {
 
 struct DaeContext<'a> {
     local_maps: dae::LocalMaps<'a>,
-    material_map: HashMap<&'a String, TextureId>,
+    material_map: HashMap<String, TextureId>,
     up: UpAxis,
 }
 
@@ -1348,6 +1348,19 @@ impl<'a> ParseCtx<'a> for DaeContext<'a> {
                     }
                 }
             }
+            let instance_mat_map: HashMap<_, _> = geo
+                .instance_materials()
+                .iter()
+                .map(|x| {
+                    (
+                        x.symbol.clone(),
+                        match &x.target.val {
+                            dae::Url::Fragment(r) => r.clone(),
+                            dae::Url::Other(_) => panic!(),
+                        },
+                    )
+                })
+                .collect();
 
             let geo = self.local_maps[&geo.url].element.as_mesh().unwrap();
             let verts = geo.vertices.as_ref().unwrap().importer(&self.local_maps).unwrap();
@@ -1360,9 +1373,9 @@ impl<'a> ParseCtx<'a> for DaeContext<'a> {
             for prim_elem in &geo.elements {
                 match prim_elem {
                     dae::Primitive::PolyList(polies) => {
-                        // println!("{:#?}, {:#?}", polies.material, material_map);
+                        //println!("{:#?}, {:#?}, {:#?}", polies.material, instance_mat_map, self.material_map);
                         let texture = match &polies.material {
-                            Some(mat) => self.material_map[mat],
+                            Some(mat) => self.material_map[&instance_mat_map[mat]],
                             None => TextureId::UNTEXTURED,
                         };
 
@@ -1387,9 +1400,9 @@ impl<'a> ParseCtx<'a> for DaeContext<'a> {
                         }
                     }
                     dae::Primitive::Triangles(tris) => {
-                        // println!("{:#?}, {:#?}", tris.material, material_map);
+                        //println!("{:#?}, {:#?}, {:#?}", tris.material, instance_mat_map, self.material_map);
                         let texture = match &tris.material {
-                            Some(mat) => self.material_map[mat],
+                            Some(mat) => self.material_map[&instance_mat_map[mat]],
                             None => TextureId::UNTEXTURED,
                         };
                         let importer = tris.importer(&self.local_maps, verts.clone()).unwrap();
@@ -1435,7 +1448,7 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
 
     document.for_each(|material: &dae::Material| {
         ctx.material_map
-            .insert(material.id.as_ref().unwrap(), TextureId(ctx.material_map.len() as u32));
+            .insert(material.id.as_ref().unwrap().clone(), TextureId(ctx.material_map.len() as u32));
     });
 
     let mut model = Box::new(Model::default());

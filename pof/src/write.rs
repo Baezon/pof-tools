@@ -1104,6 +1104,14 @@ struct GltfBuilder {
     buffer: Vec<u8>,
 }
 
+fn sanitize_f32(f: f32) -> f32 {
+    if f.is_finite() {
+        f
+    } else {
+        0.
+    }
+}
+
 impl NodeBuilder for json::Node {
     type Ctx = Vec<Self>;
     type Node = Index<Self>;
@@ -1111,17 +1119,18 @@ impl NodeBuilder for json::Node {
         self.children.get_or_insert_with(Default::default)
     }
     fn translate(&mut self, val: [f32; 3]) {
-        self.translation = Some(val)
+        self.translation = Some(val.map(sanitize_f32))
     }
     fn rotate(&mut self, (Vec3d { x, y, z }, angle): (Vec3d, f32)) {
+        let [x, y, z, angle] = [x, y, z, angle].map(sanitize_f32);
         let (sin_a, cos_a) = f32::sin_cos(angle / 2.);
         self.rotation = Some(json::scene::UnitQuaternion([x * sin_a, y * sin_a, z * sin_a, cos_a]));
     }
     fn scale(&mut self, val: [f32; 3]) {
-        self.scale = Some(val)
+        self.scale = Some(val.map(sanitize_f32))
     }
     fn matrix_transform(&mut self, mat: Mat4x4) {
-        self.matrix = Some(*Matrix::from(mat).0)
+        self.matrix = Some(Matrix::from(mat).0.map(sanitize_f32))
     }
     fn build(self, ctx: &mut Vec<Self>) -> Index<Self> {
         GltfBuilder::push(ctx, self)

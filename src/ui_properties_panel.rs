@@ -10,7 +10,7 @@ use pof::{
 
 use crate::ui::{
     DockingTreeValue, EyeTreeValue, GlowTreeValue, InsigniaTreeValue, PathTreeValue, PofToolsGui, SpecialPointTreeValue, SubObjectTreeValue,
-    TextureTreeValue, ThrusterTreeValue, TreeValue, TurretTreeValue, UiState, WeaponTreeValue, LIGHT_BLUE, LIGHT_ORANGE,
+    TextureTreeValue, ThrusterTreeValue, TreeValue, TurretTreeValue, UiState, WeaponTreeValue, ERROR_RED, LIGHT_BLUE, LIGHT_ORANGE, WARNING_YELLOW,
 };
 
 enum IndexingButtonsResponse {
@@ -165,7 +165,7 @@ impl UiState {
     // a text edit field attached to a model value that will show up red if it cannot parse
     fn parsable_text_edit<T: FromStr>(ui: &mut Ui, model_value: &mut T, parsable_string: &mut String) -> bool {
         if parsable_string.parse::<T>().is_err() {
-            ui.visuals_mut().override_text_color = Some(Color32::RED);
+            ui.visuals_mut().override_text_color = Some(ERROR_RED);
         }
         if ui.text_edit_singleline(parsable_string).changed() {
             if let Ok(value) = parsable_string.parse() {
@@ -187,11 +187,11 @@ impl UiState {
         ui.add_enabled_ui(selector_value.is_some(), |ui| {
             if selector_value.is_some() {
                 let color = if active_error_idx.is_some() {
-                    UiState::set_widget_color(ui, Color32::RED);
-                    Color32::RED
+                    UiState::set_widget_color(ui, ERROR_RED);
+                    ERROR_RED
                 } else if active_warning_idx.is_some() {
-                    UiState::set_widget_color(ui, Color32::YELLOW);
-                    Color32::YELLOW
+                    UiState::set_widget_color(ui, WARNING_YELLOW);
+                    WARNING_YELLOW
                 } else {
                     ui.visuals().text_color()
                 };
@@ -224,9 +224,9 @@ impl UiState {
     ) -> Response {
         if let Some(value) = model_value {
             if parsable_string.parse::<T>().is_err() {
-                ui.visuals_mut().override_text_color = Some(Color32::RED);
+                ui.visuals_mut().override_text_color = Some(ERROR_RED);
             } else if active_warning {
-                ui.visuals_mut().override_text_color = Some(Color32::YELLOW);
+                ui.visuals_mut().override_text_color = Some(WARNING_YELLOW);
             }
             let response = ui.text_edit_singleline(parsable_string);
             if response.changed() {
@@ -293,14 +293,14 @@ impl UiState {
                     ui.label("Axis:");
 
                     if transform_window.vector.parse::<Vec3d>().is_err() {
-                        ui.visuals_mut().override_text_color = Some(Color32::RED);
+                        ui.visuals_mut().override_text_color = Some(ERROR_RED);
                     }
                     ui.text_edit_singleline(&mut transform_window.vector);
                     ui.visuals_mut().override_text_color = None;
 
                     ui.label("Angle:");
                     if transform_window.value.parse::<f32>().is_err() {
-                        ui.visuals_mut().override_text_color = Some(Color32::RED);
+                        ui.visuals_mut().override_text_color = Some(ERROR_RED);
                     }
                     ui.text_edit_singleline(&mut transform_window.value);
                     ui.visuals_mut().override_text_color = None;
@@ -326,7 +326,7 @@ impl UiState {
                     ui.separator();
                     ui.label("Scalar (negative values flip):");
                     if transform_window.value.parse::<f32>().is_err() {
-                        ui.visuals_mut().override_text_color = Some(Color32::RED);
+                        ui.visuals_mut().override_text_color = Some(ERROR_RED);
                     }
                     ui.text_edit_singleline(&mut transform_window.value);
                     ui.visuals_mut().override_text_color = None;
@@ -347,7 +347,7 @@ impl UiState {
                     ui.label("Translation Vector:");
 
                     if transform_window.vector.parse::<Vec3d>().is_err() {
-                        ui.visuals_mut().override_text_color = Some(Color32::RED);
+                        ui.visuals_mut().override_text_color = Some(ERROR_RED);
                     }
                     ui.text_edit_singleline(&mut transform_window.vector);
                     ui.visuals_mut().override_text_color = None;
@@ -1103,13 +1103,20 @@ impl PofToolsGui {
 
                 // Name edit ================================================================
 
-                ui.label("Name:");
                 if let Some(id) = selected_id {
+                    let mut text = RichText::new("Name:");
+                    if self.model.errors.contains(&Error::DuplicateSubobjectName(id)) || self.model.errors.contains(&Error::UnnamedSubObject(id)) {
+                        text = text.color(ERROR_RED);
+                    }
+                    ui.label(text);
                     if ui.add(egui::TextEdit::singleline(&mut self.model.sub_objects[id].name)).changed() {
                         self.model.recheck_warnings(One(Warning::SubObjectNameTooLong(id)));
+                        self.model.recheck_errors(One(Error::UnnamedSubObject(id)));
+                        self.model.recheck_errors(One(Error::DuplicateSubobjectName(id)));
                         self.model.recalc_semantic_name_links();
                     }
                 } else {
+                    ui.label("Name:");
                     ui.add_enabled(false, egui::TextEdit::singleline(name));
                 }
 
@@ -1126,7 +1133,7 @@ impl PofToolsGui {
                         self.model.sub_objects[id].is_debris_model
                             && (self.model.header.detail_levels.contains(&id) || num_debris > pof::MAX_DEBRIS_OBJECTS)
                     }) {
-                        UiState::set_widget_color(ui, Color32::RED);
+                        UiState::set_widget_color(ui, ERROR_RED);
                     }
 
                     let mut checkbox = ui.checkbox(is_debris_check, "Debris Subobject");
@@ -1226,7 +1233,7 @@ impl PofToolsGui {
 
                 if let Some(id) = selected_id {
                     if offset_string.parse::<Vec3d>().is_err() {
-                        ui.visuals_mut().override_text_color = Some(Color32::RED);
+                        ui.visuals_mut().override_text_color = Some(ERROR_RED);
                     }
                     let response = ui.text_edit_singleline(offset_string);
                     if response.changed() {
@@ -1511,11 +1518,11 @@ impl PofToolsGui {
                     ui.label(RichText::new(format!("Id: {:?}", self.model.sub_objects[id].obj_id)).weak());
                     let mut vert_string = RichText::new(format!("Vertices: {}", self.model.sub_objects[id].bsp_data.verts.len())).weak();
                     if self.model.errors.contains(&Error::TooManyVerts(id)) {
-                        vert_string = vert_string.color(Color32::RED);
+                        vert_string = vert_string.color(ERROR_RED);
                     }
                     let mut norm_string = RichText::new(format!("Normals: {}", self.model.sub_objects[id].bsp_data.norms.len())).weak();
                     if self.model.errors.contains(&Error::TooManyNorms(id)) {
-                        norm_string = norm_string.color(Color32::RED);
+                        norm_string = norm_string.color(ERROR_RED);
                     }
                     ui.label(vert_string);
                     ui.label(norm_string);
@@ -1571,7 +1578,7 @@ impl PofToolsGui {
                     ui.label("Engine Subsystem:");
                     if let Some(bank) = bank_num {
                         if self.model.warnings.contains(&Warning::ThrusterPropertiesInvalidVersion(bank)) {
-                            UiState::set_widget_color(ui, Color32::YELLOW);
+                            UiState::set_widget_color(ui, WARNING_YELLOW);
                         }
                         if ui.text_edit_singleline(engine_subsys_string).changed() {
                             pof::properties_update_field(&mut self.model.thruster_banks[bank].properties, "$engine_subsystem", engine_subsys_string);
@@ -1587,7 +1594,7 @@ impl PofToolsGui {
                 CollapsingHeader::new("Properties Raw").show(ui, |ui| {
                     if let Some(bank) = bank_num {
                         if self.model.warnings.contains(&Warning::ThrusterPropertiesInvalidVersion(bank)) {
-                            UiState::set_widget_color(ui, Color32::YELLOW);
+                            UiState::set_widget_color(ui, WARNING_YELLOW);
                         }
                         if ui
                             .add(egui::TextEdit::multiline(&mut self.model.thruster_banks[bank].properties).desired_rows(1))

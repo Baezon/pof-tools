@@ -7,6 +7,8 @@ use std::ops::{Add, AddAssign, Deref, DerefMut, Div, DivAssign, Index, IndexMut,
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use itertools::Itertools;
+
 use byteorder::{WriteBytesExt, LE};
 pub use dae_parser::UpAxis;
 use glm::{Mat3x3, TMat4, Vec3};
@@ -1659,6 +1661,7 @@ impl Model {
                     .paths
                     .get(idx)
                     .map_or(false, |path1| self.paths.iter().any(|path2| path1.name == path2.name)),
+                Warning::DuplicateDetailLevel(duped_id) => self.header.detail_levels.iter().filter(|id| duped_id == **id).count() > 1,
 
                 Warning::PathNameTooLong(idx) => self.paths.get(idx).map_or(false, |path| path.name.len() > MAX_NAME_LEN),
                 Warning::SubObjectNameTooLong(id) => self.sub_objects[id].name.len() > MAX_NAME_LEN,
@@ -1808,15 +1811,17 @@ impl Model {
             let mut path_ids: Vec<usize> = (0..self.paths.len()).collect();
             path_ids.sort_by_key(|id| self.paths[*id].name.clone());
 
-            //let paths_len = path_ids.len();
             for i in 0..path_ids.len() {
-                //println!("{}, {}", i, path_ids[i]);
                 if i != (path_ids.len() - 1)
                     && self.paths[path_ids[i]].name == self.paths[path_ids[i + 1]].name
                     && (i == 0 || self.paths[path_ids[i]].name != self.paths[path_ids[i - 1]].name)
                 {
                     self.warnings.insert(Warning::DuplicatePathName(path_ids[i]));
                 }
+            }
+
+            for duped_id in self.header.detail_levels.iter().duplicates() {
+                self.warnings.insert(Warning::DuplicateDetailLevel(*duped_id));
             }
 
             if self.untextured_idx.is_some() {
@@ -2268,6 +2273,7 @@ pub enum Warning {
     TooManyTurretFirePoints(usize),
     /// for each duplicated name, only contains the *first* path idx with that name
     DuplicatePathName(usize),
+    DuplicateDetailLevel(ObjectId),
     TooManyEyePoints,
     TooManyTextures,
 

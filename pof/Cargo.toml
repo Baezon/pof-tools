@@ -17,6 +17,7 @@ gltf = "1.0"
 urlencoding = "2.1"
 gltf-json = "1.0"
 base64 = "0.13"
+itertools = "0.10.3"
 [[bin]]
 name = "pof"
 path = "src/main.rs"

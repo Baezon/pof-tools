@@ -90,6 +90,7 @@ impl TreeValue {
             Warning::TooFewTurretFirePoints(idx) => Some(TreeValue::Turrets(TurretTreeValue::Turret(idx))),
             Warning::TooManyTurretFirePoints(idx) => Some(TreeValue::Turrets(TurretTreeValue::Turret(idx))),
             Warning::DuplicatePathName(idx) => Some(TreeValue::Paths(PathTreeValue::Path(idx))),
+            Warning::DuplicateDetailLevel(_) => Some(TreeValue::Header),
             Warning::TooManyEyePoints => Some(TreeValue::EyePoints(EyeTreeValue::Header)),
             Warning::TooManyTextures => Some(TreeValue::Textures(TextureTreeValue::Header)),
             Warning::PathNameTooLong(idx) => Some(TreeValue::Paths(PathTreeValue::Path(idx))),
@@ -418,15 +419,6 @@ impl std::fmt::Display for SubObjectTreeValue {
     }
 }
 
-impl SubObjectTreeValue {
-    pub fn subobject(id: Option<ObjectId>) -> Self {
-        match id {
-            Some(id) => Self::SubObject(id),
-            None => Self::Header,
-        }
-    }
-}
-
 #[derive(PartialEq, Eq)]
 pub(crate) enum DisplayMode {
     Wireframe,
@@ -700,8 +692,8 @@ impl PofToolsGui {
         });
         let mut warnings = egui::TopBottomPanel::bottom("info bar")
             .resizable(true)
-            .default_height(23.0)
-            .height_range(23.0..=500.0)
+            .default_height(22.0)
+            .height_range(22.0..=500.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
@@ -848,6 +840,9 @@ impl PofToolsGui {
                                 }
                                 Warning::DuplicatePathName(path_idx) => {
                                     format!("⚠ More than one path shares the name '{}'", self.model.paths[path_idx].name)
+                                }
+                                Warning::DuplicateDetailLevel(id) => {
+                                    format!("⚠ Subobject '{}' belongs to more than one detail level", self.model.sub_objects[id].name)
                                 }
                                 Warning::PathNameTooLong(_)
                                 | Warning::SubObjectNameTooLong(_)

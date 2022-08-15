@@ -1085,6 +1085,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9a9d19fa1e79b6215ff29b9d6880b706147f16e9b1dbb1e4e5947b5b02bc5e3"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1746,6 +1755,7 @@ dependencies = [
  "dae-parser",
  "gltf",
  "gltf-json",
+ "itertools",
  "nalgebra",
  "nalgebra-glm",
  "urlencoding",
@@ -1765,6 +1775,7 @@ dependencies = [
  "epi",
  "glium",
  "image 0.24.3",
+ "itertools",
  "log",
  "nalgebra-glm",
  "native-dialog",

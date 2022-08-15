@@ -180,6 +180,7 @@ impl UiState {
     // selector value is a convenience option to disable the combo box, since most properties panels work on a current selection of Option<something>
     fn subobject_combo_box<T>(
         ui: &mut Ui, name_list: &[String], mut_selection: &mut usize, selector_value: Option<T>, label: &str, active_error_idx: Option<usize>,
+        active_warning_idx: Option<usize>,
     ) -> Option<usize> {
         let mut ret = None;
 
@@ -188,6 +189,9 @@ impl UiState {
                 let color = if active_error_idx.is_some() {
                     UiState::set_widget_color(ui, Color32::RED);
                     Color32::RED
+                } else if active_warning_idx.is_some() {
+                    UiState::set_widget_color(ui, Color32::YELLOW);
+                    Color32::YELLOW
                 } else {
                     ui.visuals().text_color()
                 };
@@ -943,6 +947,110 @@ impl PofToolsGui {
 
                 ui.separator();
 
+                ui.label("Detail Levels:");
+
+                // save any changed detail levels, we cant modify the list while displaying it, of course
+                let mut changed_detail = None;
+
+                for (i, &id) in self.model.header.detail_levels.iter().enumerate() {
+                    let mut combo_idx = 0;
+                    let mut listed_objects = vec![];
+                    let mut active_warning_idx = None;
+
+                    // add all the valid objects
+                    for subobj in &self.model.sub_objects {
+                        if subobj.parent().is_some() || subobj.is_debris_model {
+                            continue;
+                        }
+
+                        if subobj.obj_id == id {
+                            combo_idx = listed_objects.len();
+                        }
+
+                        listed_objects.push(subobj.name.clone());
+                    }
+
+                    // if we have an invalid one add that too
+                    if self.model.sub_objects[id].parent().is_some() {
+                        combo_idx = listed_objects.len();
+                        active_warning_idx = Some(combo_idx);
+                        listed_objects.push(self.model.sub_objects[id].name.clone());
+                    }
+
+                    if self.model.warnings.contains(&Warning::DuplicateDetailLevel(id)) {
+                        active_warning_idx = Some(combo_idx);
+                    }
+
+                    //finally add a "None" option
+                    listed_objects.push(format!("None"));
+
+                    if let Some(new_idx) =
+                        UiState::subobject_combo_box(ui, &listed_objects, &mut combo_idx, Some(()), &format!("- {}", i), None, active_warning_idx)
+                    {
+                        if new_idx == listed_objects.len() - 1 {
+                            changed_detail = Some((i, None));
+                        } else {
+                            changed_detail = Some((i, self.model.get_obj_id_by_name(&listed_objects[new_idx])));
+                        }
+                    }
+                }
+
+                // add a special dummy detail level so that users can add new ones
+                {
+                    let mut listed_objects: Vec<String> = self
+                        .model
+                        .sub_objects
+                        .iter()
+                        .filter(|subobj| subobj.parent().is_none() && !subobj.is_debris_model)
+                        .map(|subobj| subobj.name.clone())
+                        .collect();
+                    listed_objects.push(format!("None"));
+
+                    let mut combo_idx = listed_objects.len() - 1;
+                    if let Some(new_idx) = UiState::subobject_combo_box(
+                        ui,
+                        &listed_objects,
+                        &mut combo_idx,
+                        Some(()),
+                        &format!("- {}", self.model.header.detail_levels.len()),
+                        None,
+                        None,
+                    ) {
+                        if new_idx == listed_objects.len() - 1 {
+                            changed_detail = Some((self.model.header.detail_levels.len(), None));
+                        } else {
+                            changed_detail = Some((self.model.header.detail_levels.len(), self.model.get_obj_id_by_name(&listed_objects[new_idx])));
+                        }
+                    }
+                }
+
+                //now we'll handle any changes
+                if let Some((level, id_opt)) = changed_detail {
+                    if let Some(new_id) = id_opt {
+                        // change to a new idx
+                        if level == self.model.header.detail_levels.len() {
+                            // add a new detail level
+                            self.model.header.detail_levels.push(new_id);
+                        } else if let Some(swapped_level) = self.model.header.detail_levels.iter().position(|&id| id == new_id) {
+                            // swap with an existing level
+                            let swapped_id = self.model.header.detail_levels[level];
+                            self.model.header.detail_levels[level] = new_id;
+                            self.model.header.detail_levels[swapped_level] = swapped_id;
+                        } else {
+                            self.model.header.detail_levels[level] = new_id;
+                        }
+                    } else {
+                        // Remove a detail level
+                        // No holes allowed, so truncate
+                        self.model.header.detail_levels.truncate(level);
+                    }
+
+                    self.model.recheck_warnings(All);
+                    // FIX
+                }
+
+                ui.separator();
+
                 if ui.add(egui::Button::new("Transform Mesh")).clicked() {
                     transform_window.open = true;
                 }
@@ -1226,7 +1334,7 @@ impl PofToolsGui {
                     );
                 }
 
-                if let Some(new_parent) = UiState::subobject_combo_box(ui, &subobj_names_list, &mut combo_idx, selected_id, "Parent", None) {
+                if let Some(new_parent) = UiState::subobject_combo_box(ui, &subobj_names_list, &mut combo_idx, selected_id, "Parent", None, None) {
                     self.model.make_orphan(selected_id.unwrap());
 
                     if new_parent != 0 {
@@ -1694,7 +1802,7 @@ impl PofToolsGui {
                     0 // doesnt matter
                 };
 
-                if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, &mut parent_id, bay_num, "Parent Object", None) {
+                if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, &mut parent_id, bay_num, "Parent Object", None, None) {
                     pof::properties_update_field(
                         &mut self.model.docking_bays[bay_num.unwrap()].properties,
                         "$parent_submodel",
@@ -1849,7 +1957,8 @@ impl PofToolsGui {
 
                 let subobj_names_list = self.model.get_subobj_names();
 
-                if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, attached_subobj_idx, bank_num, "SubObject", None) {
+                if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, attached_subobj_idx, bank_num, "SubObject", None, None)
+                {
                     self.model.glow_banks[bank_num.unwrap()].obj_parent = ObjectId(new_subobj as u32);
                 }
 
@@ -2072,7 +2181,7 @@ impl PofToolsGui {
                 ui.add_space(10.0);
                 let subobj_names_list = self.model.get_subobj_names();
 
-                if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, base_idx, turret_num, "Base object", None) {
+                if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, base_idx, turret_num, "Base object", None, None) {
                     self.model.turrets[turret_num.unwrap()].base_obj = ObjectId(new_subobj as u32);
                     self.model.recheck_errors(One(Error::InvalidTurretGunSubobject(turret_num.unwrap())));
                 }
@@ -2106,7 +2215,7 @@ impl PofToolsGui {
 
                 // then make the combo box, giving it the list of names and the index
                 if let Some(new_idx) =
-                    UiState::subobject_combo_box(ui, &gun_subobj_names_list, &mut gun_subobj_idx, turret_num, "Gun object", error_idx)
+                    UiState::subobject_combo_box(ui, &gun_subobj_names_list, &mut gun_subobj_idx, turret_num, "Gun object", error_idx, None)
                 {
                     // the unwraps are ok here, if it were none, the combo box would be un-interactable
                     self.model.turrets[turret_num.unwrap()].gun_obj = gun_subobj_ids_list[new_idx];

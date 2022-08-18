@@ -1568,6 +1568,11 @@ impl Model {
                 Error::DetailObjWithParent(id) => self.header.detail_levels.contains(&id) && self.sub_objects[id].parent().is_some(),
                 Error::TooManyVerts(id) => self.sub_objects[id].bsp_data.verts.len() > self.max_verts_norms_per_subobj(),
                 Error::TooManyNorms(id) => self.sub_objects[id].bsp_data.norms.len() > self.max_verts_norms_per_subobj(),
+                Error::DuplicateSubobjectName(id) => self
+                    .sub_objects
+                    .iter()
+                    .any(|subobj| id != subobj.obj_id && self.sub_objects[id].name == subobj.name),
+                Error::UnnamedSubObject(id) => self.sub_objects[id].name.is_empty(),
             };
 
             let existing_warning = self.errors.contains(&error);
@@ -1600,6 +1605,10 @@ impl Model {
             }
 
             for subobj in &self.sub_objects {
+                if subobj.name.is_empty() {
+                    self.errors.insert(Error::UnnamedSubObject(subobj.obj_id));
+                }
+
                 if subobj.bsp_data.verts.len() > self.max_verts_norms_per_subobj() {
                     self.errors.insert(Error::TooManyVerts(subobj.obj_id));
                 }
@@ -1607,6 +1616,12 @@ impl Model {
                 if subobj.bsp_data.norms.len() > self.max_verts_norms_per_subobj() {
                     self.errors.insert(Error::TooManyNorms(subobj.obj_id));
                 }
+            }
+
+            for _ in self.sub_objects.iter().map(|subobj| &subobj.name).duplicates() {
+                self.sub_objects.iter().for_each(|subobj| {
+                    self.errors.insert(Error::DuplicateSubobjectName(subobj.obj_id));
+                });
             }
         }
     }
@@ -1660,7 +1675,7 @@ impl Model {
                 Warning::DuplicatePathName(idx) => self
                     .paths
                     .get(idx)
-                    .map_or(false, |path1| self.paths.iter().any(|path2| path1.name == path2.name)),
+                    .map_or(false, |path1| self.paths.iter().enumerate().any(|(idx2, path2)| idx != idx2 && path1.name == path2.name)),
                 Warning::DuplicateDetailLevel(duped_id) => self.header.detail_levels.iter().filter(|id| duped_id == **id).count() > 1,
 
                 Warning::PathNameTooLong(idx) => self.paths.get(idx).map_or(false, |path| path.name.len() > MAX_NAME_LEN),
@@ -1808,16 +1823,9 @@ impl Model {
                 }
             }
 
-            let mut path_ids: Vec<usize> = (0..self.paths.len()).collect();
-            path_ids.sort_by_key(|id| self.paths[*id].name.clone());
-
-            for i in 0..path_ids.len() {
-                if i != (path_ids.len() - 1)
-                    && self.paths[path_ids[i]].name == self.paths[path_ids[i + 1]].name
-                    && (i == 0 || self.paths[path_ids[i]].name != self.paths[path_ids[i - 1]].name)
-                {
-                    self.warnings.insert(Warning::DuplicatePathName(path_ids[i]));
-                }
+            for duped_name in self.paths.iter().map(|path| &path.name).duplicates() {
+                self.warnings
+                    .insert(Warning::DuplicatePathName(self.paths.iter().position(|path| path.name == *duped_name).unwrap()));
             }
 
             for duped_id in self.header.detail_levels.iter().duplicates() {
@@ -2253,6 +2261,9 @@ pub enum Error {
     DetailAndDebrisObj(ObjectId),
     TooManyVerts(ObjectId),
     TooManyNorms(ObjectId),
+    UnnamedSubObject(ObjectId),
+    /// for each duplicated name, only contains the *first* path idx with that name
+    DuplicateSubobjectName(ObjectId),
     // all turret base/gun objects must be disjoint!
 }
 

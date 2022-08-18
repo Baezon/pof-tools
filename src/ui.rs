@@ -63,8 +63,9 @@ impl TreeValue {
             Error::TooManyDebrisObjects => None,
             Error::DetailObjWithParent(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
             Error::DetailAndDebrisObj(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
-            Error::TooManyVerts(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
-            Error::TooManyNorms(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            Error::TooManyVerts(id) | Error::TooManyNorms(id) | Error::UnnamedSubObject(id) | Error::DuplicateSubobjectName(id) => {
+                Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)))
+            }
         }
     }
 
@@ -503,6 +504,8 @@ impl PofToolsGui {
     }
 }
 
+pub const ERROR_RED: Color32 = Color32::from_rgb(255, 50, 50);
+pub const WARNING_YELLOW: Color32 = Color32::from_rgb(255, 255, 0);
 pub const LIGHT_ORANGE: Color32 = Color32::from_rgb(210, 150, 128);
 pub const LIGHT_BLUE: Color32 = Color32::from_rgb(0xA0, 0xD8, 0xFF);
 
@@ -511,17 +514,37 @@ impl UiState {
     fn tree_val_text(&self, model: &Model, tree_value: TreeValue, this_name: &str) -> RichText {
         let text = RichText::new(this_name);
         for error in &model.errors {
-            if let Some(error_tree_value) = TreeValue::from_error(*error) {
+            if let Error::DuplicateSubobjectName(err_id) = *error {
+                match tree_value {
+                    TreeValue::SubObjects(SubObjectTreeValue::Header) => return text.color(ERROR_RED),
+                    TreeValue::SubObjects(SubObjectTreeValue::SubObject(obj_id)) => {
+                        if model.sub_objects[obj_id].name == model.sub_objects[err_id].name {
+                            return text.color(ERROR_RED);
+                        }
+                    }
+                    _ => (),
+                }
+            } else if let Some(error_tree_value) = TreeValue::from_error(*error) {
                 if tree_value == error_tree_value || tree_value.is_ancestor_of(error_tree_value) {
-                    return text.color(Color32::RED);
+                    return text.color(ERROR_RED);
                 }
             }
         }
 
         for warning in &model.warnings {
-            if let Some(warning_tree_value) = TreeValue::from_warning(*warning) {
+            if let Warning::DuplicatePathName(warn_idx) = *warning {
+                match tree_value {
+                    TreeValue::Paths(PathTreeValue::Header) => return text.color(WARNING_YELLOW),
+                    TreeValue::Paths(PathTreeValue::Path(path_idx)) => {
+                        if model.paths[path_idx].name == model.paths[warn_idx].name {
+                            return text.color(WARNING_YELLOW);
+                        }
+                    }
+                    _ => (),
+                }
+            } else if let Some(warning_tree_value) = TreeValue::from_warning(*warning) {
                 if tree_value == warning_tree_value || tree_value.is_ancestor_of(warning_tree_value) {
-                    return text.color(Color32::YELLOW);
+                    return text.color(WARNING_YELLOW);
                 }
             }
         }
@@ -743,9 +766,15 @@ impl PofToolsGui {
                                         self.model.max_verts_norms_per_subobj(),
                                     )
                                 }
+                                Error::UnnamedSubObject(id) => {
+                                    format!("⊗ Subobject id {:?} requires a name", id)
+                                }
+                                Error::DuplicateSubobjectName(id) => {
+                                    format!("⊗ More than one subobject shares the name '{}'", self.model.sub_objects[id].name)
+                                }
                             };
 
-                            let text = RichText::new(str).text_style(TextStyle::Button).color(Color32::RED);
+                            let text = RichText::new(str).text_style(TextStyle::Button).color(ERROR_RED);
                             if first_warning {
                                 ui.horizontal(|ui| {
                                     if let Some(tree_val) = TreeValue::from_error(error) {
@@ -760,7 +789,7 @@ impl PofToolsGui {
                                             ui.add(Label::new(
                                                 RichText::new(format!("{} ⊗", self.model.errors.len()))
                                                     .text_style(TextStyle::Button)
-                                                    .color(Color32::RED),
+                                                    .color(ERROR_RED),
                                             ));
                                         }
 
@@ -768,7 +797,7 @@ impl PofToolsGui {
                                             ui.add(Label::new(
                                                 RichText::new(format!("{} ⚠", self.model.warnings.len()))
                                                     .text_style(TextStyle::Button)
-                                                    .color(Color32::YELLOW),
+                                                    .color(WARNING_YELLOW),
                                             ));
                                         }
                                     });
@@ -897,7 +926,7 @@ impl PofToolsGui {
                                 }
                             };
 
-                            let text = RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW);
+                            let text = RichText::new(str).text_style(TextStyle::Button).color(WARNING_YELLOW);
                             if first_warning {
                                 ui.horizontal(|ui| {
                                     if let Some(tree_val) = TreeValue::from_warning(warning) {
@@ -912,7 +941,7 @@ impl PofToolsGui {
                                             ui.add(Label::new(
                                                 RichText::new(format!("{} ⊗", self.model.errors.len()))
                                                     .text_style(TextStyle::Button)
-                                                    .color(Color32::RED),
+                                                    .color(ERROR_RED),
                                             ));
                                         }
 
@@ -920,7 +949,7 @@ impl PofToolsGui {
                                             ui.add(Label::new(
                                                 RichText::new(format!("{} ⚠", self.model.warnings.len()))
                                                     .text_style(TextStyle::Button)
-                                                    .color(Color32::YELLOW),
+                                                    .color(WARNING_YELLOW),
                                             ));
                                         }
                                     });

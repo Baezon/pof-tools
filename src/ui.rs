@@ -3,8 +3,9 @@ use glium::{
     texture::{RawImage2d, SrgbTexture2d},
     Display,
 };
-use pof::{Error, Model, SubObject, TextureId, Vec3d, Version, Warning};
-use std::{collections::HashMap, sync::mpsc::Receiver};
+use native_dialog::FileDialog;
+use pof::{Error, Model, Parser, SubObject, TextureId, Vec3d, Version, Warning};
+use std::{collections::HashMap, fs::File, sync::mpsc::Receiver};
 
 use eframe::egui::{self, Button, TextStyle, Ui};
 use pof::ObjectId;
@@ -607,31 +608,75 @@ impl PofToolsGui {
         egui::TopBottomPanel::top("menu").default_height(33.0).min_height(33.0).show(ctx, |ui| {
             Ui::add_space(ui, 6.0);
             ui.horizontal(|ui| {
-                if ui
-                    .add(Button::new(RichText::new("🗁").text_style(TextStyle::Heading)))
-                    .on_hover_text("Open")
-                    .clicked()
-                {
-                    self.start_loading_model(None);
-                    ui.output().cursor_icon = egui::CursorIcon::Wait;
-                }
-
-                if ui
-                    .add_enabled(self.model.errors.is_empty(), Button::new(RichText::new("🖴").text_style(TextStyle::Heading)))
-                    .on_hover_text("Save")
-                    .on_disabled_hover_text("All errors must be corrected before saving.")
-                    .clicked()
-                {
-                    self.model.clean_up();
-
-                    let new_filename = PofToolsGui::save_model(&self.model);
-                    if let Some(filename) = new_filename {
-                        display
-                            .gl_window()
-                            .window()
-                            .set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, filename));
+                ui.menu_button("File", |ui| {
+                    if ui.button("Open").clicked() {
+                        self.start_loading_model(None);
+                        ui.output().cursor_icon = egui::CursorIcon::Wait;
                     }
-                }
+
+                    ui.add_space(1.0); // menu items have one pixel of overlap... make a bug report?
+
+                    if ui
+                        .add_enabled(self.model.errors.is_empty(), Button::new("Save"))
+                        .on_disabled_hover_text("All errors must be corrected before saving.")
+                        .clicked()
+                    {
+                        self.model.clean_up();
+
+                        let new_filename = PofToolsGui::save_model(&self.model);
+                        if let Some(filename) = new_filename {
+                            display
+                                .gl_window()
+                                .window()
+                                .set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, filename));
+                        }
+                    }
+
+                    ui.add_space(1.0); // menu items have one pixel of overlap... make a bug report?
+
+                    if ui.button("Global Import").on_hover_text("Deletes data from the existing model and replaces it with the target model's. \n\
+                                                                Replaces mass, moment of inertia, weapon points, docking points, thrusters, glow points, \
+                                                                special points, turrets (only exact base and gun object name matches are retained), \
+                                                                paths, eye points, and insignia.").clicked() {
+
+                        let model = crossbeam::thread::scope(|s| {
+                            s.spawn(|_| {
+                                let path =
+                                    FileDialog::new()
+                                        .add_filter("All supported files", &["pof", "dae", "gltf", "glb"])
+                                        .add_filter("COLLADA", &["dae"])
+                                        .add_filter("Parallax Object File", &["pof"])
+                                        .add_filter("GL Transmission Format", &["gltf", "glb"])
+                                        .show_open_single_file()
+                                        .unwrap();
+
+                                path.map(|path| {
+                                    let ext = path.extension().map(|ext| ext.to_ascii_lowercase());
+                                    let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
+                                    info!("Attempting to load {}", filename);
+                                    match ext.as_ref().and_then(|ext| ext.to_str()) {
+                                        Some("dae") => pof::parse_dae(path),
+                                        Some("gltf" | "glb") => pof::parse_gltf(path),
+                                        Some("pof") => {
+                                            let file = File::open(&path).expect("TODO invalid file or smth i dunno");
+                                            let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
+                                            Box::new(parser.parse(path).expect("TODO invalid pof file or smth i dunno"))
+                                        }
+                                        _ => todo!(),
+                                    }
+                                })
+                            }).join()
+                        });
+
+                        if let Ok(Ok(Some(model))) = model {
+                            self.model.global_import(model);
+                        }
+                    }
+
+                    if !ui.min_rect().expand(20.0).contains(ui.input().pointer.interact_pos().unwrap_or_default()) {
+                        ui.close_menu();
+                    }
+                });
 
                 ui.separator();
 

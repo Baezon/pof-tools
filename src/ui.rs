@@ -609,12 +609,12 @@ impl PofToolsGui {
             Ui::add_space(ui, 6.0);
             ui.horizontal(|ui| {
                 ui.menu_button("File", |ui| {
+                    ui.style_mut().spacing.item_spacing.y = 1.0;
+
                     if ui.button("Open").clicked() {
                         self.start_loading_model(None);
                         ui.output().cursor_icon = egui::CursorIcon::Wait;
                     }
-
-                    ui.add_space(1.0); // menu items have one pixel of overlap... make a bug report?
 
                     if ui
                         .add_enabled(self.model.errors.is_empty(), Button::new("Save"))
@@ -632,48 +632,19 @@ impl PofToolsGui {
                         }
                     }
 
-                    ui.add_space(1.0); // menu items have one pixel of overlap... make a bug report?
-
                     if ui.button("Global Import").on_hover_text("Deletes data from the existing model and replaces it with the target model's. \n\
                                                                 Replaces mass, moment of inertia, weapon points, docking points, thrusters, glow points, \
                                                                 special points, turrets (only exact base and gun object name matches are retained), \
                                                                 paths, eye points, and insignia.").clicked() {
 
-                        let model = crossbeam::thread::scope(|s| {
-                            s.spawn(|_| {
-                                let path =
-                                    FileDialog::new()
-                                        .add_filter("All supported files", &["pof", "dae", "gltf", "glb"])
-                                        .add_filter("COLLADA", &["dae"])
-                                        .add_filter("Parallax Object File", &["pof"])
-                                        .add_filter("GL Transmission Format", &["gltf", "glb"])
-                                        .show_open_single_file()
-                                        .unwrap();
+                        let model = crossbeam::thread::scope(|s| s.spawn(|_| PofToolsGui::load_model(None)).join().unwrap()).unwrap();
 
-                                path.map(|path| {
-                                    let ext = path.extension().map(|ext| ext.to_ascii_lowercase());
-                                    let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
-                                    info!("Attempting to load {}", filename);
-                                    match ext.as_ref().and_then(|ext| ext.to_str()) {
-                                        Some("dae") => pof::parse_dae(path),
-                                        Some("gltf" | "glb") => pof::parse_gltf(path),
-                                        Some("pof") => {
-                                            let file = File::open(&path).expect("TODO invalid file or smth i dunno");
-                                            let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
-                                            Box::new(parser.parse(path).expect("TODO invalid pof file or smth i dunno"))
-                                        }
-                                        _ => todo!(),
-                                    }
-                                })
-                            }).join()
-                        });
-
-                        if let Ok(Ok(Some(model))) = model {
+                        if let Ok(Some(model)) = model {
                             self.model.global_import(model);
                         }
                     }
 
-                    if !ui.min_rect().expand(20.0).contains(ui.input().pointer.interact_pos().unwrap_or_default()) {
+                    if ui.input().pointer.interact_pos().map_or(false, |pos| !ui.min_rect().expand(20.0).contains(pos)) {
                         ui.close_menu();
                     }
                 });

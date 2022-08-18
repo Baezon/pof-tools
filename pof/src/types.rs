@@ -2239,7 +2239,7 @@ impl Model {
         }
     }
 
-    pub fn global_import(&mut self, import_model: Box<Model>) {
+    pub fn global_import(&mut self, mut import_model: Box<Model>) {
         self.header.mass = import_model.header.mass;
         self.header.moment_of_inertia = import_model.header.moment_of_inertia;
         self.primary_weps = import_model.primary_weps;
@@ -2253,22 +2253,20 @@ impl Model {
         self.insignias = import_model.insignias;
 
         // turrets are more complicated, exact base + arm object name matches only
-        let mut turrets_to_keep: Vec<Turret> = vec![];
-
-        for mut turret in import_model.turrets {
+        import_model.turrets.retain_mut(|turret| {
             for turret2 in &self.turrets {
                 if import_model.sub_objects[turret.base_obj].name == self.sub_objects[turret2.base_obj].name
                     && import_model.sub_objects[turret.gun_obj].name == self.sub_objects[turret2.gun_obj].name
                 {
                     turret.base_obj = turret2.base_obj;
                     turret.gun_obj = turret2.gun_obj;
-                    turrets_to_keep.push(turret);
-                    break;
+                    return true;
                 }
             }
-        }
+            false
+        });
+        self.turrets = import_model.turrets;
 
-        self.turrets = turrets_to_keep;
         self.recheck_warnings(Set::All);
         self.recheck_errors(Set::All);
     }

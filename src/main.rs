@@ -378,42 +378,45 @@ impl PofToolsGui {
         out
     }
 
-    // opens a thread which opens the dialog and starts parsing a model
+    /// Opens a dialog to load a model. Must be run off the main thread.
+    fn load_model(filepath: Option<PathBuf>) -> Result<Option<Box<Model>>, String> {
+        let model = std::panic::catch_unwind(move || {
+            let path = filepath.or_else(|| {
+                FileDialog::new()
+                    .add_filter("All supported files", &["pof", "dae", "gltf", "glb"])
+                    .add_filter("COLLADA", &["dae"])
+                    .add_filter("Parallax Object File", &["pof"])
+                    .add_filter("GL Transmission Format", &["gltf", "glb"])
+                    .show_open_single_file()
+                    .unwrap()
+            });
+
+            path.map(|path| {
+                let ext = path.extension().map(|ext| ext.to_ascii_lowercase());
+                let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
+                info!("Attempting to load {}", filename);
+                match ext.as_ref().and_then(|ext| ext.to_str()) {
+                    Some("dae") => pof::parse_dae(path),
+                    Some("gltf" | "glb") => pof::parse_gltf(path),
+                    Some("pof") => {
+                        let file = File::open(&path).expect("TODO invalid file or smth i dunno");
+                        let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
+                        Box::new(parser.parse(path).expect("TODO invalid pof file or smth i dunno"))
+                    }
+                    _ => todo!(),
+                }
+            })
+        });
+        model.map_err(|panic| *panic.downcast().unwrap())
+    }
+
+    /// opens a thread which opens the dialog and starts parsing a model
     fn start_loading_model(&mut self, filepath: Option<PathBuf>) {
         let (sender, receiver) = std::sync::mpsc::channel();
         self.model_loading_thread = Some(receiver);
 
         // the model loading thread
-        std::thread::spawn(move || {
-            let model = std::panic::catch_unwind(move || {
-                let path = filepath.or_else(|| {
-                    FileDialog::new()
-                        .add_filter("All supported files", &["pof", "dae", "gltf", "glb"])
-                        .add_filter("COLLADA", &["dae"])
-                        .add_filter("Parallax Object File", &["pof"])
-                        .add_filter("GL Transmission Format", &["gltf", "glb"])
-                        .show_open_single_file()
-                        .unwrap()
-                });
-
-                path.map(|path| {
-                    let ext = path.extension().map(|ext| ext.to_ascii_lowercase());
-                    let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
-                    info!("Attempting to load {}", filename);
-                    match ext.as_ref().and_then(|ext| ext.to_str()) {
-                        Some("dae") => pof::parse_dae(path),
-                        Some("gltf" | "glb") => pof::parse_gltf(path),
-                        Some("pof") => {
-                            let file = File::open(&path).expect("TODO invalid file or smth i dunno");
-                            let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
-                            Box::new(parser.parse(path).expect("TODO invalid pof file or smth i dunno"))
-                        }
-                        _ => todo!(),
-                    }
-                })
-            });
-            let _ = sender.send(model.map_err(|panic| *panic.downcast().unwrap()));
-        });
+        std::thread::spawn(move || drop(sender.send(Self::load_model(filepath))));
     }
 
     fn handle_model_loading_thread(&mut self, display: &Display) {

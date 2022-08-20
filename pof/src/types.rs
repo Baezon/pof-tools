@@ -1403,7 +1403,7 @@ impl Debug for Turret {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Insignia {
     pub detail_level: u32,
     pub vertices: Vec<Vec3d>,
@@ -2245,6 +2245,38 @@ impl Model {
                 }
             }
         }
+    }
+
+    pub fn global_import(&mut self, mut import_model: Box<Model>) {
+        self.header.mass = import_model.header.mass;
+        self.header.moment_of_inertia = import_model.header.moment_of_inertia;
+        self.primary_weps = import_model.primary_weps;
+        self.secondary_weps = import_model.secondary_weps;
+        self.docking_bays = import_model.docking_bays;
+        self.thruster_banks = import_model.thruster_banks;
+        self.glow_banks = import_model.glow_banks;
+        self.special_points = import_model.special_points;
+        self.paths = import_model.paths;
+        self.eye_points = import_model.eye_points;
+        self.insignias = import_model.insignias;
+
+        // turrets are more complicated, exact base + arm object name matches only
+        import_model.turrets.retain_mut(|turret| {
+            for turret2 in &self.turrets {
+                if import_model.sub_objects[turret.base_obj].name == self.sub_objects[turret2.base_obj].name
+                    && import_model.sub_objects[turret.gun_obj].name == self.sub_objects[turret2.gun_obj].name
+                {
+                    turret.base_obj = turret2.base_obj;
+                    turret.gun_obj = turret2.gun_obj;
+                    return true;
+                }
+            }
+            false
+        });
+        self.turrets = import_model.turrets;
+
+        self.recheck_warnings(Set::All);
+        self.recheck_errors(Set::All);
     }
 }
 

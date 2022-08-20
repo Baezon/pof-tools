@@ -663,6 +663,9 @@ impl PofToolsGui {
 
                         if let Ok(Some(model)) = model {
                             self.model.global_import(model);
+                            self.tree_view_selection = TreeValue::Header;
+                            self.ui_state.refresh_properties_panel(&self.model);
+                            self.viewport_3d_dirty = true;
                         }
                     }
 

@@ -3,9 +3,8 @@ use glium::{
     texture::{RawImage2d, SrgbTexture2d},
     Display,
 };
-use native_dialog::FileDialog;
-use pof::{Error, Model, Parser, SubObject, TextureId, Vec3d, Version, Warning};
-use std::{collections::HashMap, fs::File, sync::mpsc::Receiver};
+use pof::{Error, Model, SubObject, TextureId, Vec3d, Version, Warning};
+use std::{collections::HashMap, sync::mpsc::Receiver};
 
 use eframe::egui::{self, Button, TextStyle, Ui};
 use pof::ObjectId;

@@ -13,6 +13,8 @@ use crate::ui::{
     TextureTreeValue, ThrusterTreeValue, TreeValue, TurretTreeValue, UiState, WeaponTreeValue, ERROR_RED, LIGHT_BLUE, LIGHT_ORANGE, WARNING_YELLOW,
 };
 
+const NON_BREAK_SPACE: char = '\u{00A0}';
+
 enum IndexingButtonsResponse {
     Switch(usize),
     Copy(usize),
@@ -872,6 +874,15 @@ impl PofToolsGui {
                     self.ui_state.display_bbox = response.hovered() || response.has_focus() || display_bbox;
                 });
 
+                let bbox = &self.model.header.bbox;
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!("Width:{NON_BREAK_SPACE}{:.1}", bbox.x_width()));
+                    ui.label(format!("Height:{NON_BREAK_SPACE}{:.1}", bbox.y_height()));
+                    ui.label(format!("Length:{NON_BREAK_SPACE}{:.1}", bbox.z_length()));
+                });
+
+                ui.separator();
+
                 let mut radius_changed = false;
                 let mut display_radius = false;
                 ui.horizontal(|ui| {
@@ -1212,7 +1223,16 @@ impl PofToolsGui {
                     self.model.recheck_warnings(One(Warning::InvertedBBox(selected_id)));
                 }
 
-                ui.add_space(5.0);
+                if let Some(id) = selected_id {
+                    let bbox = &self.model.sub_objects[id].bbox;
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(format!("Width:{NON_BREAK_SPACE}{:.1}", bbox.x_width()));
+                        ui.label(format!("Height:{NON_BREAK_SPACE}{:.1}", bbox.y_height()));
+                        ui.label(format!("Length:{NON_BREAK_SPACE}{:.1}", bbox.z_length()));
+                    });
+                }
+
+                ui.separator();
 
                 // Offset edit ================================================================
 

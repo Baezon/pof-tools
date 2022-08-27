@@ -2262,12 +2262,12 @@ impl Model {
 
         // turrets are more complicated, exact base + arm object name matches only
         import_model.turrets.retain_mut(|turret| {
-            for turret2 in &self.turrets {
-                if import_model.sub_objects[turret.base_obj].name == self.sub_objects[turret2.base_obj].name
-                    && import_model.sub_objects[turret.gun_obj].name == self.sub_objects[turret2.gun_obj].name
+            for subobj in &self.sub_objects {
+                if import_model.sub_objects[turret.base_obj].name == subobj.name
+                    && self.get_obj_id_by_name(&import_model.sub_objects[turret.gun_obj].name).is_some()
                 {
-                    turret.base_obj = turret2.base_obj;
-                    turret.gun_obj = turret2.gun_obj;
+                    turret.base_obj = subobj.obj_id;
+                    turret.gun_obj = self.get_obj_id_by_name(&import_model.sub_objects[turret.gun_obj].name).unwrap();
                     return true;
                 }
             }

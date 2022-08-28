@@ -693,14 +693,12 @@ impl Serialize for ShieldNode {
     }
 }
 
-mk_struct! {
-    #[derive(Debug, Clone)]
-    pub struct SpecialPoint {
-        pub name: String,
-        pub properties: String,
-        pub position: Vec3d,
-        pub radius: f32,
-    }
+#[derive(Debug, Clone)]
+pub struct SpecialPoint {
+    pub name: String,
+    pub properties: String,
+    pub position: Vec3d,
+    pub radius: f32,
 }
 impl Default for SpecialPoint {
     fn default() -> Self {
@@ -710,6 +708,18 @@ impl Default for SpecialPoint {
             position: Default::default(),
             radius: 1.0,
         }
+    }
+}
+impl Serialize for SpecialPoint {
+    fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
+        if !self.name.starts_with('$') {
+            format!("${}", self.name).write_to(w)?;
+        } else {
+            self.name.write_to(w)?;
+        }
+        self.properties.write_to(w)?;
+        self.position.write_to(w)?;
+        self.radius.write_to(w)
     }
 }
 

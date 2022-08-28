@@ -11,7 +11,7 @@ use itertools::Itertools;
 
 use byteorder::{WriteBytesExt, LE};
 pub use dae_parser::UpAxis;
-use glm::{Mat3x3, TMat4, Vec3};
+use glm::{TMat4, Vec3};
 use nalgebra::Matrix3;
 use nalgebra_glm::Mat4;
 extern crate nalgebra_glm as glm;
@@ -2154,18 +2154,14 @@ impl Model {
                 subobjects[id].children.iter().for_each(|id| accumulate_moi_recurse(subobjects, *id, moi));
             }
 
-            let mut new_moi: Matrix3<f64> = Matrix3::identity();
+            let mut new_moi: Matrix3<f64> = Matrix3::zeros();
 
             accumulate_moi_recurse(&self.sub_objects, detail_0, &mut new_moi);
 
             let point_mass = self.header.mass as f64 / num_verts as f64;
             new_moi *= point_mass;
             new_moi = new_moi.try_inverse().unwrap();
-            self.header.moment_of_inertia = Mat3d {
-                rvec: Vec3d::new(new_moi.column(0).x as f32, new_moi.column(0).y as f32, new_moi.column(0).z as f32),
-                uvec: Vec3d::new(new_moi.column(1).x as f32, new_moi.column(1).y as f32, new_moi.column(1).z as f32),
-                fvec: Vec3d::new(new_moi.column(2).x as f32, new_moi.column(2).y as f32, new_moi.column(2).z as f32),
-            };
+            self.header.moment_of_inertia = new_moi.cast::<f32>().into();
         }
     }
 

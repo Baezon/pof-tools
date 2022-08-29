@@ -1243,6 +1243,9 @@ impl PofToolsGui {
 
                 ui.label("Properties:");
                 if let Some(id) = selected_id {
+                    if (&self.model.sub_objects[id].properties).contains("$uvec") && (&self.model.sub_objects[id].properties).contains("$fvec") {
+                        self.ui_state.display_uvec_fvec = true;
+                    }
                     ui.add(egui::TextEdit::multiline(&mut self.model.sub_objects[id].properties).desired_rows(2));
                 } else {
                     ui.add_enabled(false, egui::TextEdit::multiline(&mut blank_string).desired_rows(2));

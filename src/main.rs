@@ -70,6 +70,11 @@ struct GlLollipops {
     stick_indices: glium::index::NoIndices,
 }
 
+struct GlArrowhead {
+    color: [f32; 4],
+    transform: VertexBuffer<InstanceMatrix>,
+}
+
 struct GlLollipopsBuilder {
     color: [f32; 4], // RGBA
     lolly_vertices: Vec<InstanceMatrix>,
@@ -652,6 +657,9 @@ fn main() {
     let icosphere_verts = glium::VertexBuffer::new(&display, &primitives::SPHERE_VERTS).unwrap();
     let icosphere_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::TrianglesList, &primitives::SPHERE_INDICES).unwrap();
 
+    let arrowhead_verts = glium::VertexBuffer::new(&display, &primitives::ARROWHEAD_VERTS).unwrap();
+    let arrowhead_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::TrianglesList, &primitives::ARROWHEAD_INDICES).unwrap();
+
     pt_gui.camera_heading = 2.7;
     pt_gui.camera_pitch = -0.4;
     pt_gui.camera_offset = Vec3d::ZERO;
@@ -1057,7 +1065,7 @@ fn main() {
                     // don't display lollipops if you're in header or subobjects, unless display_origin is on, since that's the only lollipop they have
                     let display_lollipops = (!matches!(pt_gui.ui_state.tree_view_selection, TreeSelection::Header)
                         && !matches!(pt_gui.ui_state.tree_view_selection, TreeSelection::SubObjects(_)))
-                        || pt_gui.display_origin;
+                        || pt_gui.display_origin || pt_gui.display_uvec_fvec;
 
                     if display_lollipops {
                         for lollipop_group in &pt_gui.lollipops {
@@ -1116,6 +1124,14 @@ fn main() {
                                     )
                                     .unwrap();
                             }
+                        }
+                        for arrowhead in &pt_gui.arrowheads {
+                            let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * view_mat).into();
+                            let uniforms = glium::uniform! {
+                                vert_matrix: vert_matrix,
+                                lollipop_color: arrowhead.color,
+                            };
+                            target.draw((&arrowhead.transform, &arrowhead_verts), &arrowhead_indices, &lollipop_shader, &uniforms, &lollipop_rev_depth_params).unwrap();
                         }
                     }
 
@@ -1298,16 +1314,37 @@ impl PofToolsGui {
 
                     match model.sub_objects[obj_id].uvec_fvec() {
                         Some((uvec, fvec)) => {
+                            // Set up arrowhead sticks
                             // Blue lollipop for uvec
                             let mut lollipop_uvec = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_BANK_COLOR);
-                            lollipop_uvec.push(pos, uvec * 7., 0.25);
+                            let stick_length = 7.;
+                            let fvec_colour = [0.15, 1.0, 0.15, 0.15];
+                            lollipop_uvec.push(pos, uvec * stick_length, 0.);
                             let lollipop_uvec = lollipop_uvec.finish(display);
                             self.lollipops.push(lollipop_uvec);
                             // Green lollipop for fvec
-                            let mut lollipop_fvec = GlLollipopsBuilder::new([0.15, 1.0, 0.15, 0.15]);
-                            lollipop_fvec.push(pos, fvec * 7., 0.25);
+                            let mut lollipop_fvec = GlLollipopsBuilder::new(fvec_colour);
+                            lollipop_fvec.push(pos, fvec * stick_length, 0.);
                             let lollipop_fvec = lollipop_fvec.finish(display);
                             self.lollipops.push(lollipop_fvec);
+                            let uvec_pos = pos + uvec * stick_length;
+                            let fvec_pos = pos + fvec * stick_length;
+                            let uvec_matrix: [[f32; 4]; 4] = {
+                                let m = glm::translation::<f32>(&uvec_pos.into());
+                                m.into()
+                            };
+                            let fvec_matrix: [[f32; 4]; 4] = {
+                                let m = glm::translation::<f32>(&fvec_pos.into());
+                                m.into()
+                            };
+                            self.arrowheads.push(GlArrowhead {
+                                color: LOLLIPOP_SELECTED_BANK_COLOR,
+                                transform: VertexBuffer::new(display, [InstanceMatrix { world_matrix: uvec_matrix }].as_slice()).unwrap(),
+                            });
+                            self.arrowheads.push(GlArrowhead {
+                                color: fvec_colour,
+                                transform: VertexBuffer::new(display, [InstanceMatrix { world_matrix: fvec_matrix }].as_slice()).unwrap(),
+                            });
                         },
                         None => ()
                     }

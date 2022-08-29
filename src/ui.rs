@@ -12,7 +12,7 @@ use std::{
 use eframe::egui::{self, Button, TextStyle, Ui};
 use pof::ObjectId;
 
-use crate::{ui_properties_panel::PropertiesPanel, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers, POF_TOOLS_VERSION};
+use crate::{ui_properties_panel::PropertiesPanel, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlArrowhead, GlObjectBuffers, POF_TOOLS_VERSION};
 
 #[derive(PartialEq, Hash, Debug, Clone, Copy)]
 pub(crate) enum TreeSelection {
@@ -434,6 +434,7 @@ pub(crate) struct UiState {
     pub display_radius: bool,
     pub display_bbox: bool,
     pub display_origin: bool,
+    pub display_uvec_fvec: bool,
     pub move_only_offset: bool,
 }
 
@@ -460,6 +461,7 @@ pub(crate) struct PofToolsGui {
     pub buffer_shield: Option<GlBufferedShield>, // the shield, similar to the above
     pub buffer_insignias: Vec<GlBufferedInsignia>, // the insignias, similar to the above
     pub lollipops: Vec<GlLollipops>, // the current set of lollipops being being drawn, grouped by color, and recalculated with viewport_3d_dirty above
+    pub arrowheads: Vec<GlArrowhead>, // The arrowheads to draw
 }
 impl std::ops::Deref for PofToolsGui {
     type Target = UiState;
@@ -494,6 +496,7 @@ impl PofToolsGui {
             buffer_shield: Default::default(),
             buffer_insignias: Default::default(),
             lollipops: Default::default(),
+            arrowheads: Default::default(),
         }
     }
 

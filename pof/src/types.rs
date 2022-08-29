@@ -11,7 +11,8 @@ use itertools::Itertools;
 
 use byteorder::{WriteBytesExt, LE};
 pub use dae_parser::UpAxis;
-use glm::{Mat3x3, TMat4, Vec3};
+use glm::{TMat4, Vec3};
+use nalgebra::Matrix3;
 use nalgebra_glm::Mat4;
 extern crate nalgebra_glm as glm;
 
@@ -431,18 +432,6 @@ impl Mat3d {
         uvec: Vec3d::new(0., 1., 0.),
         fvec: Vec3d::new(0., 0., 1.),
     };
-
-    pub fn add_point_mass_moi(&mut self, pos: Vec3d) {
-        self.rvec.x += pos.y * pos.y + pos.z * pos.z;
-        self.rvec.y -= pos.x * pos.y;
-        self.rvec.z -= pos.x * pos.z;
-        self.uvec.x -= pos.x * pos.y;
-        self.uvec.y += pos.x * pos.x + pos.z * pos.z;
-        self.uvec.z -= pos.y * pos.z;
-        self.fvec.x -= pos.x * pos.z;
-        self.fvec.y -= pos.y * pos.z;
-        self.fvec.z += pos.x * pos.x + pos.y * pos.y;
-    }
 }
 
 #[derive(Default, Clone, Copy, PartialEq)]
@@ -2158,18 +2147,31 @@ impl Model {
         if let Some(&detail_0) = self.header.detail_levels.first() {
             let num_verts = sum_verts_recurse(&self.sub_objects, detail_0);
 
-            let point_mass = self.header.mass / num_verts as f32;
+            fn add_point_mass_moi(moi: &mut Matrix3<f64>, pos: Vec3d) {
+                moi.column_mut(0).x += (pos.y * pos.y + pos.z * pos.z) as f64;
+                moi.column_mut(0).y -= (pos.x * pos.y) as f64;
+                moi.column_mut(0).z -= (pos.x * pos.z) as f64;
+                moi.column_mut(1).x -= (pos.x * pos.y) as f64;
+                moi.column_mut(1).y += (pos.x * pos.x + pos.z * pos.z) as f64;
+                moi.column_mut(1).z -= (pos.y * pos.z) as f64;
+                moi.column_mut(2).x -= (pos.x * pos.z) as f64;
+                moi.column_mut(2).y -= (pos.y * pos.z) as f64;
+                moi.column_mut(2).z += (pos.x * pos.x + pos.y * pos.y) as f64;
+            }
 
-            fn accumulate_moi_recurse(subobjects: &ObjVec<SubObject>, id: ObjectId, moi: &mut Mat3d) {
-                subobjects[id].bsp_data.verts.iter().for_each(|vert| moi.add_point_mass_moi(*vert));
+            fn accumulate_moi_recurse(subobjects: &ObjVec<SubObject>, id: ObjectId, moi: &mut Matrix3<f64>) {
+                subobjects[id].bsp_data.verts.iter().for_each(|vert| add_point_mass_moi(moi, *vert));
                 subobjects[id].children.iter().for_each(|id| accumulate_moi_recurse(subobjects, *id, moi));
             }
 
-            accumulate_moi_recurse(&self.sub_objects, detail_0, &mut self.header.moment_of_inertia);
+            let mut new_moi: Matrix3<f64> = Matrix3::zeros();
 
-            let mut glm_mat: Mat3x3 = self.header.moment_of_inertia.into();
-            glm_mat *= point_mass;
-            self.header.moment_of_inertia = glm_mat.try_inverse().unwrap().into();
+            accumulate_moi_recurse(&self.sub_objects, detail_0, &mut new_moi);
+
+            let point_mass = self.header.mass as f64 / num_verts as f64;
+            new_moi *= point_mass;
+            new_moi = new_moi.try_inverse().unwrap();
+            self.header.moment_of_inertia = new_moi.cast::<f32>().into();
         }
     }
 

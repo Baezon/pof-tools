@@ -8,8 +8,8 @@ extern crate nalgebra_glm as glm;
 extern crate simplelog;
 
 use crate::ui::{
-    DisplayMode, DockingSelection, EyeSelection, GlowSelection, InsigniaSelection, PathSelection, SpecialPointSelection, SubObjectSelection,
-    TextureSelection, ThrusterSelection, TurretSelection, WeaponSelection,
+    DisplayMode, DockingTreeValue, EyeTreeValue, GlowTreeValue, InsigniaTreeValue, PathTreeValue, SpecialPointTreeValue, SubObjectTreeValue,
+    TextureTreeValue, ThrusterTreeValue, TurretTreeValue, WeaponTreeValue,
 };
 use egui::{Color32, RichText, TextEdit};
 use glium::{
@@ -28,7 +28,7 @@ use std::{
     path::PathBuf,
     sync::mpsc::TryRecvError,
 };
-use ui::{PofToolsGui, Set::*, TreeSelection};
+use ui::{PofToolsGui, TreeValue};
 
 mod primitives;
 mod ui;
@@ -368,7 +368,7 @@ impl PofToolsGui {
                     .show_save_single_file();
                 if let Ok(Some(path)) = path {
                     let mut file = File::create(path.clone()).unwrap();
-                    match path.extension() {
+                    match path.extension().map(|ext| ext.to_ascii_lowercase()) {
                         Some(s) if s == "glb" => model.write_gltf(&mut file, true).unwrap(),
                         Some(s) if s == "gltf" => model.write_gltf(&mut file, false).unwrap(),
                         Some(s) if s == "dae" => model.write_dae(&mut file).unwrap(),
@@ -383,42 +383,45 @@ impl PofToolsGui {
         out
     }
 
-    // opens a thread which opens the dialog and starts parsing a model
+    /// Opens a dialog to load a model. Must be run off the main thread.
+    fn load_model(filepath: Option<PathBuf>) -> Result<Option<Box<Model>>, String> {
+        let model = std::panic::catch_unwind(move || {
+            let path = filepath.or_else(|| {
+                FileDialog::new()
+                    .add_filter("All supported files", &["pof", "dae", "gltf", "glb"])
+                    .add_filter("COLLADA", &["dae"])
+                    .add_filter("Parallax Object File", &["pof"])
+                    .add_filter("GL Transmission Format", &["gltf", "glb"])
+                    .show_open_single_file()
+                    .unwrap()
+            });
+
+            path.map(|path| {
+                let ext = path.extension().map(|ext| ext.to_ascii_lowercase());
+                let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
+                info!("Attempting to load {}", filename);
+                match ext.as_ref().and_then(|ext| ext.to_str()) {
+                    Some("dae") => pof::parse_dae(path),
+                    Some("gltf" | "glb") => pof::parse_gltf(path),
+                    Some("pof") => {
+                        let file = File::open(&path).expect("TODO invalid file or smth i dunno");
+                        let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
+                        Box::new(parser.parse(path).expect("TODO invalid pof file or smth i dunno"))
+                    }
+                    _ => todo!(),
+                }
+            })
+        });
+        model.map_err(|panic| *panic.downcast().unwrap())
+    }
+
+    /// opens a thread which opens the dialog and starts parsing a model
     fn start_loading_model(&mut self, filepath: Option<PathBuf>) {
         let (sender, receiver) = std::sync::mpsc::channel();
         self.model_loading_thread = Some(receiver);
 
         // the model loading thread
-        std::thread::spawn(move || {
-            let model = std::panic::catch_unwind(move || {
-                let path = filepath.or_else(|| {
-                    FileDialog::new()
-                        .add_filter("All supported files", &["pof", "dae", "gltf", "glb"])
-                        .add_filter("COLLADA", &["dae"])
-                        .add_filter("Parallax Object File", &["pof"])
-                        .add_filter("GL Transmission Format", &["gltf", "glb"])
-                        .show_open_single_file()
-                        .unwrap()
-                });
-
-                path.map(|path| {
-                    let ext = path.extension().map(|ext| ext.to_ascii_lowercase());
-                    let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
-                    info!("Attempting to load {}", filename);
-                    match ext.as_ref().and_then(|ext| ext.to_str()) {
-                        Some("dae") => pof::parse_dae(path),
-                        Some("gltf" | "glb") => pof::parse_gltf(path),
-                        Some("pof") => {
-                            let file = File::open(&path).expect("TODO invalid file or smth i dunno");
-                            let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
-                            Box::new(parser.parse(path).expect("TODO invalid pof file or smth i dunno"))
-                        }
-                        _ => todo!(),
-                    }
-                })
-            });
-            let _ = sender.send(model.map_err(|panic| *panic.downcast().unwrap()));
-        });
+        std::thread::spawn(move || drop(sender.send(Self::load_model(filepath))));
     }
 
     fn handle_model_loading_thread(&mut self, display: &Display) {
@@ -461,9 +464,8 @@ impl PofToolsGui {
 
         self.maybe_recalculate_3d_helpers(display);
 
-        self.warnings.clear();
-        PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All);
-        PofToolsGui::recheck_errors(&mut self.errors, &self.model, All);
+        self.model.recheck_warnings(pof::Set::All);
+        self.model.recheck_errors(pof::Set::All);
         self.ui_state.tree_view_selection = Default::default();
         self.ui_state.refresh_properties_panel(&self.model);
         self.camera_heading = 2.7;
@@ -759,15 +761,15 @@ fn main() {
                     // dim down the bright bits when lollipops are on screen
                     let light_color;
                     match &pt_gui.ui_state.tree_view_selection {
-                        TreeSelection::Thrusters(_)
-                        | TreeSelection::Weapons(_)
-                        | TreeSelection::DockingBays(_)
-                        | TreeSelection::Glows(_)
-                        | TreeSelection::SpecialPoints(_)
-                        | TreeSelection::Turrets(_)
-                        | TreeSelection::Paths(_)
-                        | TreeSelection::EyePoints(_)
-                        | TreeSelection::VisualCenter => {
+                        TreeValue::Thrusters(_)
+                        | TreeValue::Weapons(_)
+                        | TreeValue::DockingBays(_)
+                        | TreeValue::Glows(_)
+                        | TreeValue::SpecialPoints(_)
+                        | TreeValue::Turrets(_)
+                        | TreeValue::Paths(_)
+                        | TreeValue::EyePoints(_)
+                        | TreeValue::VisualCenter => {
                             light_color = [0.3, 0.3, 0.3f32];
                             if pt_gui.display_mode == DisplayMode::Wireframe {
                                 dark_color = [0.05, 0.05, 0.05f32];
@@ -871,10 +873,10 @@ fn main() {
                     }
 
                     // maybe draw the insignias
-                    if let TreeSelection::Insignia(insignia_select) = pt_gui.tree_view_selection {
+                    if let TreeValue::Insignia(insignia_select) = pt_gui.tree_view_selection {
                         let (current_detail_level, current_insignia_idx) = match insignia_select {
-                            InsigniaSelection::Header => (0, None),
-                            InsigniaSelection::Insignia(idx) => (pt_gui.model.insignias[idx].detail_level, Some(idx)),
+                            InsigniaTreeValue::Header => (0, None),
+                            InsigniaTreeValue::Insignia(idx) => (pt_gui.model.insignias[idx].detail_level, Some(idx)),
                         };
 
                         for (i, insig_buffer) in pt_gui.buffer_insignias.iter().enumerate() {
@@ -917,7 +919,7 @@ fn main() {
                     }
 
                     // maybe draw the shield
-                    if let TreeSelection::Shield = pt_gui.tree_view_selection {
+                    if let TreeValue::Shield = pt_gui.tree_view_selection {
                         if let Some(shield) = &pt_gui.buffer_shield {
                             let matrix = view_mat;
                             let norm_matrix: [[f32; 3]; 3] = glm::mat4_to_mat3(&matrix).try_inverse().unwrap().transpose().into();
@@ -972,7 +974,7 @@ fn main() {
                     }
 
                     let mut obj_id = None; // None also indicates the header being possibly selected
-                    if let TreeSelection::SubObjects(SubObjectSelection::SubObject(id)) = pt_gui.tree_view_selection {
+                    if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = pt_gui.tree_view_selection {
                         obj_id = Some(id);
 
                         //      DEBUG - Draw BSP node bounding boxes
@@ -1072,13 +1074,14 @@ fn main() {
                     }
 
                     // don't display lollipops if you're in header or subobjects, unless display_origin is on, since that's the only lollipop they have
-                    let display_lollipops = (!matches!(pt_gui.ui_state.tree_view_selection, TreeSelection::Header)
-                        && !matches!(pt_gui.ui_state.tree_view_selection, TreeSelection::SubObjects(_)))
+
+                    let display_lollipops = (!matches!(pt_gui.ui_state.tree_view_selection, TreeValue::Header)
+                        && !matches!(pt_gui.ui_state.tree_view_selection, TreeValue::SubObjects(_)))
                         || pt_gui.display_origin || pt_gui.display_uvec_fvec;
 
                     if display_lollipops {
                         for lollipop_group in &pt_gui.lollipops {
-                            if let TreeSelection::Paths(_) = pt_gui.ui_state.tree_view_selection {
+                            if let TreeValue::Paths(_) = pt_gui.ui_state.tree_view_selection {
                                 lollipop_params.blend = glium::Blend::alpha_blending();
                             } else {
                                 lollipop_params.blend = ADDITIVE_BLEND;
@@ -1109,7 +1112,7 @@ fn main() {
                                 )
                                 .unwrap();
 
-                            if !matches!(pt_gui.ui_state.tree_view_selection, TreeSelection::Paths(_)) {
+                            if !matches!(pt_gui.ui_state.tree_view_selection, TreeValue::Paths(_)) {
                                 // ...then draw the lollipops with reverse depth order, darker
                                 // this gives the impression that the lollipops are dimly visible through the model
                                 // (dont do it for path lollipops, they're busy enough)
@@ -1232,14 +1235,14 @@ fn main() {
 
 // based on the current selection which submodels should be displayed
 // TODO show destroyed models
-fn get_list_of_display_subobjects(model: &Model, tree_selection: TreeSelection, last_selected_subobj: Option<ObjectId>) -> ObjVec<bool> {
+fn get_list_of_display_subobjects(model: &Model, tree_selection: TreeValue, last_selected_subobj: Option<ObjectId>) -> ObjVec<bool> {
     let mut out = ObjVec(vec![false; model.sub_objects.len()]);
 
     if model.sub_objects.is_empty() {
         return out;
     }
 
-    if let TreeSelection::Insignia(InsigniaSelection::Insignia(idx)) = tree_selection {
+    if let TreeValue::Insignia(InsigniaTreeValue::Insignia(idx)) = tree_selection {
         // show the LOD objects according to the detail level of the currently selected insignia
         for (i, sub_object) in model.sub_objects.iter().enumerate() {
             out.0[i] = model.is_obj_id_ancestor(sub_object.obj_id, model.header.detail_levels[model.insignias[idx].detail_level as usize])
@@ -1252,17 +1255,11 @@ fn get_list_of_display_subobjects(model: &Model, tree_selection: TreeSelection, 
             top_level_parent = id;
         }
 
-        fn display_subobject_recursive(display_subobjects: &mut ObjVec<bool>, subobjects: &ObjVec<SubObject>, id: ObjectId) {
-            display_subobjects[id] = true;
-
-            for child_id in subobjects[id].children() {
-                if !subobjects[*child_id].is_destroyed_model() {
-                    display_subobject_recursive(display_subobjects, subobjects, *child_id);
-                }
+        model.do_for_recursive_subobj_children(top_level_parent, &mut |subobj| {
+            if !subobj.is_destroyed_model() {
+                out[subobj.obj_id] = true;
             }
-        }
-
-        display_subobject_recursive(&mut out, &model.sub_objects, top_level_parent);
+        });
 
         // if they have debris selected show all the debris
         if model.sub_objects[last_selected_subobj].is_debris_model {
@@ -1282,7 +1279,7 @@ impl PofToolsGui {
         }
 
         // always recalculate for glowpoint sim, TODO maybe make that a little smarter
-        if !(self.ui_state.viewport_3d_dirty || (self.glow_point_simulation && matches!(self.tree_view_selection, TreeSelection::Glows(_)))) {
+        if !(self.ui_state.viewport_3d_dirty || (self.glow_point_simulation && matches!(self.tree_view_selection, TreeValue::Glows(_)))) {
             return;
         }
 
@@ -1305,7 +1302,7 @@ impl PofToolsGui {
         // push the according lollipop positions/normals based on the points positions/normals
         // push into 3 separate vectors, for 3 separate colors depending on selection state
         match self.ui_state.tree_view_selection {
-            TreeSelection::SubObjects(SubObjectSelection::SubObject(obj_id)) => {
+            TreeValue::SubObjects(SubObjectTreeValue::SubObject(obj_id)) => {
                 for buffers in &mut self.buffer_objects {
                     if buffers.obj_id == obj_id {
                         for buffer in &mut buffers.buffers {
@@ -1366,7 +1363,7 @@ impl PofToolsGui {
                     }
                 }
             }
-            TreeSelection::Textures(TextureSelection::Texture(tex)) => {
+            TreeValue::Textures(TextureTreeValue::Texture(tex)) => {
                 for buffers in &mut self.buffer_objects {
                     for buffer in &mut buffers.buffers {
                         if buffer.texture_id == Some(tex) {
@@ -1375,12 +1372,12 @@ impl PofToolsGui {
                     }
                 }
             }
-            TreeSelection::Thrusters(thruster_selection) => {
+            TreeValue::Thrusters(thruster_selection) => {
                 let mut selected_bank = None;
                 let mut selected_point = None;
                 match thruster_selection {
-                    ThrusterSelection::Bank(bank) => selected_bank = Some(bank),
-                    ThrusterSelection::BankPoint(bank, point) => {
+                    ThrusterTreeValue::Bank(bank) => selected_bank = Some(bank),
+                    ThrusterTreeValue::BankPoint(bank, point) => {
                         selected_bank = Some(bank);
                         selected_point = Some(point);
                     }
@@ -1410,33 +1407,33 @@ impl PofToolsGui {
                     }),
                 );
             }
-            TreeSelection::Weapons(weapons_selection) => {
+            TreeValue::Weapons(weapons_selection) => {
                 let mut selected_bank = None;
                 let mut selected_point = None;
                 let mut selected_weapon_system = None;
                 match weapons_selection {
-                    WeaponSelection::PriBank(bank) => {
+                    WeaponTreeValue::PriBank(bank) => {
                         selected_bank = Some(bank);
                         selected_weapon_system = Some(&model.primary_weps);
                     }
-                    WeaponSelection::SecBank(bank) => {
+                    WeaponTreeValue::SecBank(bank) => {
                         selected_bank = Some(bank);
                         selected_weapon_system = Some(&model.secondary_weps);
                     }
-                    WeaponSelection::PriBankPoint(bank, point) => {
+                    WeaponTreeValue::PriBankPoint(bank, point) => {
                         selected_bank = Some(bank);
                         selected_point = Some(point);
                         selected_weapon_system = Some(&model.primary_weps);
                     }
-                    WeaponSelection::SecBankPoint(bank, point) => {
+                    WeaponTreeValue::SecBankPoint(bank, point) => {
                         selected_bank = Some(bank);
                         selected_point = Some(point);
                         selected_weapon_system = Some(&model.secondary_weps);
                     }
-                    WeaponSelection::PriHeader => {
+                    WeaponTreeValue::PriHeader => {
                         selected_weapon_system = Some(&model.primary_weps);
                     }
-                    WeaponSelection::SecHeader => {
+                    WeaponTreeValue::SecHeader => {
                         selected_weapon_system = Some(&model.secondary_weps);
                     }
                     _ => {}
@@ -1471,8 +1468,8 @@ impl PofToolsGui {
                     }),
                 );
             }
-            TreeSelection::DockingBays(docking_selection) => {
-                let selected_bank = if let DockingSelection::Bay(num) = docking_selection {
+            TreeValue::DockingBays(docking_selection) => {
+                let selected_bank = if let DockingTreeValue::Bay(num) = docking_selection {
                     Some(num)
                 } else {
                     None
@@ -1504,12 +1501,12 @@ impl PofToolsGui {
                     }),
                 );
             }
-            TreeSelection::Glows(glow_selection) => {
+            TreeValue::Glows(glow_selection) => {
                 let mut selected_bank = None;
                 let mut selected_point = None;
                 match glow_selection {
-                    GlowSelection::Bank(bank) => selected_bank = Some(bank),
-                    GlowSelection::BankPoint(bank, point) => {
+                    GlowTreeValue::Bank(bank) => selected_bank = Some(bank),
+                    GlowTreeValue::BankPoint(bank, point) => {
                         selected_bank = Some(bank);
                         selected_point = Some(point);
                     }
@@ -1544,9 +1541,9 @@ impl PofToolsGui {
                     }),
                 );
             }
-            TreeSelection::SpecialPoints(special_selection) => {
+            TreeValue::SpecialPoints(special_selection) => {
                 let mut selected_point = None;
-                if let SpecialPointSelection::Point(point) = special_selection {
+                if let SpecialPointTreeValue::Point(point) = special_selection {
                     selected_point = Some(point);
                 }
 
@@ -1563,12 +1560,12 @@ impl PofToolsGui {
                     }),
                 );
             }
-            TreeSelection::Turrets(turret_selection) => {
+            TreeValue::Turrets(turret_selection) => {
                 let mut selected_turret = None;
                 let mut selected_point = None;
                 match turret_selection {
-                    TurretSelection::Turret(turret) => selected_turret = Some(turret),
-                    TurretSelection::TurretPoint(turret, point) => {
+                    TurretTreeValue::Turret(turret) => selected_turret = Some(turret),
+                    TurretTreeValue::TurretPoint(turret, point) => {
                         selected_turret = Some(turret);
                         selected_point = Some(point);
                     }
@@ -1601,12 +1598,12 @@ impl PofToolsGui {
                     }),
                 );
             }
-            TreeSelection::Paths(path_selection) => {
+            TreeValue::Paths(path_selection) => {
                 let mut selected_path = None;
                 let mut selected_point = None;
                 match path_selection {
-                    PathSelection::Path(path) => selected_path = Some(path),
-                    PathSelection::PathPoint(path, point) => {
+                    PathTreeValue::Path(path) => selected_path = Some(path),
+                    PathTreeValue::PathPoint(path, point) => {
                         selected_path = Some(path);
                         selected_point = Some(point);
                     }
@@ -1646,9 +1643,9 @@ impl PofToolsGui {
                     }),
                 );
             }
-            TreeSelection::EyePoints(eye_selection) => {
+            TreeValue::EyePoints(eye_selection) => {
                 let mut selected_eye = None;
-                if let EyeSelection::EyePoint(point) = eye_selection {
+                if let EyeTreeValue::EyePoint(point) = eye_selection {
                     selected_eye = Some(point)
                 }
 
@@ -1667,7 +1664,7 @@ impl PofToolsGui {
                     }),
                 );
             }
-            TreeSelection::VisualCenter => {
+            TreeValue::VisualCenter => {
                 let size = 0.02 * model.header.max_radius;
 
                 let mut lollipop_origin = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_BANK_COLOR);

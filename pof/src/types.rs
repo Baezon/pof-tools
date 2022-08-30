@@ -268,6 +268,18 @@ impl Vec3d {
             UpAxis::ZUp => Vec3d { x: self.x, y: self.z, z: self.y },
         }
     }
+    pub fn to_rotation(&self) -> nalgebra_glm::Mat4x4 {
+        // https://gamedev.stackexchange.com/a/119017
+        // find the planar angle
+        let v = self.normalize();
+        let planar_angle = v.x.atan2(v.z);
+        // Rotation matrix around "ground" plane
+        let planar_rot = glm::rotation(planar_angle, &glm::vec3(0., 1., 0.));
+        // Find upwards angle
+        let up_angle = v.y.acos();
+        let up_rot = glm::rotation(up_angle, &glm::vec3(1., 0., 0.));
+        planar_rot * up_rot
+    }
 }
 impl Add for Vec3d {
     type Output = Vec3d;

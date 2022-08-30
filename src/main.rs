@@ -72,7 +72,7 @@ struct GlLollipops {
 
 struct GlArrowhead {
     color: [f32; 4],
-    transform: VertexBuffer<InstanceMatrix>,
+    transform: Mat4x4,
 }
 
 struct GlLollipopsBuilder {
@@ -614,6 +614,7 @@ fn main() {
     let wireframe_shader = glium::Program::from_source(&display, NO_NORMS_VERTEX_SHADER, WIRE_FRAGMENT_SHADER, None).unwrap();
     let lollipop_stick_shader = glium::Program::from_source(&display, NO_NORMS_VERTEX_SHADER, LOLLIPOP_STICK_FRAGMENT_SHADER, None).unwrap();
     let lollipop_shader = glium::Program::from_source(&display, LOLLIPOP_VERTEX_SHADER, LOLLIPOP_FRAGMENT_SHADER, None).unwrap();
+    let arrowhead_shader = glium::Program::from_source(&display, NO_NORMS_VERTEX_SHADER, LOLLIPOP_FRAGMENT_SHADER, None).unwrap();
 
     let mut default_material_draw_params = glium::DrawParameters {
         depth: glium::Depth {
@@ -624,6 +625,14 @@ fn main() {
         line_width: Some(1.0),
         backface_culling: glium::draw_parameters::BackfaceCullingMode::CullCounterClockwise,
         ..Default::default()
+    };
+    let arrowhead_draw_params = glium::DrawParameters {
+        /* blend: glium::Blend {
+            color: glium::BlendingFunction::Addition,
+            alpha: glium::BlendingFunction::Addition,
+            ..Default::default(),
+        }, */
+        ..default_material_draw_params.clone()
     };
     let shield_draw_params = glium::DrawParameters {
         depth: glium::Depth {
@@ -1126,12 +1135,12 @@ fn main() {
                             }
                         }
                         for arrowhead in &pt_gui.arrowheads {
-                            let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * view_mat).into();
+                            let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * view_mat * arrowhead.transform).into();
                             let uniforms = glium::uniform! {
                                 vert_matrix: vert_matrix,
                                 lollipop_color: arrowhead.color,
                             };
-                            target.draw((&arrowhead.transform, &arrowhead_verts), &arrowhead_indices, &lollipop_shader, &uniforms, &lollipop_rev_depth_params).unwrap();
+                            target.draw(&arrowhead_verts, &arrowhead_indices, &arrowhead_shader, &uniforms, &arrowhead_draw_params).unwrap();
                         }
                     }
 
@@ -1329,21 +1338,23 @@ impl PofToolsGui {
                             self.lollipops.push(lollipop_fvec);
                             let uvec_pos = pos + uvec * stick_length;
                             let fvec_pos = pos + fvec * stick_length;
-                            let uvec_matrix: [[f32; 4]; 4] = {
-                                let m = glm::translation::<f32>(&uvec_pos.into());
-                                m.into()
+                            let uvec_matrix = {
+                                let mut m = glm::translation::<f32>(&uvec_pos.into());
+                                m *= uvec.to_rotation();
+                                m
                             };
-                            let fvec_matrix: [[f32; 4]; 4] = {
-                                let m = glm::translation::<f32>(&fvec_pos.into());
-                                m.into()
+                            let fvec_matrix = {
+                                let mut m = glm::translation::<f32>(&fvec_pos.into());
+                                m *= fvec.to_rotation();
+                                m
                             };
                             self.arrowheads.push(GlArrowhead {
                                 color: LOLLIPOP_SELECTED_BANK_COLOR,
-                                transform: VertexBuffer::new(display, [InstanceMatrix { world_matrix: uvec_matrix }].as_slice()).unwrap(),
+                                transform: uvec_matrix,
                             });
                             self.arrowheads.push(GlArrowhead {
                                 color: fvec_colour,
-                                transform: VertexBuffer::new(display, [InstanceMatrix { world_matrix: fvec_matrix }].as_slice()).unwrap(),
+                                transform: fvec_matrix,
                             });
                         },
                         None => ()

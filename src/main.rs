@@ -1293,6 +1293,7 @@ impl PofToolsGui {
         }
 
         self.lollipops.clear();
+        self.arrowheads.clear();
 
         let model = &self.model;
 
@@ -1312,40 +1313,44 @@ impl PofToolsGui {
                         }
                     }
 
-                    let size = 0.05 * model.sub_objects[obj_id].radius;
+                    let radius = model.sub_objects[obj_id].radius;
+                    let size = 0.05 * radius;
                     let pos = model.get_total_subobj_offset(obj_id);
 
                     let mut lollipop_origin = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_POINT_COLOR);
+                    // Origin lollipop
                     lollipop_origin.push(pos, Vec3d::ZERO, size);
                     let lollipop_origin = lollipop_origin.finish(display);
-
                     self.lollipops = vec![lollipop_origin];
 
                     match model.sub_objects[obj_id].uvec_fvec() {
                         Some((uvec, fvec)) => {
                             // Set up arrowhead sticks
-                            // Blue lollipop for uvec
+                            let stick_length = 2. * radius;
+                            // Blue lollipop (stick only) for uvec
                             let mut lollipop_uvec = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_BANK_COLOR);
-                            let stick_length = 7.;
-                            let fvec_colour = [0.15, 1.0, 0.15, 0.15];
                             lollipop_uvec.push(pos, uvec * stick_length, 0.);
                             let lollipop_uvec = lollipop_uvec.finish(display);
                             self.lollipops.push(lollipop_uvec);
-                            // Green lollipop for fvec
+                            // Green lollipop (stick only) for fvec
+                            let fvec_colour = [0.15, 1.0, 0.15, 0.15];
                             let mut lollipop_fvec = GlLollipopsBuilder::new(fvec_colour);
                             lollipop_fvec.push(pos, fvec * stick_length, 0.);
                             let lollipop_fvec = lollipop_fvec.finish(display);
                             self.lollipops.push(lollipop_fvec);
+                            // Set up arrowheads
                             let uvec_pos = pos + uvec * stick_length;
                             let fvec_pos = pos + fvec * stick_length;
                             let uvec_matrix = {
                                 let mut m = glm::translation::<f32>(&uvec_pos.into());
                                 m *= uvec.to_rotation();
+                                m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
                                 m
                             };
                             let fvec_matrix = {
                                 let mut m = glm::translation::<f32>(&fvec_pos.into());
                                 m *= fvec.to_rotation();
+                                m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
                                 m
                             };
                             self.arrowheads.push(GlArrowhead {

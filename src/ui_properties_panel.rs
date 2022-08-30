@@ -1246,7 +1246,9 @@ impl PofToolsGui {
                     if (&self.model.sub_objects[id].properties).contains("$uvec") && (&self.model.sub_objects[id].properties).contains("$fvec") {
                         self.ui_state.display_uvec_fvec = true;
                     }
-                    ui.add(egui::TextEdit::multiline(&mut self.model.sub_objects[id].properties).desired_rows(2));
+                    if ui.add(egui::TextEdit::multiline(&mut self.model.sub_objects[id].properties).desired_rows(2)).changed() {
+                        self.ui_state.viewport_3d_dirty = true; // There may be changes to the uvec/fvec
+                    };
                 } else {
                     ui.add_enabled(false, egui::TextEdit::multiline(&mut blank_string).desired_rows(2));
                 }

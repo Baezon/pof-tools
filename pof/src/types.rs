@@ -272,7 +272,9 @@ impl Vec3d {
             UpAxis::ZUp => Vec3d { x: self.x, y: self.z, z: self.y },
         }
     }
-    pub fn to_rotation(&self) -> nalgebra_glm::Mat4x4 {
+
+    /// Get a rotation matrix that will rotate an upwards-facing model to face the direction this vector is pointing.
+    pub fn to_rotation_matrix(&self) -> nalgebra_glm::Mat4x4 {
         // https://gamedev.stackexchange.com/a/119017
         // find the planar angle
         let v = self.normalize();

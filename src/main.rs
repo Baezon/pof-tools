@@ -634,6 +634,11 @@ fn main() {
             alpha: glium::BlendingFunction::Addition,
             ..Default::default(),
         }, */
+        depth: glium::Depth {
+            test: glium::draw_parameters::DepthTest::Overwrite,
+            write: false,
+            ..Default::default()
+        },
         ..default_material_draw_params.clone()
     };
     let shield_draw_params = glium::DrawParameters {
@@ -1314,48 +1319,47 @@ impl PofToolsGui {
                     let size = 0.05 * radius;
                     let pos = model.get_total_subobj_offset(obj_id);
 
-                    let mut lollipop_origin = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_POINT_COLOR);
-                    // Origin lollipop
-                    lollipop_origin.push(pos, Vec3d::ZERO, size);
-                    let lollipop_origin = lollipop_origin.finish(display);
-                    self.lollipops = vec![lollipop_origin];
+                    let mut ball_origin = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_POINT_COLOR);
+                    // Origin lollipop (ball only)
+                    ball_origin.push(pos, Vec3d::ZERO, size);
+                    let ball_origin = ball_origin.finish(display);
+                    self.lollipops = vec![ball_origin];
 
                     match model.sub_objects[obj_id].uvec_fvec() {
                         Some((uvec, fvec)) => {
                             // Set up arrowhead sticks
                             let stick_length = 2. * radius;
                             // Blue lollipop (stick only) for uvec
-                            let mut lollipop_uvec = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_BANK_COLOR);
-                            lollipop_uvec.push(pos, uvec * stick_length, 0.);
-                            let lollipop_uvec = lollipop_uvec.finish(display);
-                            self.lollipops.push(lollipop_uvec);
+                            let mut stick_uvec = GlLollipopsBuilder::new(UVEC_COLOR);
+                            stick_uvec.push(pos, uvec * stick_length, 0.);
+                            let stick_uvec = stick_uvec.finish(display);
+                            self.lollipops.push(stick_uvec);
                             // Green lollipop (stick only) for fvec
-                            let fvec_colour = [0.15, 1.0, 0.15, 0.15];
-                            let mut lollipop_fvec = GlLollipopsBuilder::new(fvec_colour);
-                            lollipop_fvec.push(pos, fvec * stick_length, 0.);
-                            let lollipop_fvec = lollipop_fvec.finish(display);
-                            self.lollipops.push(lollipop_fvec);
+                            let mut stick_fvec = GlLollipopsBuilder::new(FVEC_COLOR);
+                            stick_fvec.push(pos, fvec * stick_length, 0.);
+                            let stick_fvec = stick_fvec.finish(display);
+                            self.lollipops.push(stick_fvec);
                             // Set up arrowheads
                             let uvec_pos = pos + uvec * stick_length;
                             let fvec_pos = pos + fvec * stick_length;
                             let uvec_matrix = {
                                 let mut m = glm::translation::<f32>(&uvec_pos.into());
-                                m *= uvec.to_rotation();
+                                m *= uvec.to_rotation_matrix();
                                 m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
                                 m
                             };
                             let fvec_matrix = {
                                 let mut m = glm::translation::<f32>(&fvec_pos.into());
-                                m *= fvec.to_rotation();
+                                m *= fvec.to_rotation_matrix();
                                 m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
                                 m
                             };
                             self.arrowheads.push(GlArrowhead {
-                                color: LOLLIPOP_SELECTED_BANK_COLOR,
+                                color: UVEC_COLOR,
                                 transform: uvec_matrix,
                             });
                             self.arrowheads.push(GlArrowhead {
-                                color: fvec_colour,
+                                color: FVEC_COLOR,
                                 transform: fvec_matrix,
                             });
                         },
@@ -1688,6 +1692,9 @@ const LOLLIPOP_UNSELECTED_COLOR: [f32; 4] = [0.3, 0.3, 0.3, 0.15];
 const LOLLIPOP_SELECTED_BANK_COLOR: [f32; 4] = [0.15, 0.15, 1.0, 0.15];
 const LOLLIPOP_SELECTED_POINT_COLOR: [f32; 4] = [1.0, 0.15, 0.15, 0.15];
 
+const UVEC_COLOR: [f32; 4] = [0.15, 0.15, 1.0, 0.15];
+const FVEC_COLOR: [f32; 4] = [0.15, 1.0, 0.15, 0.15];
+
 const LOLLIPOP_UNSELECTED_PATH_COLOR: [f32; 4] = [0.3, 0.3, 0.3, 0.005];
 const LOLLIPOP_SELECTED_PATH_COLOR: [f32; 4] = [0.15, 0.15, 1.0, 0.05];
 const LOLLIPOP_SELECTED_PATH_POINT_COLOR: [f32; 4] = [1.0, 0.15, 0.15, 0.1];
@@ -1707,7 +1714,8 @@ fn lollipop_params() -> glium::DrawParameters<'static> {
 fn lollipop_stick_params() -> glium::DrawParameters<'static> {
     glium::DrawParameters {
         depth: glium::Depth {
-            test: glium::draw_parameters::DepthTest::IfLess,
+            test: glium::draw_parameters::DepthTest::Overwrite,
+            write: false,
             ..Default::default()
         },
         line_width: Some(2.0),

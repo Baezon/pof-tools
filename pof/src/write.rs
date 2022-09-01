@@ -985,14 +985,14 @@ fn make_subobj_node(
             .push(make_properties_node(&mut (), &subobj.properties, format!("{}-", subobj.name)));
     }
 
-    if subobj.movement_type != Default::default() {
+    if subobj.rotation_type != Default::default() {
         node.children
-            .push(DaeNode::new(format!("{}-mov-type", subobj.name), Some(format!("#{}-mov-type:{}", subobj.name, subobj.movement_type as i32))));
+            .push(DaeNode::new(format!("{}-mov-type", subobj.name), Some(format!("#{}-mov-type:{}", subobj.name, subobj.rotation_type as i32))));
     }
 
-    if subobj.movement_axis != Default::default() {
+    if subobj.rotation_axis != Default::default() {
         node.children
-            .push(DaeNode::new(format!("{}-mov-axis", subobj.name), Some(format!("#{}-mov-axis:{}", subobj.name, subobj.movement_axis as i32))));
+            .push(DaeNode::new(format!("{}-mov-axis", subobj.name), Some(format!("#{}-mov-axis:{}", subobj.name, subobj.rotation_axis as i32))));
     }
 
     node.instance_geometry.push(instance);
@@ -1393,14 +1393,14 @@ impl GltfBuilder {
                 .push(make_properties_node(&mut self.root.nodes, &subobj.properties, format!("{}-", subobj.name)));
         }
 
-        if subobj.movement_type != Default::default() {
+        if subobj.rotation_type != Default::default() {
             node.children()
-                .push(NodeIndex::from_id(format!("#{}-mov-type:{}", subobj.name, subobj.movement_type as i32)).build(&mut self.root.nodes));
+                .push(NodeIndex::from_id(format!("#{}-mov-type:{}", subobj.name, subobj.rotation_type as i32)).build(&mut self.root.nodes));
         }
 
-        if subobj.movement_axis != Default::default() {
+        if subobj.rotation_axis != Default::default() {
             node.children()
-                .push(NodeIndex::from_id(format!("#{}-mov-axis:{}", subobj.name, subobj.movement_axis as i32)).build(&mut self.root.nodes));
+                .push(NodeIndex::from_id(format!("#{}-mov-axis:{}", subobj.name, subobj.rotation_axis as i32)).build(&mut self.root.nodes));
         }
 
         node.mesh = Some(geo_id);

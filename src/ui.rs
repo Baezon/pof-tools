@@ -78,6 +78,7 @@ impl TreeValue {
             Warning::RadiusTooSmall(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
             Warning::BBoxTooSmall(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
             Warning::InvertedBBox(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            Warning::SubObjectTranslationInvalidVersion(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
             Warning::UntexturedPolygons => None,
             Warning::DockingBayWithoutPath(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(idx))),
             Warning::ThrusterPropertiesInvalidVersion(idx) => Some(TreeValue::Thrusters(ThrusterTreeValue::Bank(idx))),
@@ -832,6 +833,12 @@ impl PofToolsGui {
                                         if primary { "Primary" } else { "Secondary" },
                                         bank + 1,
                                         point + 1
+                                    )
+                                }
+                                Warning::SubObjectTranslationInvalidVersion(id) => {
+                                    format!(
+                                        "⚠ Subobject {} has a translation axis defined, which the currently selected version does not support",
+                                        self.model.sub_objects[id].name
                                     )
                                 }
                                 Warning::UntexturedPolygons => {

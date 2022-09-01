@@ -1139,7 +1139,7 @@ macro_rules! mk_enumeration {
 
 mk_enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum SubsysMovementType(i32) {
+    pub enum SubsysTranslationType(i32) {
         None = -1,
         Unused = 0, // previously MOVEMENT_TYPE_POS
         Regular = 1, // previously MOVEMENT_TYPE_ROT
@@ -1148,7 +1148,7 @@ mk_enumeration! {
         Intrinsic = 4, // intrinsic (non-subsystem-based)
     }
 }
-impl Default for SubsysMovementType {
+impl Default for SubsysTranslationType {
     fn default() -> Self {
         Self::None
     }
@@ -1156,7 +1156,7 @@ impl Default for SubsysMovementType {
 
 mk_enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum SubsysMovementAxis(i32) {
+    pub enum SubsysTranslationAxis(i32) {
         None = -1,
         X = 0,
         Z = 1,
@@ -1164,7 +1164,40 @@ mk_enumeration! {
         Other = 3,
     }
 }
-impl Default for SubsysMovementAxis {
+impl Default for SubsysTranslationAxis {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+mk_enumeration! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum SubsysRotationType(i32) {
+        None = -1,
+        Unused = 0, // previously MOVEMENT_TYPE_POS
+        Regular = 1, // previously MOVEMENT_TYPE_ROT
+        Turret = 2, // for turrets only
+        Triggered = 3,
+        Intrinsic = 4, // intrinsic (non-subsystem-based)
+    }
+}
+impl Default for SubsysRotationType {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+mk_enumeration! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum SubsysRotationAxis(i32) {
+        None = -1,
+        X = 0,
+        Z = 1,
+        Y = 2,
+        Other = 3,
+    }
+}
+impl Default for SubsysRotationAxis {
     fn default() -> Self {
         Self::None
     }
@@ -1201,8 +1234,10 @@ pub struct SubObject {
     pub bbox: BoundingBox,
     pub name: String,
     pub properties: String,
-    pub movement_type: SubsysMovementType,
-    pub movement_axis: SubsysMovementAxis,
+    pub rotation_type: SubsysRotationType,
+    pub rotation_axis: SubsysRotationAxis,
+    pub translation_type: SubsysTranslationType,
+    pub translation_axis: SubsysTranslationAxis,
     pub bsp_data: BspData,
 
     // the following fields are derived information
@@ -1283,8 +1318,12 @@ impl Serialize for SubObject {
         self.bbox.write_to(w)?;
         self.name.write_to(w)?;
         self.properties.write_to(w)?;
-        self.movement_type.write_to(w)?;
-        self.movement_axis.write_to(w)?;
+        self.rotation_type.write_to(w)?;
+        self.rotation_axis.write_to(w)?;
+        if version >= Version::V23_01 {
+            self.translation_type.write_to(w)?;
+            self.translation_axis.write_to(w)?;
+        }
         self.bsp_data.write_to(w)
     }
 }
@@ -1530,6 +1569,8 @@ mk_versions! {
     V22_01(2201, "22.01"),
     /// Extended vertex and normal limits per subobject and file size optimizations
     V23_00(2300, "23.00"),
+    /// Added submodel translation support
+    V23_01(2301, "23.01"),
 }
 
 #[derive(Debug, Default)]
@@ -1660,6 +1701,9 @@ impl Model {
                         }
                     }
                 }
+                Warning::SubObjectTranslationInvalidVersion(id) => {
+                    self.version < Version::V23_01 && self.sub_objects[id].translation_axis != SubsysTranslationAxis::None
+                }
                 Warning::InvertedBBox(id_opt) => {
                     if let Some(id) = id_opt {
                         self.sub_objects[id].bbox.is_inverted()
@@ -1745,6 +1789,10 @@ impl Model {
 
                 if subobj.properties.len() > MAX_PROPERTIES_LEN {
                     self.warnings.insert(Warning::SubObjectPropertiesTooLong(subobj.obj_id));
+                }
+
+                if self.version < Version::V23_01 && subobj.translation_axis != SubsysTranslationAxis::None {
+                    self.warnings.insert(Warning::SubObjectTranslationInvalidVersion(subobj.obj_id));
                 }
             }
 
@@ -2280,6 +2328,7 @@ pub enum Warning {
         bank: usize,
         point: usize,
     },
+    SubObjectTranslationInvalidVersion(ObjectId),
     TooFewTurretFirePoints(usize),
     TooManyTurretFirePoints(usize),
     /// for each duplicated name, only contains the *first* path idx with that name

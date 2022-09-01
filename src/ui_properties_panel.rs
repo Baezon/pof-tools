@@ -1378,12 +1378,13 @@ impl PofToolsGui {
 
                 ui.label("Properties:");
                 if let Some(id) = selected_id {
-                    if ui
-                        .add(egui::TextEdit::multiline(&mut self.model.sub_objects[id].properties).desired_rows(2))
-                        .changed()
-                    {
-                        self.model.recheck_warnings(One(Warning::SubObjectPropertiesTooLong(id)));
+                    if self.model.sub_objects[id].uvec_fvec().is_some() {
+                        self.ui_state.display_uvec_fvec = true;
                     }
+                    if ui.add(egui::TextEdit::multiline(&mut self.model.sub_objects[id].properties).desired_rows(2)).changed() {
+                        self.model.recheck_warnings(One(Warning::SubObjectPropertiesTooLong(id)));
+                        self.ui_state.viewport_3d_dirty = true; // There may be changes to the uvec/fvec
+                    };
                 } else {
                     ui.add_enabled(false, egui::TextEdit::multiline(&mut blank_string).desired_rows(2));
                 }

@@ -70,6 +70,11 @@ struct GlLollipops {
     stick_indices: glium::index::NoIndices,
 }
 
+struct GlArrowhead {
+    color: [f32; 4],
+    transform: Mat4x4,
+}
+
 struct GlLollipopsBuilder {
     color: [f32; 4], // RGBA
     lolly_vertices: Vec<InstanceMatrix>,
@@ -611,6 +616,7 @@ fn main() {
     let wireframe_shader = glium::Program::from_source(&display, NO_NORMS_VERTEX_SHADER, WIRE_FRAGMENT_SHADER, None).unwrap();
     let lollipop_stick_shader = glium::Program::from_source(&display, NO_NORMS_VERTEX_SHADER, LOLLIPOP_STICK_FRAGMENT_SHADER, None).unwrap();
     let lollipop_shader = glium::Program::from_source(&display, LOLLIPOP_VERTEX_SHADER, LOLLIPOP_FRAGMENT_SHADER, None).unwrap();
+    let arrowhead_shader = glium::Program::from_source(&display, NO_NORMS_VERTEX_SHADER, LOLLIPOP_FRAGMENT_SHADER, None).unwrap();
 
     let mut default_material_draw_params = glium::DrawParameters {
         depth: glium::Depth {
@@ -621,6 +627,19 @@ fn main() {
         line_width: Some(1.0),
         backface_culling: glium::draw_parameters::BackfaceCullingMode::CullCounterClockwise,
         ..Default::default()
+    };
+    let arrowhead_draw_params = glium::DrawParameters {
+        /* blend: glium::Blend {
+            color: glium::BlendingFunction::Addition,
+            alpha: glium::BlendingFunction::Addition,
+            ..Default::default(),
+        }, */
+        depth: glium::Depth {
+            test: glium::draw_parameters::DepthTest::Overwrite,
+            write: false,
+            ..Default::default()
+        },
+        ..default_material_draw_params.clone()
     };
     let shield_draw_params = glium::DrawParameters {
         depth: glium::Depth {
@@ -653,6 +672,9 @@ fn main() {
 
     let icosphere_verts = glium::VertexBuffer::new(&display, &primitives::SPHERE_VERTS).unwrap();
     let icosphere_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::TrianglesList, &primitives::SPHERE_INDICES).unwrap();
+
+    let arrowhead_verts = glium::VertexBuffer::new(&display, &primitives::ARROWHEAD_VERTS).unwrap();
+    let arrowhead_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::TrianglesList, &primitives::ARROWHEAD_INDICES).unwrap();
 
     pt_gui.camera_heading = 2.7;
     pt_gui.camera_pitch = -0.4;
@@ -1057,9 +1079,10 @@ fn main() {
                     }
 
                     // don't display lollipops if you're in header or subobjects, unless display_origin is on, since that's the only lollipop they have
+
                     let display_lollipops = (!matches!(pt_gui.ui_state.tree_view_selection, TreeValue::Header)
                         && !matches!(pt_gui.ui_state.tree_view_selection, TreeValue::SubObjects(_)))
-                        || pt_gui.display_origin;
+                        || pt_gui.display_origin || pt_gui.display_uvec_fvec;
 
                     if display_lollipops {
                         for lollipop_group in &pt_gui.lollipops {
@@ -1118,6 +1141,14 @@ fn main() {
                                     )
                                     .unwrap();
                             }
+                        }
+                        for arrowhead in &pt_gui.arrowheads {
+                            let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * view_mat * arrowhead.transform).into();
+                            let uniforms = glium::uniform! {
+                                vert_matrix: vert_matrix,
+                                lollipop_color: arrowhead.color,
+                            };
+                            target.draw(&arrowhead_verts, &arrowhead_indices, &arrowhead_shader, &uniforms, &arrowhead_draw_params).unwrap();
                         }
                     }
 
@@ -1264,6 +1295,7 @@ impl PofToolsGui {
         }
 
         self.lollipops.clear();
+        self.arrowheads.clear();
 
         let model = &self.model;
 
@@ -1283,13 +1315,56 @@ impl PofToolsGui {
                         }
                     }
 
-                    let size = 0.05 * model.sub_objects[obj_id].radius;
+                    let radius = model.sub_objects[obj_id].radius;
+                    let size = 0.05 * radius;
+                    let pos = model.get_total_subobj_offset(obj_id);
 
-                    let mut lollipop_origin = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_POINT_COLOR);
-                    lollipop_origin.push(model.get_total_subobj_offset(obj_id), Vec3d::ZERO, size);
-                    let lollipop_origin = lollipop_origin.finish(display);
+                    let mut ball_origin = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_POINT_COLOR);
+                    // Origin lollipop (ball only)
+                    ball_origin.push(pos, Vec3d::ZERO, size);
+                    let ball_origin = ball_origin.finish(display);
+                    self.lollipops = vec![ball_origin];
 
-                    self.lollipops = vec![lollipop_origin];
+                    match model.sub_objects[obj_id].uvec_fvec() {
+                        Some((uvec, fvec)) => {
+                            // Set up arrowhead sticks
+                            let stick_length = 2. * radius;
+                            // Blue lollipop (stick only) for uvec
+                            let mut stick_uvec = GlLollipopsBuilder::new(UVEC_COLOR);
+                            stick_uvec.push(pos, uvec * stick_length, 0.);
+                            let stick_uvec = stick_uvec.finish(display);
+                            self.lollipops.push(stick_uvec);
+                            // Green lollipop (stick only) for fvec
+                            let mut stick_fvec = GlLollipopsBuilder::new(FVEC_COLOR);
+                            stick_fvec.push(pos, fvec * stick_length, 0.);
+                            let stick_fvec = stick_fvec.finish(display);
+                            self.lollipops.push(stick_fvec);
+                            // Set up arrowheads
+                            let uvec_pos = pos + uvec * stick_length;
+                            let fvec_pos = pos + fvec * stick_length;
+                            let uvec_matrix = {
+                                let mut m = glm::translation::<f32>(&uvec_pos.into());
+                                m *= uvec.to_rotation_matrix();
+                                m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
+                                m
+                            };
+                            let fvec_matrix = {
+                                let mut m = glm::translation::<f32>(&fvec_pos.into());
+                                m *= fvec.to_rotation_matrix();
+                                m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
+                                m
+                            };
+                            self.arrowheads.push(GlArrowhead {
+                                color: UVEC_COLOR,
+                                transform: uvec_matrix,
+                            });
+                            self.arrowheads.push(GlArrowhead {
+                                color: FVEC_COLOR,
+                                transform: fvec_matrix,
+                            });
+                        },
+                        None => ()
+                    }
                 }
             }
             TreeValue::Textures(TextureTreeValue::Texture(tex)) => {
@@ -1617,6 +1692,9 @@ const LOLLIPOP_UNSELECTED_COLOR: [f32; 4] = [0.3, 0.3, 0.3, 0.15];
 const LOLLIPOP_SELECTED_BANK_COLOR: [f32; 4] = [0.15, 0.15, 1.0, 0.15];
 const LOLLIPOP_SELECTED_POINT_COLOR: [f32; 4] = [1.0, 0.15, 0.15, 0.15];
 
+const UVEC_COLOR: [f32; 4] = [0.15, 0.15, 1.0, 0.15];
+const FVEC_COLOR: [f32; 4] = [0.15, 1.0, 0.15, 0.15];
+
 const LOLLIPOP_UNSELECTED_PATH_COLOR: [f32; 4] = [0.3, 0.3, 0.3, 0.005];
 const LOLLIPOP_SELECTED_PATH_COLOR: [f32; 4] = [0.15, 0.15, 1.0, 0.05];
 const LOLLIPOP_SELECTED_PATH_POINT_COLOR: [f32; 4] = [1.0, 0.15, 0.15, 0.1];
@@ -1636,7 +1714,8 @@ fn lollipop_params() -> glium::DrawParameters<'static> {
 fn lollipop_stick_params() -> glium::DrawParameters<'static> {
     glium::DrawParameters {
         depth: glium::Depth {
-            test: glium::draw_parameters::DepthTest::IfLess,
+            test: glium::draw_parameters::DepthTest::Overwrite,
+            write: false,
             ..Default::default()
         },
         line_width: Some(2.0),

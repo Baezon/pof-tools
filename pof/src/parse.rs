@@ -167,11 +167,22 @@ impl<R: Read + Seek> Parser<R> {
                     let bbox = self.read_bbox()?;
                     let name = self.read_string()?;
                     let properties = self.read_string()?;
-                    let movement_type = self.read_i32()?.try_into().unwrap_or_default();
-                    let mut movement_axis = self.read_i32()?.try_into().unwrap_or_default();
-                    if movement_type == SubsysMovementType::None {
-                        movement_axis = SubsysMovementAxis::None
+                    let rotation_type = self.read_i32()?.try_into().unwrap_or_default();
+                    let mut rotation_axis = self.read_i32()?.try_into().unwrap_or_default();
+                    if rotation_type == SubsysRotationType::None {
+                        rotation_axis = SubsysRotationAxis::None
                     }
+
+                    let (translation_type, translation_axis) = if self.version >= Version::V23_01 {
+                        let t_type = self.read_i32()?.try_into().unwrap_or_default();
+                        let mut t_axis = self.read_i32()?.try_into().unwrap_or_default();
+                        if t_type == SubsysTranslationType::None {
+                            t_axis = SubsysTranslationAxis::None
+                        }
+                        (t_type, t_axis)
+                    } else {
+                        (SubsysTranslationType::None, SubsysTranslationAxis::None)
+                    };
 
                     assert!(self.read_i32()? == 0, "chunked models unimplemented in FSO");
                     let bsp_data_buffer = self.read_byte_buffer()?;
@@ -188,8 +199,10 @@ impl<R: Read + Seek> Parser<R> {
                         bbox,
                         name,
                         properties,
-                        movement_type,
-                        movement_axis,
+                        rotation_type,
+                        rotation_axis,
+                        translation_type,
+                        translation_axis,
                         bsp_data,
                         // these rest are to be filled later once we've parsed all the subobjects
                         ..Default::default()
@@ -863,8 +876,10 @@ fn push_subobj(
         bbox: Default::default(),
         name: name.to_string(),
         properties: Default::default(),
-        movement_type: Default::default(),
-        movement_axis: Default::default(),
+        rotation_type: Default::default(),
+        rotation_axis: Default::default(),
+        translation_type: Default::default(),
+        translation_axis: Default::default(),
         bsp_data: BspData {
             norms,
             collision_tree: BspData::recalculate(
@@ -959,14 +974,14 @@ trait ParseCtx<'a> {
                     } else if name.starts_with('#') && name.contains("mov-type") {
                         if let Some(idx) = name.find(':') {
                             if let Ok(val) = name[(idx + 1)..].parse::<i32>() {
-                                subobj.movement_type = val.try_into().unwrap_or_default();
+                                subobj.rotation_type = val.try_into().unwrap_or_default();
                             }
                         }
                         continue;
                     } else if name.starts_with('#') && name.contains("mov-axis") {
                         if let Some(idx) = name.find(':') {
                             if let Ok(val) = name[(idx + 1)..].parse::<i32>() {
-                                subobj.movement_axis = val.try_into().unwrap_or_default();
+                                subobj.rotation_axis = val.try_into().unwrap_or_default();
                             }
                         }
                         continue;

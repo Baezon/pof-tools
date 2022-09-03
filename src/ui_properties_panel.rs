@@ -4,8 +4,8 @@ use egui::{style::Widgets, text::LayoutJob, CollapsingHeader, Color32, DragValue
 use glium::Display;
 use nalgebra_glm::TMat4;
 use pof::{
-    Dock, Error, EyePoint, GlowPoint, GlowPointBank, Insignia, Model, ObjectId, PathId, PathPoint, Set::*, SpecialPoint, SubsysMovementAxis,
-    SubsysMovementType, ThrusterGlow, Vec3d, Warning, WeaponHardpoint,
+    Dock, Error, EyePoint, GlowPoint, GlowPointBank, Insignia, Model, ObjectId, PathId, PathPoint, Set::*, SpecialPoint, SubsysRotationAxis,
+    SubsysRotationType, SubsysTranslationAxis, SubsysTranslationType, ThrusterGlow, Vec3d, Warning, WeaponHardpoint,
 };
 
 use crate::ui::{
@@ -57,6 +57,7 @@ impl UiState {
     fn set_widget_color(ui: &mut Ui, color: Color32) {
         ui.visuals_mut().widgets.hovered.fg_stroke.color = color;
         ui.visuals_mut().widgets.inactive.fg_stroke.color = color;
+        ui.visuals_mut().widgets.noninteractive.fg_stroke.color = color;
         ui.visuals_mut().widgets.active.fg_stroke.color = color;
         ui.visuals_mut().widgets.open.fg_stroke.color = color;
     }
@@ -404,7 +405,8 @@ impl UiState {
                         radius_string: format!("{}", model.sub_objects[id].radius),
                         is_debris_check: model.sub_objects[id].is_debris_model,
                         name: format!("{}", model.sub_objects[id].name),
-                        rot_axis: model.sub_objects[id].movement_axis,
+                        rot_axis: model.sub_objects[id].rotation_axis,
+                        trans_axis: model.sub_objects[id].translation_axis,
                         transform_window: Default::default(),
                     }
                 }
@@ -620,7 +622,8 @@ pub(crate) enum PropertiesPanel {
         offset_string: String,
         radius_string: String,
         is_debris_check: bool,
-        rot_axis: SubsysMovementAxis,
+        rot_axis: SubsysRotationAxis,
+        trans_axis: SubsysTranslationAxis,
         transform_window: TransformWindow,
     },
     Texture {
@@ -716,7 +719,8 @@ impl PropertiesPanel {
             offset_string: Default::default(),
             radius_string: Default::default(),
             is_debris_check: Default::default(),
-            rot_axis: SubsysMovementAxis::None,
+            rot_axis: SubsysRotationAxis::None,
+            trans_axis: SubsysTranslationAxis::None,
             transform_window: TransformWindow {
                 open: false,
                 vector: format!("1, 0, 0"),
@@ -1101,6 +1105,7 @@ impl PofToolsGui {
                 radius_string,
                 is_debris_check,
                 rot_axis,
+                trans_axis,
                 transform_window,
             } => {
                 ui.heading("SubObject");
@@ -1391,24 +1396,67 @@ impl PofToolsGui {
 
                 // Rot axis radio buttons ================================================================
 
-                ui.label("Rotation Axis:");
-                let old_val = *rot_axis;
-                ui.add_enabled_ui(selected_id.is_some(), |ui| {
-                    ui.radio_value(rot_axis, SubsysMovementAxis::None, "None");
-                    ui.radio_value(rot_axis, SubsysMovementAxis::X, "X-axis");
-                    ui.radio_value(rot_axis, SubsysMovementAxis::Y, "Y-axis");
-                    ui.radio_value(rot_axis, SubsysMovementAxis::Z, "Z-axis");
-                    ui.radio_value(rot_axis, SubsysMovementAxis::Other, "Other");
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label("Rotation Axis:");
+                        let old_val = *rot_axis;
+                        ui.add_enabled_ui(selected_id.is_some(), |ui| {
+                            ui.radio_value(rot_axis, SubsysRotationAxis::None, "None");
+                            ui.radio_value(rot_axis, SubsysRotationAxis::X, "X-axis");
+                            ui.radio_value(rot_axis, SubsysRotationAxis::Y, "Y-axis");
+                            ui.radio_value(rot_axis, SubsysRotationAxis::Z, "Z-axis");
+                            ui.radio_value(rot_axis, SubsysRotationAxis::Other, "Other");
+                        });
+                        if old_val != *rot_axis {
+                            let obj = &mut self.model.sub_objects[selected_id.unwrap()];
+                            obj.rotation_axis = *rot_axis;
+                            if *rot_axis == SubsysRotationAxis::None {
+                                obj.rotation_type = SubsysRotationType::None
+                            } else if obj.rotation_type == SubsysRotationType::None {
+                                obj.rotation_type = SubsysRotationType::Regular
+                            }
+                        }
+                    });
+
+                    ui.vertical(|ui| {
+                        if selected_id.map_or(false, |id| self.model.warnings.contains(&Warning::SubObjectTranslationInvalidVersion(id))) {
+                            UiState::set_widget_color(ui, WARNING_YELLOW);
+                            ui.label("Translation Axis:");
+                            UiState::reset_widget_color(ui);
+                        } else {
+                            ui.label("Translation Axis:");
+                        }
+                        ui.visuals_mut().widgets = Widgets::default();
+                        let old_val = *trans_axis;
+                        let disabled_text = "Version must be 2301 or later";
+                        ui.add_enabled_ui(
+                            selected_id.is_some() && (self.model.version >= pof::Version::V23_01 || *trans_axis != SubsysTranslationAxis::None),
+                            |ui| {
+                                ui.radio_value(trans_axis, SubsysTranslationAxis::None, "None")
+                                    .on_disabled_hover_text(disabled_text);
+                                ui.radio_value(trans_axis, SubsysTranslationAxis::X, "X-axis")
+                                    .on_disabled_hover_text(disabled_text);
+                                ui.radio_value(trans_axis, SubsysTranslationAxis::Y, "Y-axis")
+                                    .on_disabled_hover_text(disabled_text);
+                                ui.radio_value(trans_axis, SubsysTranslationAxis::Z, "Z-axis")
+                                    .on_disabled_hover_text(disabled_text);
+                                ui.radio_value(trans_axis, SubsysTranslationAxis::Other, "Other")
+                                    .on_disabled_hover_text(disabled_text);
+                            },
+                        );
+                        if old_val != *trans_axis {
+                            let obj = &mut self.model.sub_objects[selected_id.unwrap()];
+                            obj.translation_axis = *trans_axis;
+                            if *trans_axis == SubsysTranslationAxis::None {
+                                obj.translation_type = SubsysTranslationType::None
+                            } else if obj.translation_type == SubsysTranslationType::None {
+                                obj.translation_type = SubsysTranslationType::Regular
+                            }
+                            self.model
+                                .recheck_warnings(One(Warning::SubObjectTranslationInvalidVersion(selected_id.unwrap())))
+                        }
+                    });
                 });
-                if old_val != *rot_axis {
-                    let obj = &mut self.model.sub_objects[selected_id.unwrap()];
-                    obj.movement_axis = *rot_axis;
-                    if *rot_axis == SubsysMovementAxis::None {
-                        obj.movement_type = SubsysMovementType::None
-                    } else if obj.movement_type == SubsysMovementType::None {
-                        obj.movement_type = SubsysMovementType::Regular
-                    }
-                }
 
                 // DEBUG - prints total bsp node bbox volume at all depths (divided by actual top-level bbox volume so literal size doesn't matter)
                 // Theoretically should be a decent metric for BSP tree efficiency; lower = better

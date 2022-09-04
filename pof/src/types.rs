@@ -1271,7 +1271,12 @@ impl SubObject {
     }
 
     pub fn is_destroyed_model(&self) -> bool {
-        self.name.to_lowercase().ends_with("-destroyed")
+        for link in &self.name_links {
+            if matches!(link, NameLink::DestroyedVersionOf(_)) {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn recalc_radius(&mut self) {

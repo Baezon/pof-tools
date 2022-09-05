@@ -274,7 +274,7 @@ impl Vec3d {
     }
 
     /// Get a rotation matrix that will rotate an upwards-facing model to face the direction this vector is pointing.
-    pub fn to_rotation_matrix(&self) -> nalgebra_glm::Mat4x4 {
+    pub fn to_rotation_matrix(&self) -> Mat4 {
         // https://gamedev.stackexchange.com/a/119017
         // find the planar angle
         let v = self.normalize();
@@ -282,6 +282,7 @@ impl Vec3d {
         // Rotation matrix around "ground" plane
         let planar_rot = glm::rotation(planar_angle, &glm::vec3(0., 1., 0.));
         // Find upwards angle
+        // Use acos instead of asin because the arrowhead model points upwards
         let up_angle = v.y.acos();
         let up_rot = glm::rotation(up_angle, &glm::vec3(1., 0., 0.));
         planar_rot * up_rot
@@ -1325,8 +1326,10 @@ impl SubObject {
 }
 
 fn parse_uvec_fvec(props: &str) -> Option<(Vec3d, Vec3d)> {
-    let uvec = Vec3d::from_str(properties_get_field(props, "$uvec")?).ok()?;
-    let fvec = Vec3d::from_str(properties_get_field(props, "$fvec")?).ok()?;
+    // https://wiki.hard-light.net/index.php/Subobject_and_subsystem_properties#.24uvec:
+    // "It does not need to be a normalized vector."
+    let uvec = Vec3d::from_str(properties_get_field(props, "$uvec")?).ok()?.normalize();
+    let fvec = Vec3d::from_str(properties_get_field(props, "$fvec")?).ok()?.normalize();
     Some((uvec, fvec))
 }
 
@@ -1776,6 +1779,25 @@ impl Model {
                     .special_points
                     .get(idx)
                     .map_or(false, |spec_point| spec_point.properties.len() > MAX_PROPERTIES_LEN),
+                Warning::NoFvec(id) => match (
+                    properties_get_field(&self.sub_objects[id].properties, "$uvec"),
+                    properties_get_field(&self.sub_objects[id].properties, "$fvec")) {
+                    (Some(_), None) => true,
+                    _ => false,
+                },
+                Warning::NoUvec(id) => 
+                    match (
+                    properties_get_field(&self.sub_objects[id].properties, "$uvec"),
+                    properties_get_field(&self.sub_objects[id].properties, "$fvec")) {
+                        (None, Some(_)) => true,
+                        _ => false,
+                    },
+                Warning::UvecFvecNotPerpendicular(id) => match self.sub_objects[id].uvec_fvec() {
+                    None => false,
+                    Some((uvec, fvec)) => {
+                        glm::dot(&uvec.into(), &fvec.into()).abs() >= 0.0078125  // 1./128.
+                    },
+                },
             };
 
             let existing_warning = self.warnings.contains(&warning);
@@ -1823,6 +1845,22 @@ impl Model {
                 if self.version < Version::V23_01 && subobj.translation_axis != SubsysTranslationAxis::None {
                     self.warnings.insert(Warning::SubObjectTranslationInvalidVersion(subobj.obj_id));
                 }
+
+                match (
+                    properties_get_field(&subobj.properties, "$uvec"),
+                    properties_get_field(&subobj.properties, "$fvec")) {
+                    (Some(_), None) => {self.warnings.insert(Warning::NoFvec(subobj.obj_id));},
+                    (None, Some(_)) => {self.warnings.insert(Warning::NoUvec(subobj.obj_id));},
+                    (Some(_), Some(_)) => {
+                        if let Some((uvec, fvec)) = subobj.uvec_fvec() {
+                            if glm::dot(&uvec.into(), &fvec.into()).abs() >= 0.0078125 {  // 1./128.
+                                self.warnings.insert(Warning::UvecFvecNotPerpendicular(subobj.obj_id));
+                            }
+                        }
+                    },
+                    _ => (),
+                }
+                
             }
 
             for (i, dock) in self.docking_bays.iter().enumerate() {
@@ -2423,7 +2461,9 @@ pub enum Warning {
     SpecialPointPropertiesTooLong(usize),
     // path with no parent
     // thruster with no engine subsys (and an engine subsys exists)
-    // turret uvec != turret normal
+    NoFvec(ObjectId),
+    NoUvec(ObjectId),
+    UvecFvecNotPerpendicular(ObjectId),
     // turret subobject properties not set up for a turret
 }
 

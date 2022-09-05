@@ -1398,6 +1398,9 @@ impl PofToolsGui {
                         .changed()
                     {
                         self.model.recheck_warnings(One(Warning::SubObjectPropertiesTooLong(id)));
+                        self.model.recheck_warnings(One(Warning::NoFvec(id)));
+                        self.model.recheck_warnings(One(Warning::NoUvec(id)));
+                        self.model.recheck_warnings(One(Warning::UvecFvecNotPerpendicular(id)));
                         self.ui_state.viewport_3d_dirty = true; // There may be changes to the uvec/fvec
                     };
                 } else {

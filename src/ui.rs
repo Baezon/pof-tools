@@ -106,6 +106,10 @@ impl TreeValue {
             Warning::DockingBayPropertiesTooLong(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(idx))),
             Warning::GlowBankPropertiesTooLong(idx) => Some(TreeValue::Glows(GlowTreeValue::Bank(idx))),
             Warning::SpecialPointPropertiesTooLong(idx) => Some(TreeValue::SpecialPoints(SpecialPointTreeValue::Point(idx))),
+            Warning::NoFvec(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            Warning::NoUvec(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            Warning::UvecFvecNotPerpendicular(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            
         }
     }
 
@@ -963,7 +967,13 @@ impl PofToolsGui {
                                         _ => unreachable!(),
                                     };
                                     format!("⚠ {} is too long (max {} bytes)", field, pof::MAX_PROPERTIES_LEN)
-                                }
+                                },
+                                Warning::NoFvec(id) =>
+                                    format!("⚠ {} has a uvec, but does not have a fvec", &self.model.sub_objects[id].name),
+                                Warning::NoUvec(id) =>
+                                    format!("⚠ {} has a fvec, but does not have a uvec", &self.model.sub_objects[id].name),
+                                Warning::UvecFvecNotPerpendicular(id) =>
+                                    format!("⚠ {}'s uvec and fvec are not perpendicular to each other", &self.model.sub_objects[id].name),
                             };
 
                             let text = RichText::new(str).text_style(TextStyle::Button).color(WARNING_YELLOW);

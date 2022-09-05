@@ -19,7 +19,9 @@ use glium::{
 };
 use glm::Mat4x4;
 use native_dialog::FileDialog;
-use pof::{BspData, Insignia, Model, NormalId, ObjVec, ObjectId, Parser, PolyVertex, Polygon, ShieldData, SubObject, TextureId, Vec3d, VertexId};
+use pof::{
+    BspData, Insignia, Model, NameLink, NormalId, ObjVec, ObjectId, Parser, PolyVertex, Polygon, ShieldData, SubObject, TextureId, Vec3d, VertexId,
+};
 use simplelog::*;
 use std::{
     collections::HashMap,
@@ -1082,7 +1084,8 @@ fn main() {
 
                     let display_lollipops = (!matches!(pt_gui.ui_state.tree_view_selection, TreeValue::Header)
                         && !matches!(pt_gui.ui_state.tree_view_selection, TreeValue::SubObjects(_)))
-                        || pt_gui.display_origin || pt_gui.display_uvec_fvec;
+                        || pt_gui.display_origin
+                        || pt_gui.display_uvec_fvec;
 
                     if display_lollipops {
                         for lollipop_group in &pt_gui.lollipops {
@@ -1148,7 +1151,9 @@ fn main() {
                                 vert_matrix: vert_matrix,
                                 lollipop_color: arrowhead.color,
                             };
-                            target.draw(&arrowhead_verts, &arrowhead_indices, &arrowhead_shader, &uniforms, &arrowhead_draw_params).unwrap();
+                            target
+                                .draw(&arrowhead_verts, &arrowhead_indices, &arrowhead_shader, &uniforms, &arrowhead_draw_params)
+                                .unwrap();
                         }
                     }
 
@@ -1260,8 +1265,20 @@ fn get_list_of_display_subobjects(model: &Model, tree_selection: TreeValue, last
             top_level_parent = id;
         }
 
+        let displaying_destroyed_models = model.sub_objects[last_selected_subobj].is_destroyed_model();
+
         model.do_for_recursive_subobj_children(top_level_parent, &mut |subobj| {
-            if !subobj.is_destroyed_model() {
+            if let Some(id) = subobj.parent() {
+                let has_a_destroyed_version = subobj.name_links.iter().any(|link| matches!(link, NameLink::DestroyedVersion(_)));
+                let parent = &model.sub_objects[id];
+                let parent_has_a_destroyed_version = parent.name_links.iter().any(|link| matches!(link, NameLink::DestroyedVersion(_)));
+
+                if (!parent_has_a_destroyed_version || (displaying_destroyed_models == parent.is_destroyed_model()))
+                    && (!has_a_destroyed_version || (displaying_destroyed_models == subobj.is_destroyed_model()))
+                {
+                    out[subobj.obj_id] = true;
+                }
+            } else {
                 out[subobj.obj_id] = true;
             }
         });
@@ -1354,16 +1371,10 @@ impl PofToolsGui {
                                 m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
                                 m
                             };
-                            self.arrowheads.push(GlArrowhead {
-                                color: UVEC_COLOR,
-                                transform: uvec_matrix,
-                            });
-                            self.arrowheads.push(GlArrowhead {
-                                color: FVEC_COLOR,
-                                transform: fvec_matrix,
-                            });
-                        },
-                        None => ()
+                            self.arrowheads.push(GlArrowhead { color: UVEC_COLOR, transform: uvec_matrix });
+                            self.arrowheads.push(GlArrowhead { color: FVEC_COLOR, transform: fvec_matrix });
+                        }
+                        None => (),
                     }
                 }
             }

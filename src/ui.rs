@@ -9,7 +9,9 @@ use std::{collections::HashMap, sync::mpsc::Receiver};
 use eframe::egui::{self, Button, TextStyle, Ui};
 use pof::ObjectId;
 
-use crate::{ui_properties_panel::PropertiesPanel, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlArrowhead, GlObjectBuffers, POF_TOOLS_VERSION};
+use crate::{
+    ui_properties_panel::PropertiesPanel, GlArrowhead, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers, POF_TOOLS_VERSION,
+};
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, PartialOrd, Ord)]
 pub(crate) enum TreeValue {
@@ -623,6 +625,16 @@ impl UiState {
                 }
             })
             .body(|ui| body(self, ui));
+    }
+
+    pub fn select_new_tree_val(&mut self, new_tree_val: TreeValue) {
+        self.tree_view_selection = new_tree_val;
+        self.tree_view_force_open = Some(new_tree_val);
+        self.viewport_3d_dirty = true;
+        match new_tree_val {
+            TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) => self.last_selected_subobj = Some(id),
+            _ => (),
+        }
     }
 }
 

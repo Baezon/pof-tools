@@ -814,6 +814,13 @@ impl PofToolsGui {
         let mut properties_panel_dirty = false;
         let mut buffer_ids_to_rebuild = vec![];
 
+        macro_rules! select_new_tree_val {
+            ($x:expr) => {
+                self.ui_state.select_new_tree_val($x);
+                properties_panel_dirty = true;
+            };
+        }
+
         // this is needed for blank string fields when the properties panel can't display
         // anything for that field due to an invalid tree selection
         let mut blank_string = String::new();
@@ -1386,7 +1393,10 @@ impl PofToolsGui {
                     if self.model.sub_objects[id].uvec_fvec().is_some() {
                         self.ui_state.display_uvec_fvec = true;
                     }
-                    if ui.add(egui::TextEdit::multiline(&mut self.model.sub_objects[id].properties).desired_rows(2)).changed() {
+                    if ui
+                        .add(egui::TextEdit::multiline(&mut self.model.sub_objects[id].properties).desired_rows(2))
+                        .changed()
+                    {
                         self.model.recheck_warnings(One(Warning::SubObjectPropertiesTooLong(id)));
                         self.ui_state.viewport_3d_dirty = true; // There may be changes to the uvec/fvec
                     };
@@ -1493,9 +1503,7 @@ impl PofToolsGui {
                                             .button(RichText::new(&self.model.sub_objects[destroyed_id].name).weak().color(Color32::LIGHT_RED))
                                             .clicked()
                                         {
-                                            self.ui_state.tree_view_selection = TreeValue::SubObjects(SubObjectTreeValue::SubObject(destroyed_id));
-                                            properties_panel_dirty = true;
-                                            self.ui_state.viewport_3d_dirty = true;
+                                            select_new_tree_val!(TreeValue::SubObjects(SubObjectTreeValue::SubObject(destroyed_id)));
                                         }
                                     });
                                 }
@@ -1506,9 +1514,7 @@ impl PofToolsGui {
                                             .button(RichText::new(&self.model.sub_objects[intact_id].name).weak().color(Color32::LIGHT_RED))
                                             .clicked()
                                         {
-                                            self.ui_state.tree_view_selection = TreeValue::SubObjects(SubObjectTreeValue::SubObject(intact_id));
-                                            properties_panel_dirty = true;
-                                            self.ui_state.viewport_3d_dirty = true;
+                                            select_new_tree_val!(TreeValue::SubObjects(SubObjectTreeValue::SubObject(intact_id)));
                                         }
                                     });
                                 }
@@ -1520,10 +1526,7 @@ impl PofToolsGui {
                                             .button(RichText::new(&self.model.sub_objects[debris_parent_id].name).weak().color(LIGHT_ORANGE))
                                             .clicked()
                                         {
-                                            self.ui_state.tree_view_selection =
-                                                TreeValue::SubObjects(SubObjectTreeValue::SubObject(debris_parent_id));
-                                            properties_panel_dirty = true;
-                                            self.ui_state.viewport_3d_dirty = true;
+                                            select_new_tree_val!(TreeValue::SubObjects(SubObjectTreeValue::SubObject(debris_parent_id)));
                                         }
                                     });
                                 }
@@ -1535,10 +1538,7 @@ impl PofToolsGui {
                                             .button(RichText::new(&self.model.sub_objects[detail_parent_id].name).weak().color(LIGHT_BLUE))
                                             .clicked()
                                         {
-                                            self.ui_state.tree_view_selection =
-                                                TreeValue::SubObjects(SubObjectTreeValue::SubObject(detail_parent_id));
-                                            properties_panel_dirty = true;
-                                            self.ui_state.viewport_3d_dirty = true;
+                                            select_new_tree_val!(TreeValue::SubObjects(SubObjectTreeValue::SubObject(detail_parent_id)));
                                         }
                                     });
                                 }
@@ -1553,9 +1553,7 @@ impl PofToolsGui {
                                         .button(RichText::new(&self.model.sub_objects[id].name).weak().color(LIGHT_ORANGE))
                                         .clicked()
                                     {
-                                        self.ui_state.tree_view_selection = TreeValue::SubObjects(SubObjectTreeValue::SubObject(id));
-                                        properties_panel_dirty = true;
-                                        self.ui_state.viewport_3d_dirty = true;
+                                        select_new_tree_val!(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)));
                                     }
                                 }
                             }
@@ -1569,9 +1567,7 @@ impl PofToolsGui {
                                         .button(RichText::new(&self.model.sub_objects[id].name).weak().color(LIGHT_BLUE))
                                         .clicked()
                                     {
-                                        self.ui_state.tree_view_selection = TreeValue::SubObjects(SubObjectTreeValue::SubObject(id));
-                                        properties_panel_dirty = true;
-                                        self.ui_state.viewport_3d_dirty = true;
+                                        select_new_tree_val!(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)));
                                     }
                                 }
                             }
@@ -1703,17 +1699,11 @@ impl PofToolsGui {
                     let new_idx = response.apply(&mut self.model.thruster_banks);
                     self.model.recheck_warnings(All); //FIX
 
-                    self.ui_state.tree_view_selection = TreeValue::Thrusters(ThrusterTreeValue::bank(new_idx));
-                    self.ui_state.tree_view_force_open = Some(TreeValue::Thrusters(ThrusterTreeValue::bank(new_idx)));
-                    properties_panel_dirty = true;
-                    self.ui_state.viewport_3d_dirty = true;
+                    select_new_tree_val!(TreeValue::Thrusters(ThrusterTreeValue::bank(new_idx)));
                 } else if let Some(response) = point_idx_response {
                     let new_idx = response.apply(&mut self.model.thruster_banks[bank_num.unwrap()].glows);
 
-                    self.ui_state.tree_view_selection = TreeValue::Thrusters(ThrusterTreeValue::bank_point(bank_num.unwrap(), new_idx));
-                    self.ui_state.tree_view_force_open = Some(TreeValue::Thrusters(ThrusterTreeValue::bank_point(bank_num.unwrap(), new_idx)));
-                    properties_panel_dirty = true;
-                    self.ui_state.viewport_3d_dirty = true;
+                    select_new_tree_val!(TreeValue::Thrusters(ThrusterTreeValue::bank_point(bank_num.unwrap(), new_idx)));
                 }
             }
             PropertiesPanel::Weapon { position_string, normal_string, offset_string } => {
@@ -1807,21 +1797,14 @@ impl PofToolsGui {
 
                     self.model.recheck_warnings(All); // FIX
 
-                    self.ui_state.tree_view_selection = TreeValue::Weapons(WeaponTreeValue::bank(is_primary, new_idx));
-                    self.ui_state.tree_view_force_open = Some(TreeValue::Weapons(WeaponTreeValue::bank(is_primary, new_idx)));
-                    properties_panel_dirty = true;
-                    self.ui_state.viewport_3d_dirty = true;
+                    select_new_tree_val!(TreeValue::Weapons(WeaponTreeValue::bank(is_primary, new_idx)));
                 } else if let Some(response) = point_idx_response {
                     let (weapon_system, is_primary) = weapon_system.unwrap();
                     let new_idx = response.apply(&mut weapon_system[bank_num.unwrap()]);
 
                     self.model.recheck_warnings(All); // FIX
 
-                    self.ui_state.tree_view_selection = TreeValue::Weapons(WeaponTreeValue::bank_point(is_primary, bank_num.unwrap(), new_idx));
-                    self.ui_state.tree_view_force_open =
-                        Some(TreeValue::Weapons(WeaponTreeValue::bank_point(is_primary, bank_num.unwrap(), new_idx)));
-                    properties_panel_dirty = true;
-                    self.ui_state.viewport_3d_dirty = true;
+                    select_new_tree_val!(TreeValue::Weapons(WeaponTreeValue::bank_point(is_primary, bank_num.unwrap(), new_idx)));
                 }
 
                 if offset_changed {
@@ -1988,10 +1971,7 @@ impl PofToolsGui {
 
                     self.model.recheck_warnings(All); // FIX
 
-                    self.ui_state.tree_view_selection = TreeValue::DockingBays(DockingTreeValue::bay(new_idx));
-                    self.ui_state.tree_view_force_open = Some(TreeValue::DockingBays(DockingTreeValue::bay(new_idx)));
-                    properties_panel_dirty = true;
-                    self.ui_state.viewport_3d_dirty = true;
+                    select_new_tree_val!(TreeValue::DockingBays(DockingTreeValue::bay(new_idx)));
                 }
             }
             PropertiesPanel::GlowBank {
@@ -2129,18 +2109,12 @@ impl PofToolsGui {
                     let new_idx = response.apply(&mut self.model.glow_banks);
 
                     self.model.recheck_warnings(All); // FIX
-                    self.ui_state.tree_view_selection = TreeValue::Glows(GlowTreeValue::bank(new_idx));
-                    self.ui_state.tree_view_force_open = Some(TreeValue::Glows(GlowTreeValue::bank(new_idx)));
-                    properties_panel_dirty = true;
-                    self.ui_state.viewport_3d_dirty = true;
+                    select_new_tree_val!(TreeValue::Glows(GlowTreeValue::bank(new_idx)));
                 } else if let Some(response) = point_idx_response {
                     let new_idx = response.apply(&mut self.model.glow_banks[bank_num.unwrap()].glow_points);
 
                     self.model.recheck_warnings(All); // FIX
-                    self.ui_state.tree_view_selection = TreeValue::Glows(GlowTreeValue::bank_point(bank_num.unwrap(), new_idx));
-                    self.ui_state.tree_view_force_open = Some(TreeValue::Glows(GlowTreeValue::bank_point(bank_num.unwrap(), new_idx)));
-                    properties_panel_dirty = true;
-                    self.ui_state.viewport_3d_dirty = true;
+                    select_new_tree_val!(TreeValue::Glows(GlowTreeValue::bank_point(bank_num.unwrap(), new_idx)));
                 }
             }
             PropertiesPanel::SpecialPoint { radius_string, position_string, name_string } => {
@@ -2234,10 +2208,8 @@ impl PofToolsGui {
                     let new_idx = response.apply(&mut self.model.special_points);
 
                     self.model.recheck_warnings(All); // FIX
-                    self.ui_state.tree_view_selection = TreeValue::SpecialPoints(SpecialPointTreeValue::point(new_idx));
-                    self.ui_state.tree_view_force_open = Some(TreeValue::SpecialPoints(SpecialPointTreeValue::point(new_idx)));
-                    properties_panel_dirty = true;
-                    self.ui_state.viewport_3d_dirty = true;
+
+                    select_new_tree_val!(TreeValue::SpecialPoints(SpecialPointTreeValue::point(new_idx)));
                 }
             }
             PropertiesPanel::Turret { position_string, normal_string, base_idx } => {
@@ -2332,18 +2304,13 @@ impl PofToolsGui {
                     let new_idx = response.apply(&mut self.model.turrets);
 
                     self.model.recheck_errors(All); // FIX
-                    self.ui_state.tree_view_selection = TreeValue::Turrets(TurretTreeValue::turret(new_idx));
-                    self.ui_state.tree_view_force_open = Some(TreeValue::Turrets(TurretTreeValue::turret(new_idx)));
-                    properties_panel_dirty = true;
-                    self.ui_state.viewport_3d_dirty = true;
+
+                    select_new_tree_val!(TreeValue::Turrets(TurretTreeValue::turret(new_idx)));
                 } else if let Some(response) = point_idx_response {
                     let new_idx = response.apply(&mut self.model.turrets[turret_num.unwrap()].fire_points);
 
                     self.model.recheck_errors(All); // FIX
-                    self.ui_state.tree_view_selection = TreeValue::Turrets(TurretTreeValue::turret_point(turret_num.unwrap(), new_idx));
-                    self.ui_state.tree_view_force_open = Some(TreeValue::Turrets(TurretTreeValue::turret_point(turret_num.unwrap(), new_idx)));
-                    properties_panel_dirty = true;
-                    self.ui_state.viewport_3d_dirty = true;
+                    select_new_tree_val!(TreeValue::Turrets(TurretTreeValue::turret_point(turret_num.unwrap(), new_idx)));
                 }
             }
             PropertiesPanel::Path { name, parent_string, position_string, radius_string } => {
@@ -2408,17 +2375,11 @@ impl PofToolsGui {
 
                     self.model.recheck_warnings(All); // FIX
 
-                    self.ui_state.tree_view_selection = TreeValue::Paths(PathTreeValue::path(new_idx));
-                    self.ui_state.tree_view_force_open = Some(TreeValue::Paths(PathTreeValue::path(new_idx)));
-                    properties_panel_dirty = true;
-                    self.ui_state.viewport_3d_dirty = true;
+                    select_new_tree_val!(TreeValue::Paths(PathTreeValue::path(new_idx)));
                 } else if let Some(response) = point_idx_response {
                     let new_idx = response.apply(&mut self.model.paths[path_num.unwrap()].points);
 
-                    self.ui_state.tree_view_selection = TreeValue::Paths(PathTreeValue::path_point(path_num.unwrap(), new_idx));
-                    self.ui_state.tree_view_force_open = Some(TreeValue::Paths(PathTreeValue::path_point(path_num.unwrap(), new_idx)));
-                    properties_panel_dirty = true;
-                    self.ui_state.viewport_3d_dirty = true;
+                    select_new_tree_val!(TreeValue::Paths(PathTreeValue::path_point(path_num.unwrap(), new_idx)));
                 }
             }
             PropertiesPanel::Shield => {
@@ -2494,10 +2455,8 @@ impl PofToolsGui {
                     let new_idx = response.apply(&mut self.model.eye_points);
 
                     self.model.recheck_warnings(All); //FIX
-                    self.ui_state.tree_view_selection = TreeValue::EyePoints(EyeTreeValue::point(new_idx));
-                    self.ui_state.tree_view_force_open = Some(TreeValue::EyePoints(EyeTreeValue::point(new_idx)));
-                    properties_panel_dirty = true;
-                    self.ui_state.viewport_3d_dirty = true;
+
+                    select_new_tree_val!(TreeValue::EyePoints(EyeTreeValue::point(new_idx)));
                 }
             }
             PropertiesPanel::VisualCenter { position } => {

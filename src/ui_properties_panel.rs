@@ -2304,12 +2304,14 @@ impl PofToolsGui {
                     let new_idx = response.apply(&mut self.model.turrets);
 
                     self.model.recheck_errors(All); // FIX
+                    self.model.recheck_warnings(All); // FIX
 
                     select_new_tree_val!(TreeValue::Turrets(TurretTreeValue::turret(new_idx)));
                 } else if let Some(response) = point_idx_response {
                     let new_idx = response.apply(&mut self.model.turrets[turret_num.unwrap()].fire_points);
 
                     self.model.recheck_errors(All); // FIX
+                    self.model.recheck_warnings(All); // FIX
                     select_new_tree_val!(TreeValue::Turrets(TurretTreeValue::turret_point(turret_num.unwrap(), new_idx)));
                 }
             }

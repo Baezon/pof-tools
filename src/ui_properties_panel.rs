@@ -2312,6 +2312,7 @@ impl PofToolsGui {
 
                     self.model.recheck_errors(All); // FIX
                     self.model.recheck_warnings(All); // FIX
+
                     select_new_tree_val!(TreeValue::Turrets(TurretTreeValue::turret_point(turret_num.unwrap(), new_idx)));
                 }
             }

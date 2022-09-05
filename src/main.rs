@@ -701,7 +701,10 @@ fn main() {
                         glutin::event_loop::ControlFlow::Poll
                     },
                     time => {
-                        let next_frame_time = std::time::Instant::now() + time;
+                        let next_frame_time = match std::time::Instant::now().checked_add(time) {
+                            Some(time) => time,
+                            None => std::time::Instant::now() + std::time::Duration::from_secs(10),
+                        };
                         glutin::event_loop::ControlFlow::WaitUntil(next_frame_time)
                     }
                 };
@@ -1198,7 +1201,10 @@ fn main() {
                         glutin::event_loop::ControlFlow::Poll
                     },
                     time => {
-                        let next_frame_time = std::time::Instant::now() + time;
+                        let next_frame_time = match std::time::Instant::now().checked_add(time) {
+                            Some(time) => time,
+                            None => std::time::Instant::now() + std::time::Duration::from_secs(10),
+                        };
                         glutin::event_loop::ControlFlow::WaitUntil(next_frame_time)
                     },
                 };

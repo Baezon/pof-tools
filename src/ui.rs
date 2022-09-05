@@ -806,7 +806,7 @@ impl PofToolsGui {
                                     } else {
                                         ui.label(text);
                                     }
-                                    ui.with_layout(egui::Layout::right_to_left(), |ui| {
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                                         if !self.model.errors.is_empty() {
                                             ui.add(Label::new(
                                                 RichText::new(format!("{} ⊗", self.model.errors.len()))
@@ -964,7 +964,7 @@ impl PofToolsGui {
                                     } else {
                                         ui.label(text);
                                     }
-                                    ui.with_layout(egui::Layout::right_to_left(), |ui| {
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                                         if !self.model.errors.is_empty() {
                                             ui.add(Label::new(
                                                 RichText::new(format!("{} ⊗", self.model.errors.len()))

@@ -590,7 +590,8 @@ fn main() {
     }
     info!("Pof Tools {} - {}", POF_TOOLS_VERSION, chrono::Local::now());
 
-    let event_loop = glutin::event_loop::EventLoop::with_user_event();
+    let event_loop = glutin::event_loop::EventLoopBuilder::with_user_event()
+        .build();
     let mut pt_gui = PofToolsGui::new();
     let display = create_display(&event_loop);
 
@@ -603,7 +604,7 @@ fn main() {
     args.next();
     let path = args.next().map(|arg| PathBuf::from(arg.as_str()));
 
-    let mut egui = egui_glium::EguiGlium::new(&display);
+    let mut egui = egui_glium::EguiGlium::new(&display, &event_loop);
 
     pt_gui.start_loading_model(path);
 
@@ -692,14 +693,17 @@ fn main() {
 
                 pt_gui.handle_texture_loading_thread(&display);
 
-                let needs_repaint = egui.run(&display, |ctx| pt_gui.show_ui(ctx, &display));
+                let repaint_after = egui.run(&display, |ctx| pt_gui.show_ui(ctx, &display));
 
-                *control_flow = if needs_repaint {
-                    display.gl_window().window().request_redraw();
-                    glutin::event_loop::ControlFlow::Poll
-                } else {
-                    let next_frame_time = std::time::Instant::now() + std::time::Duration::from_nanos(16_666_667);
-                    glutin::event_loop::ControlFlow::WaitUntil(next_frame_time)
+                *control_flow = match repaint_after {
+                    time if time.is_zero() => {
+                        display.gl_window().window().request_redraw();
+                        glutin::event_loop::ControlFlow::Poll
+                    },
+                    time => {
+                        let next_frame_time = std::time::Instant::now() + time;
+                        glutin::event_loop::ControlFlow::WaitUntil(next_frame_time)
+                    }
                 };
 
                 {
@@ -1173,7 +1177,7 @@ fn main() {
 
             // if there was an error, do this mini event loop and display the error message
             if let Some((error_string, backtrace)) = &errored {
-                let needs_repaint = egui.run(&display, |ctx| {
+                let repaint_after = egui.run(&display, |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                             ui.horizontal(|ui| {
@@ -1187,12 +1191,16 @@ fn main() {
                     });
                 });
 
-                *control_flow = if needs_repaint {
-                    display.gl_window().window().request_redraw();
-                    glutin::event_loop::ControlFlow::Poll
-                } else {
-                    let next_frame_time = std::time::Instant::now() + std::time::Duration::from_nanos(16_666_667);
-                    glutin::event_loop::ControlFlow::WaitUntil(next_frame_time)
+                // Needs testing
+                *control_flow = match repaint_after {
+                    time if time.is_zero() => {
+                        display.gl_window().window().request_redraw();
+                        glutin::event_loop::ControlFlow::Poll
+                    },
+                    time => {
+                        let next_frame_time = std::time::Instant::now() + time;
+                        glutin::event_loop::ControlFlow::WaitUntil(next_frame_time)
+                    },
                 };
                 let mut target = display.draw();
                 use glium::Surface as _;

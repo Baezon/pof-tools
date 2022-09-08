@@ -734,8 +734,8 @@ fn main() {
                             if input.pointer.button_down(egui::PointerButton::Middle)
                                 || input.modifiers.shift && input.pointer.button_down(egui::PointerButton::Secondary)
                             {
-                                let x = input.pointer.delta().x * -0.005 * pt_gui.camera_scale; // for some reason x gets inverted
-                                let y = input.pointer.delta().y * 0.005 * pt_gui.camera_scale;
+                                let x = input.pointer.delta().x * -0.003 * pt_gui.camera_scale; // for some reason x gets inverted
+                                let y = input.pointer.delta().y * 0.003 * pt_gui.camera_scale;
 
                                 pt_gui.camera_offset += view_mat.transpose().transform_vector(&glm::vec3(x, y, 0.)).into();
                             }

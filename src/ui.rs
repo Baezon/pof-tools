@@ -658,6 +658,7 @@ impl PofToolsGui {
                     if ui.button("Open").clicked() {
                         self.start_loading_model(None);
                         ui.output().cursor_icon = egui::CursorIcon::Wait;
+                        ui.close_menu();
                     }
 
                     if ui
@@ -674,6 +675,7 @@ impl PofToolsGui {
                                 .window()
                                 .set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, filename));
                         }
+                        ui.close_menu();
                     }
 
                     if ui.button("Global Import").on_hover_text("Deletes data from the existing model and replaces it with the target model's. \n\
@@ -689,6 +691,7 @@ impl PofToolsGui {
                             self.ui_state.refresh_properties_panel(&self.model);
                             self.viewport_3d_dirty = true;
                         }
+                        ui.close_menu();
                     }
                 });
 

@@ -795,7 +795,7 @@ fn main() {
                         if pt_gui.camera_orthographic {
                             let zfar = (model.header.max_radius) * 2.0;
                             let znear = (model.header.max_radius) * -2.0;
-                            let f = 1. / pt_gui.camera_scale;
+                            let f = 1.5 / pt_gui.camera_scale;
                             Mat4x4::from([
                                 [f * aspect_ratio, 0.0, 0.0, 0.0],
                                 [0.0, f, 0.0, 0.0],
@@ -807,7 +807,7 @@ fn main() {
                             let zfar = (model.header.max_radius + pt_gui.camera_scale) * 2.0;
                             let znear = (model.header.max_radius + pt_gui.camera_scale) / 1000.;
 
-                            let f = 0.6 / (fov / 2.0).tan();
+                            let f = 1.0 / (fov / 2.0).tan();
 
                             Mat4x4::from([
                                 [f * aspect_ratio, 0.0, 0.0, 0.0],

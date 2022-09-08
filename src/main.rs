@@ -473,7 +473,7 @@ impl PofToolsGui {
         self.camera_heading = 2.7;
         self.camera_pitch = -0.4;
         self.camera_offset = Vec3d::ZERO;
-        self.camera_scale = self.model.header.max_radius * 2.0;
+        self.camera_scale = self.model.header.max_radius * 1.5;
         self.ui_state.last_selected_subobj = self.model.header.detail_levels.first().copied();
 
         self.load_textures();
@@ -745,7 +745,9 @@ fn main() {
                         }
                     }
 
-                    view_mat.append_translation_mut(&glm::vec3(0.0, 0.0, pt_gui.camera_scale));
+                    if !pt_gui.camera_orthographic {
+                        view_mat.append_translation_mut(&glm::vec3(0.0, 0.0, pt_gui.camera_scale));
+                    }
 
                     view_mat.prepend_translation_mut(&glm::vec3(-pt_gui.camera_offset.x, -pt_gui.camera_offset.y, -pt_gui.camera_offset.z));
                     view_mat.prepend_translation_mut(&glm::vec3(-model.visual_center.x, -model.visual_center.y, -model.visual_center.z));
@@ -790,18 +792,30 @@ fn main() {
                         let (width, height) = target.get_dimensions();
                         let aspect_ratio = height as f32 / width as f32;
 
-                        let fov: f32 = std::f32::consts::PI / 3.0;
-                        let zfar = (model.header.max_radius + pt_gui.camera_scale) * 2.0;
-                        let znear = (model.header.max_radius + pt_gui.camera_scale) / 1000.;
+                        if pt_gui.camera_orthographic {
+                            let zfar = (model.header.max_radius) * 2.0;
+                            let znear = (model.header.max_radius) * -2.0;
+                            let f = 1. / pt_gui.camera_scale;
+                            Mat4x4::from([
+                                [f * aspect_ratio, 0.0, 0.0, 0.0],
+                                [0.0, f, 0.0, 0.0],
+                                [0.0, 0.0, (2.0) / (zfar - znear), 0.0],
+                                [0.0, 0.0, -(zfar + znear) / (zfar - znear), 1.0],
+                            ])
+                        } else {
+                            let fov: f32 = std::f32::consts::PI / 3.0;
+                            let zfar = (model.header.max_radius + pt_gui.camera_scale) * 2.0;
+                            let znear = (model.header.max_radius + pt_gui.camera_scale) / 1000.;
 
-                        let f = 1.0 / (fov / 2.0).tan();
+                            let f = 0.6 / (fov / 2.0).tan();
 
-                        Mat4x4::from([
-                            [f * aspect_ratio, 0.0, 0.0, 0.0],
-                            [0.0, f, 0.0, 0.0],
-                            [0.0, 0.0, (zfar + znear) / (zfar - znear), 1.0],
-                            [0.0, 0.0, -(2.0 * zfar * znear) / (zfar - znear), 0.0],
-                        ])
+                            Mat4x4::from([
+                                [f * aspect_ratio, 0.0, 0.0, 0.0],
+                                [0.0, f, 0.0, 0.0],
+                                [0.0, 0.0, (zfar + znear) / (zfar - znear), 1.0],
+                                [0.0, 0.0, -(2.0 * zfar * znear) / (zfar - znear), 0.0],
+                            ])
+                        }
                     };
 
                     let light_vec = glm::vec3(0.5, 1.0, -1.0);

@@ -4,7 +4,11 @@ use glium::{
     Display,
 };
 use pof::{Error, Model, SubObject, TextureId, Vec3d, Version, Warning};
-use std::{collections::HashMap, sync::mpsc::Receiver};
+use std::{
+    collections::HashMap,
+    f32::consts::{FRAC_PI_2, PI},
+    sync::mpsc::Receiver,
+};
 
 use eframe::egui::{self, Button, TextStyle, Ui};
 use pof::ObjectId;
@@ -462,6 +466,7 @@ pub(crate) struct PofToolsGui {
     pub camera_heading: f32,
     pub camera_scale: f32,
     pub camera_offset: Vec3d,
+    pub camera_orthographic: bool,
 
     pub buffer_objects: Vec<GlObjectBuffers>, // all the subobjects, conditionally rendered based on the current tree selection
     pub buffer_textures: HashMap<TextureId, SrgbTexture2d>, // map of tex ids to actual textures
@@ -496,6 +501,7 @@ impl PofToolsGui {
             camera_heading: Default::default(),
             camera_scale: Default::default(),
             camera_offset: Default::default(),
+            camera_orthographic: false,
             buffer_objects: Default::default(),
             buffer_textures: Default::default(),
             buffer_shield: Default::default(),
@@ -684,8 +690,42 @@ impl PofToolsGui {
                             self.viewport_3d_dirty = true;
                         }
                     }
+                });
 
-                    if ui.input().pointer.interact_pos().map_or(false, |pos| !ui.min_rect().expand(20.0).contains(pos)) {
+                ui.menu_button("View", |ui|{
+                    if ui.button(if self.camera_orthographic {"Perspective"} else {"Orthographic"}).clicked() {
+                        self.camera_orthographic = !self.camera_orthographic;
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Front").clicked() {
+                        self.camera_heading = PI;
+                        self.camera_pitch = 0.0;
+                        ui.close_menu();
+                    }
+                    if ui.button("Back").clicked() {
+                        self.camera_heading = 0.0;
+                        self.camera_pitch = 0.0;
+                        ui.close_menu();
+                    }
+                    if ui.button("Right").clicked() {
+                        self.camera_heading = FRAC_PI_2;
+                        self.camera_pitch = 0.0;
+                        ui.close_menu();
+                    }
+                    if ui.button("Left").clicked() {
+                        self.camera_heading = -FRAC_PI_2;
+                        self.camera_pitch = 0.0;
+                        ui.close_menu();
+                    }
+                    if ui.button("Top").clicked() {
+                        self.camera_heading = 0.0;
+                        self.camera_pitch = -FRAC_PI_2;
+                        ui.close_menu();
+                    }
+                    if ui.button("Bottom").clicked() {
+                        self.camera_heading = PI;
+                        self.camera_pitch = FRAC_PI_2;
                         ui.close_menu();
                     }
                 });

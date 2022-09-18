@@ -1688,10 +1688,9 @@ impl Model {
                 }
             }
 
-            for _ in self.sub_objects.iter().map(|subobj| &subobj.name).duplicates() {
-                self.sub_objects.iter().for_each(|subobj| {
-                    self.errors.insert(Error::DuplicateSubobjectName(subobj.obj_id));
-                });
+            for duped_name in self.sub_objects.iter().map(|subobj| &subobj.name).duplicates() {
+                self.errors
+                    .insert(Error::DuplicateSubobjectName(self.get_obj_id_by_name(duped_name).unwrap()));
             }
         }
     }

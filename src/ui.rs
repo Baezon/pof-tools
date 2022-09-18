@@ -637,9 +637,8 @@ impl UiState {
         self.tree_view_selection = new_tree_val;
         self.tree_view_force_open = Some(new_tree_val);
         self.viewport_3d_dirty = true;
-        match new_tree_val {
-            TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) => self.last_selected_subobj = Some(id),
-            _ => (),
+        if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = new_tree_val {
+            self.last_selected_subobj = Some(id);
         }
     }
 }

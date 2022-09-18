@@ -219,11 +219,15 @@ impl Display for Vec3d {
     }
 }
 /// The orientation of the model before rotation
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub enum ModelOrientation {
-    #[default]
     Up,
     Forward,
+}
+impl Default for ModelOrientation {
+    fn default() -> Self {
+        ModelOrientation::Up
+    }
 }
 impl Vec3d {
     pub const ZERO: Vec3d = Vec3d { x: 0.0, y: 0.0, z: 0.0 };

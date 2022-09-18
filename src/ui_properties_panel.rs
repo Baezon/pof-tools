@@ -1389,8 +1389,11 @@ impl PofToolsGui {
                 // Properties edit ================================================================
 
                 ui.label("Properties:");
+                if ui.checkbox(&mut self.auto_orthogonalize_uvec_fvec, "Auto-orthogonalize uvec/fvec").changed() {
+                    self.ui_state.viewport_3d_dirty = true;
+                }
                 if let Some(id) = selected_id {
-                    if self.model.sub_objects[id].uvec_fvec().is_some() {
+                    if self.model.sub_objects[id].uvec_fvec(false).is_some() {
                         self.ui_state.display_uvec_fvec = true;
                     }
                     if ui
@@ -1398,9 +1401,9 @@ impl PofToolsGui {
                         .changed()
                     {
                         self.model.recheck_warnings(One(Warning::SubObjectPropertiesTooLong(id)));
-                        self.model.recheck_warnings(One(Warning::NoFvec(id)));
-                        self.model.recheck_warnings(One(Warning::NoUvec(id)));
-                        self.model.recheck_warnings(One(Warning::UvecFvecNotPerpendicular(id)));
+                        self.model.recheck_warnings(One(Warning::TurretNoFvec(id)));
+                        self.model.recheck_warnings(One(Warning::TurretNoUvec(id)));
+                        self.model.recheck_warnings(One(Warning::TurretUvecFvecNotPerpendicular(id)));
                         self.ui_state.viewport_3d_dirty = true; // There may be changes to the uvec/fvec
                     };
                 } else {

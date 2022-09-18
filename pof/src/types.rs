@@ -218,6 +218,13 @@ impl Display for Vec3d {
         write!(f, "{}, {}, {}", &self.x, &self.y, &self.z)
     }
 }
+/// The orientation of the model before rotation
+#[derive(Clone, Copy, Default)]
+pub enum ModelOrientation {
+    #[default]
+    Up,
+    Forward,
+}
 impl Vec3d {
     pub const ZERO: Vec3d = Vec3d { x: 0.0, y: 0.0, z: 0.0 };
     pub const INFINITY: Vec3d = Vec3d { x: f32::INFINITY, y: f32::INFINITY, z: f32::INFINITY };
@@ -273,8 +280,9 @@ impl Vec3d {
         }
     }
 
-    /// Get a rotation matrix that will rotate an upwards-facing model to face the direction this vector is pointing.
-    pub fn to_rotation_matrix(&self) -> Mat4 {
+    /// Get a rotation matrix that will rotate a model to face the direction
+    /// this vector is pointing.
+    pub fn to_rotation_matrix(&self, orientation: ModelOrientation) -> Mat4 {
         // https://gamedev.stackexchange.com/a/119017
         // find the planar angle
         let v = self.normalize();
@@ -283,7 +291,10 @@ impl Vec3d {
         let planar_rot = glm::rotation(planar_angle, &glm::vec3(0., 1., 0.));
         // Find upwards angle
         // Use acos instead of asin because the arrowhead model points upwards
-        let up_angle = v.y.acos();
+        let up_angle = match orientation {
+            ModelOrientation::Up => v.y.acos(),
+            _ => v.y.asin(),
+        };
         let up_rot = glm::rotation(up_angle, &glm::vec3(1., 0., 0.));
         planar_rot * up_rot
     }
@@ -1320,8 +1331,15 @@ impl SubObject {
         // };
     }
 
-    pub fn uvec_fvec(&self) -> Option<(Vec3d, Vec3d)> {
-        parse_uvec_fvec(&self.properties)
+    pub fn uvec_fvec(&self, orthogonalize: bool) -> Option<(Vec3d, Vec3d)> {
+        if let Some((mut uvec, mut fvec)) = parse_uvec_fvec(&self.properties) {
+            if orthogonalize {
+                (uvec, fvec) = self::orthogonalize(uvec, fvec);
+            }
+            Some((uvec, fvec))
+        } else {
+            None
+        }
     }
 }
 
@@ -1331,6 +1349,82 @@ fn parse_uvec_fvec(props: &str) -> Option<(Vec3d, Vec3d)> {
     let uvec = Vec3d::from_str(properties_get_field(props, "$uvec")?).ok()?.normalize();
     let fvec = Vec3d::from_str(properties_get_field(props, "$fvec")?).ok()?.normalize();
     Some((uvec, fvec))
+}
+
+// This code was ported from FSO/code/math/vecmat.cpp
+pub fn orthogonalize(mut uvec: Vec3d, mut fvec: Vec3d) -> (Vec3d, Vec3d) {
+    let maybe_normalize_threshold = std::f32::EPSILON * 10.;
+
+    let maybe_normalize = |src: &mut Vec3d| {
+        let mag = src.magnitude();
+        if mag < maybe_normalize_threshold {
+            false
+        } else {
+            *src = src.normalize();
+            true
+        }
+    };
+
+    let project_plane = |src: Vec3d, normal: Vec3d| {
+        // This is like vm_vec_projection_onto_plane, except it returns
+        // projection instead of assigning it.
+        let mag = glm::dot(&src.into(), &normal.into());
+        // vm_vec_scale_add2(dest: projection, src: unit_normal, k: -mag)
+        src + normal * -mag
+    };
+
+    // vm_orthogonalize_two_vec(dst1: fvec, dst2: uvec, src1: fvec, src2: uvec, preference: rvec)
+    let rvec = Vec3d::from(glm::cross(&uvec.into(), &fvec.into()));
+    if maybe_normalize(&mut fvec) {
+        // vm_orthogonalize_one_vec(dst: dst2(uvec), unit_normal: dst1(fvec), preference: src2(uvec))
+        uvec = project_plane(uvec, fvec);
+        if maybe_normalize(&mut uvec) {
+            if glm::dot(&uvec.into(), &fvec.into()).abs() > 1e-4f32 {
+                uvec = project_plane(uvec, fvec);
+                uvec = uvec.normalize();
+            }
+        } else {
+            uvec = project_plane(Vec3d { x: 0., y: 0., z: 1. }, fvec);
+            if !maybe_normalize(&mut uvec) {
+                uvec = project_plane(Vec3d {x: 0., y: 1., z: 0.}, fvec);
+            }
+        }
+    } else if maybe_normalize(&mut uvec) {
+        // vm_orthogonalize_one_vec(dst: dst1(fvec), unit_normal: dst2(uvec), preference: src1(fvec))
+        fvec = project_plane(fvec, uvec);
+        if maybe_normalize(&mut fvec) {
+            if glm::dot(&fvec.into(), &uvec.into()).abs() > 1e-4f32 {
+                fvec = project_plane(fvec, uvec);
+                fvec = fvec.normalize();
+            }
+        } else {
+            fvec = project_plane(Vec3d { x: 0., y: 0., z: 1. }, uvec);
+            if !maybe_normalize(&mut fvec) {
+                fvec = project_plane(Vec3d {x: 0., y: 1., z: 0.}, uvec);
+            }
+        }
+    } else {
+        // if !vm_maybe_normalize(dst: dst1(fvec), src: preference(rvec))
+        fvec = if rvec.magnitude() < maybe_normalize_threshold {
+            Vec3d { x: 1., y: 0., z: 0. }
+        } else {
+            rvec.normalize()
+        };
+        // vm_orthogonalize_one_vec(dst: dst2(uvec), unit_normal: dst1(fvec), preference: src2(uvec))
+        uvec = project_plane(uvec, fvec);
+        if maybe_normalize(&mut uvec) {
+            if glm::dot(&uvec.into(), &fvec.into()).abs() > 1e-4f32 {
+                uvec = project_plane(uvec, fvec);
+                uvec = uvec.normalize();
+            }
+        } else {
+            uvec = project_plane(Vec3d { x: 0., y: 0., z: 1. }, fvec);
+            if !maybe_normalize(&mut uvec) {
+                uvec = project_plane(Vec3d {x: 0., y: 1., z: 0.}, fvec);
+            }
+        }
+    }
+    (uvec, fvec)
 }
 
 impl Serialize for SubObject {
@@ -1779,20 +1873,20 @@ impl Model {
                     .special_points
                     .get(idx)
                     .map_or(false, |spec_point| spec_point.properties.len() > MAX_PROPERTIES_LEN),
-                Warning::NoFvec(id) => match (
+                Warning::TurretNoFvec(id) => match (
                     properties_get_field(&self.sub_objects[id].properties, "$uvec"),
                     properties_get_field(&self.sub_objects[id].properties, "$fvec")) {
                     (Some(_), None) => true,
                     _ => false,
                 },
-                Warning::NoUvec(id) => 
+                Warning::TurretNoUvec(id) => 
                     match (
                     properties_get_field(&self.sub_objects[id].properties, "$uvec"),
                     properties_get_field(&self.sub_objects[id].properties, "$fvec")) {
                         (None, Some(_)) => true,
                         _ => false,
                     },
-                Warning::UvecFvecNotPerpendicular(id) => match self.sub_objects[id].uvec_fvec() {
+                Warning::TurretUvecFvecNotPerpendicular(id) => match self.sub_objects[id].uvec_fvec(false) {
                     None => false,
                     Some((uvec, fvec)) => {
                         glm::dot(&uvec.into(), &fvec.into()).abs() >= 0.0078125  // 1./128.
@@ -1849,12 +1943,12 @@ impl Model {
                 match (
                     properties_get_field(&subobj.properties, "$uvec"),
                     properties_get_field(&subobj.properties, "$fvec")) {
-                    (Some(_), None) => {self.warnings.insert(Warning::NoFvec(subobj.obj_id));},
-                    (None, Some(_)) => {self.warnings.insert(Warning::NoUvec(subobj.obj_id));},
+                    (Some(_), None) => {self.warnings.insert(Warning::TurretNoFvec(subobj.obj_id));},
+                    (None, Some(_)) => {self.warnings.insert(Warning::TurretNoUvec(subobj.obj_id));},
                     (Some(_), Some(_)) => {
-                        if let Some((uvec, fvec)) = subobj.uvec_fvec() {
+                        if let Some((uvec, fvec)) = subobj.uvec_fvec(false) {
                             if glm::dot(&uvec.into(), &fvec.into()).abs() >= 0.0078125 {  // 1./128.
-                                self.warnings.insert(Warning::UvecFvecNotPerpendicular(subobj.obj_id));
+                                self.warnings.insert(Warning::TurretUvecFvecNotPerpendicular(subobj.obj_id));
                             }
                         }
                     },
@@ -2461,9 +2555,10 @@ pub enum Warning {
     SpecialPointPropertiesTooLong(usize),
     // path with no parent
     // thruster with no engine subsys (and an engine subsys exists)
-    NoFvec(ObjectId),
-    NoUvec(ObjectId),
-    UvecFvecNotPerpendicular(ObjectId),
+    // turret uvec != turret normal
+    TurretNoFvec(ObjectId),
+    TurretNoUvec(ObjectId),
+    TurretUvecFvecNotPerpendicular(ObjectId),
     // turret subobject properties not set up for a turret
 }
 

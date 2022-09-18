@@ -21,6 +21,7 @@ use glm::Mat4x4;
 use native_dialog::FileDialog;
 use pof::{
     BspData, Insignia, Model, NameLink, NormalId, ObjVec, ObjectId, Parser, PolyVertex, Polygon, ShieldData, SubObject, TextureId, Vec3d, VertexId,
+    ModelOrientation,
 };
 use simplelog::*;
 use std::{
@@ -1342,7 +1343,7 @@ impl PofToolsGui {
                     let ball_origin = ball_origin.finish(display);
                     self.lollipops = vec![ball_origin];
 
-                    match model.sub_objects[obj_id].uvec_fvec() {
+                    match model.sub_objects[obj_id].uvec_fvec(self.auto_orthogonalize_uvec_fvec) {
                         Some((uvec, fvec)) => {
                             // Set up arrowhead sticks
                             let stick_length = 2. * radius;
@@ -1361,13 +1362,13 @@ impl PofToolsGui {
                             let fvec_pos = pos + fvec * stick_length;
                             let uvec_matrix = {
                                 let mut m = glm::translation::<f32>(&uvec_pos.into());
-                                m *= uvec.to_rotation_matrix();
+                                m *= uvec.to_rotation_matrix(ModelOrientation::Up);
                                 m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
                                 m
                             };
                             let fvec_matrix = {
                                 let mut m = glm::translation::<f32>(&fvec_pos.into());
-                                m *= fvec.to_rotation_matrix();
+                                m *= fvec.to_rotation_matrix(ModelOrientation::Up);
                                 m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
                                 m
                             };

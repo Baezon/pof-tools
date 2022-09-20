@@ -1,78 +1,64 @@
-use egui::{CollapsingHeader, Color32, Label, RichText};
+use egui::{collapsing_header::CollapsingState, Color32, Id, Label, RichText};
 use glium::{
     texture::{RawImage2d, SrgbTexture2d},
     Display,
 };
-use pof::{BoundingBox, Model, SubObject, TextureId, Vec3d, Version};
+use pof::{Error, Model, SubObject, TextureId, Vec3d, Version, Warning};
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::HashMap,
+    f32::consts::{FRAC_PI_2, PI},
     sync::mpsc::Receiver,
 };
 
 use eframe::egui::{self, Button, TextStyle, Ui};
 use pof::ObjectId;
 
-use crate::{ui_properties_panel::PropertiesPanel, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers, POF_TOOLS_VERSION};
+use crate::{
+    ui_properties_panel::PropertiesPanel, GlArrowhead, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers, POF_TOOLS_VERSION,
+};
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
-pub(crate) enum TreeSelection {
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, PartialOrd, Ord)]
+pub(crate) enum TreeValue {
     Header,
-    SubObjects(SubObjectSelection),
-    Textures(TextureSelection),
-    Weapons(WeaponSelection),
-    DockingBays(DockingSelection),
-    Thrusters(ThrusterSelection),
-    Glows(GlowSelection),
-    SpecialPoints(SpecialPointSelection),
-    Turrets(TurretSelection),
-    Paths(PathSelection),
+    SubObjects(SubObjectTreeValue),
+    Textures(TextureTreeValue),
+    Weapons(WeaponTreeValue),
+    DockingBays(DockingTreeValue),
+    Thrusters(ThrusterTreeValue),
+    Glows(GlowTreeValue),
+    SpecialPoints(SpecialPointTreeValue),
+    Turrets(TurretTreeValue),
+    Paths(PathTreeValue),
     Shield,
-    EyePoints(EyeSelection),
-    Insignia(InsigniaSelection),
+    EyePoints(EyeTreeValue),
+    Insignia(InsigniaTreeValue),
     VisualCenter,
     Comments,
 }
-impl std::fmt::Display for TreeSelection {
+impl std::fmt::Display for TreeValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TreeSelection::Header => write!(f, "Treeview - Header"),
-            TreeSelection::SubObjects(selection) => write!(f, "Treeview - Subobjects - {}", selection),
-            TreeSelection::Textures(selection) => write!(f, "Treeview - Textures - {}", selection),
-            TreeSelection::Weapons(selection) => write!(f, "Treeview - Weapons - {}", selection),
-            TreeSelection::DockingBays(selection) => write!(f, "Treeview - DockingBays - {}", selection),
-            TreeSelection::Thrusters(selection) => write!(f, "Treeview - Thrusters - {}", selection),
-            TreeSelection::Glows(selection) => write!(f, "Treeview - Glows - {}", selection),
-            TreeSelection::SpecialPoints(selection) => write!(f, "Treeview - SpecialPoints - {}", selection),
-            TreeSelection::Turrets(selection) => write!(f, "Treeview - Turrets - {}", selection),
-            TreeSelection::Paths(selection) => write!(f, "Treeview - Paths - {}", selection),
-            TreeSelection::Shield => write!(f, "Treeview - Shield"),
-            TreeSelection::EyePoints(selection) => write!(f, "Treeview - EyePoints - {}", selection),
-            TreeSelection::Insignia(selection) => write!(f, "Treeview - Insignia - {}", selection),
-            TreeSelection::VisualCenter => write!(f, "Treeview - VisualCenter"),
-            TreeSelection::Comments => write!(f, "Treeview - Comments"),
+            TreeValue::Header => write!(f, "Treeview - Header"),
+            TreeValue::SubObjects(selection) => write!(f, "Treeview - Subobjects - {}", selection),
+            TreeValue::Textures(selection) => write!(f, "Treeview - Textures - {}", selection),
+            TreeValue::Weapons(selection) => write!(f, "Treeview - Weapons - {}", selection),
+            TreeValue::DockingBays(selection) => write!(f, "Treeview - DockingBays - {}", selection),
+            TreeValue::Thrusters(selection) => write!(f, "Treeview - Thrusters - {}", selection),
+            TreeValue::Glows(selection) => write!(f, "Treeview - Glows - {}", selection),
+            TreeValue::SpecialPoints(selection) => write!(f, "Treeview - SpecialPoints - {}", selection),
+            TreeValue::Turrets(selection) => write!(f, "Treeview - Turrets - {}", selection),
+            TreeValue::Paths(selection) => write!(f, "Treeview - Paths - {}", selection),
+            TreeValue::Shield => write!(f, "Treeview - Shield"),
+            TreeValue::EyePoints(selection) => write!(f, "Treeview - EyePoints - {}", selection),
+            TreeValue::Insignia(selection) => write!(f, "Treeview - Insignia - {}", selection),
+            TreeValue::VisualCenter => write!(f, "Treeview - VisualCenter"),
+            TreeValue::Comments => write!(f, "Treeview - Comments"),
         }
     }
 }
-impl Default for TreeSelection {
+impl Default for TreeValue {
     fn default() -> Self {
         Self::Header
-    }
-}
-impl TreeSelection {
-    pub fn get_position_ref<'a>(&self, model: &'a mut Model) -> Option<&'a mut Vec3d> {
-        match *self {
-            TreeSelection::Weapons(WeaponSelection::PriBankPoint(i, j)) => Some(&mut model.primary_weps[i][j].position),
-            TreeSelection::Weapons(WeaponSelection::SecBankPoint(i, j)) => Some(&mut model.secondary_weps[i][j].position),
-            TreeSelection::DockingBays(DockingSelection::Bay(i)) => Some(&mut model.docking_bays[i].position),
-            TreeSelection::Thrusters(ThrusterSelection::BankPoint(i, j)) => Some(&mut model.thruster_banks[i].glows[j].position),
-            TreeSelection::Glows(GlowSelection::BankPoint(i, j)) => Some(&mut model.glow_banks[i].glow_points[j].position),
-            TreeSelection::SpecialPoints(SpecialPointSelection::Point(i)) => Some(&mut model.special_points[i].position),
-            TreeSelection::Turrets(TurretSelection::TurretPoint(i, j)) => Some(&mut model.turrets[i].fire_points[j]),
-            TreeSelection::Paths(PathSelection::PathPoint(i, j)) => Some(&mut model.paths[i].points[j].position),
-            TreeSelection::EyePoints(EyeSelection::EyePoint(i)) => Some(&mut model.eye_points[i].position),
-            TreeSelection::VisualCenter => Some(&mut model.visual_center),
-            _ => None,
-        }
     }
 }
 #[derive(PartialEq, Hash, Debug, Clone, Copy)]
@@ -88,7 +74,117 @@ impl std::fmt::Display for InsigniaSelection {
         }
     }
 }
-impl InsigniaSelection {
+impl TreeValue {
+    pub fn get_position_ref<'a>(&self, model: &'a mut Model) -> Option<&'a mut Vec3d> {
+        match *self {
+            TreeValue::Weapons(WeaponTreeValue::PriBankPoint(i, j)) => Some(&mut model.primary_weps[i][j].position),
+            TreeValue::Weapons(WeaponTreeValue::SecBankPoint(i, j)) => Some(&mut model.secondary_weps[i][j].position),
+            TreeValue::DockingBays(DockingTreeValue::Bay(i)) => Some(&mut model.docking_bays[i].position),
+            TreeValue::Thrusters(ThrusterSelection::BankPoint(i, j)) => Some(&mut model.thruster_banks[i].glows[j].position),
+            TreeValue::Glows(GlowSelection::BankPoint(i, j)) => Some(&mut model.glow_banks[i].glow_points[j].position),
+            TreeValue::SpecialPoints(SpecialPointSelection::Point(i)) => Some(&mut model.special_points[i].position),
+            TreeValue::Turrets(TurretSelection::TurretPoint(i, j)) => Some(&mut model.turrets[i].fire_points[j]),
+            TreeValue::Paths(PathSelection::PathPoint(i, j)) => Some(&mut model.paths[i].points[j].position),
+            TreeValue::EyePoints(EyeSelection::EyePoint(i)) => Some(&mut model.eye_points[i].position),
+            TreeValue::VisualCenter => Some(&mut model.visual_center),
+            _ => None,
+        }
+    }
+    // returns what, if any, tree_value best corresponds to a given error
+    fn from_error(error: Error) -> Option<TreeValue> {
+        match error {
+            Error::InvalidTurretGunSubobject(idx) => Some(TreeValue::Turrets(TurretTreeValue::Turret(idx))),
+            Error::TooManyDebrisObjects => None,
+            Error::DetailObjWithParent(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            Error::DetailAndDebrisObj(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            Error::TooManyVerts(id) | Error::TooManyNorms(id) | Error::UnnamedSubObject(id) | Error::DuplicateSubobjectName(id) => {
+                Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)))
+            }
+        }
+    }
+
+    // returns what, if any, tree_value best corresponds to a given warning
+    fn from_warning(warning: Warning) -> Option<TreeValue> {
+        match warning {
+            Warning::RadiusTooSmall(None) => Some(TreeValue::Header),
+            Warning::BBoxTooSmall(None) => Some(TreeValue::Header),
+            Warning::InvertedBBox(None) => Some(TreeValue::Header),
+            Warning::RadiusTooSmall(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            Warning::BBoxTooSmall(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            Warning::InvertedBBox(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            Warning::SubObjectTranslationInvalidVersion(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            Warning::UntexturedPolygons => None,
+            Warning::DockingBayWithoutPath(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(idx))),
+            Warning::ThrusterPropertiesInvalidVersion(idx) => Some(TreeValue::Thrusters(ThrusterTreeValue::Bank(idx))),
+            Warning::WeaponOffsetInvalidVersion { primary, bank, point } => {
+                if primary {
+                    Some(TreeValue::Weapons(WeaponTreeValue::PriBankPoint(bank, point)))
+                } else {
+                    Some(TreeValue::Weapons(WeaponTreeValue::SecBankPoint(bank, point)))
+                }
+            }
+            Warning::TooFewTurretFirePoints(idx) => Some(TreeValue::Turrets(TurretTreeValue::Turret(idx))),
+            Warning::TooManyTurretFirePoints(idx) => Some(TreeValue::Turrets(TurretTreeValue::Turret(idx))),
+            Warning::DuplicatePathName(idx) => Some(TreeValue::Paths(PathTreeValue::Path(idx))),
+            Warning::DuplicateDetailLevel(_) => Some(TreeValue::Header),
+            Warning::TooManyEyePoints => Some(TreeValue::EyePoints(EyeTreeValue::Header)),
+            Warning::TooManyTextures => Some(TreeValue::Textures(TextureTreeValue::Header)),
+            Warning::PathNameTooLong(idx) => Some(TreeValue::Paths(PathTreeValue::Path(idx))),
+            Warning::SpecialPointNameTooLong(idx) => Some(TreeValue::SpecialPoints(SpecialPointTreeValue::Point(idx))),
+            Warning::SubObjectNameTooLong(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            Warning::DockingBayNameTooLong(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(idx))),
+            Warning::SubObjectPropertiesTooLong(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            Warning::ThrusterPropertiesTooLong(idx) => Some(TreeValue::Thrusters(ThrusterTreeValue::Bank(idx))),
+            Warning::DockingBayPropertiesTooLong(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(idx))),
+            Warning::GlowBankPropertiesTooLong(idx) => Some(TreeValue::Glows(GlowTreeValue::Bank(idx))),
+            Warning::SpecialPointPropertiesTooLong(idx) => Some(TreeValue::SpecialPoints(SpecialPointTreeValue::Point(idx))),
+        }
+    }
+
+    fn is_ancestor_of(self, maybe_descendant: TreeValue) -> bool {
+        if self == maybe_descendant {
+            return false;
+        }
+        match (self, maybe_descendant) {
+            (TreeValue::SubObjects(SubObjectTreeValue::Header), TreeValue::SubObjects(_)) => true,
+            (TreeValue::Textures(TextureTreeValue::Header), TreeValue::Textures(_)) => true,
+            (TreeValue::Weapons(WeaponTreeValue::Header), TreeValue::Weapons(_)) => true,
+            (TreeValue::Weapons(WeaponTreeValue::PriHeader), TreeValue::Weapons(WeaponTreeValue::PriBank(_))) => true,
+            (TreeValue::Weapons(WeaponTreeValue::PriHeader), TreeValue::Weapons(WeaponTreeValue::PriBankPoint(..))) => true,
+            (TreeValue::Weapons(WeaponTreeValue::PriBank(idx)), TreeValue::Weapons(WeaponTreeValue::PriBankPoint(idx2, _))) => idx == idx2,
+            (TreeValue::Weapons(WeaponTreeValue::SecHeader), TreeValue::Weapons(WeaponTreeValue::SecBank(_))) => true,
+            (TreeValue::Weapons(WeaponTreeValue::SecHeader), TreeValue::Weapons(WeaponTreeValue::SecBankPoint(..))) => true,
+            (TreeValue::Weapons(WeaponTreeValue::SecBank(idx)), TreeValue::Weapons(WeaponTreeValue::SecBankPoint(idx2, _))) => idx == idx2,
+            (TreeValue::DockingBays(DockingTreeValue::Header), TreeValue::DockingBays(_)) => true,
+            (TreeValue::Thrusters(ThrusterTreeValue::Header), TreeValue::Thrusters(_)) => true,
+            (TreeValue::Thrusters(ThrusterTreeValue::Bank(idx)), TreeValue::Thrusters(ThrusterTreeValue::BankPoint(idx2, _))) => idx == idx2,
+            (TreeValue::Glows(GlowTreeValue::Header), TreeValue::Glows(_)) => true,
+            (TreeValue::Glows(GlowTreeValue::Bank(idx)), TreeValue::Glows(GlowTreeValue::BankPoint(idx2, _))) => idx == idx2,
+            (TreeValue::SpecialPoints(SpecialPointTreeValue::Header), TreeValue::SpecialPoints(_)) => true,
+            (TreeValue::Turrets(TurretTreeValue::Header), TreeValue::Turrets(_)) => true,
+            (TreeValue::Turrets(TurretTreeValue::Turret(idx)), TreeValue::Turrets(TurretTreeValue::TurretPoint(idx2, _))) => idx == idx2,
+            (TreeValue::Paths(PathTreeValue::Header), TreeValue::Paths(_)) => true,
+            (TreeValue::Paths(PathTreeValue::Path(idx)), TreeValue::Paths(PathTreeValue::PathPoint(idx2, _))) => idx == idx2,
+            (TreeValue::EyePoints(EyeTreeValue::Header), TreeValue::EyePoints(_)) => true,
+            (TreeValue::Insignia(InsigniaTreeValue::Header), TreeValue::Insignia(_)) => true,
+            _ => false,
+        }
+    }
+}
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+pub(crate) enum InsigniaTreeValue {
+    Header,
+    Insignia(usize), // insignia idx
+}
+impl std::fmt::Display for InsigniaTreeValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InsigniaTreeValue::Header => write!(f, "Header"),
+            InsigniaTreeValue::Insignia(idx) => write!(f, "{}", idx + 1),
+        }
+    }
+}
+impl InsigniaTreeValue {
     fn _insignia(point: Option<usize>) -> Self {
         match point {
             Some(point) => Self::Insignia(point),
@@ -97,20 +193,20 @@ impl InsigniaSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
-pub(crate) enum EyeSelection {
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+pub(crate) enum EyeTreeValue {
     Header,
     EyePoint(usize), // eye idx
 }
-impl std::fmt::Display for EyeSelection {
+impl std::fmt::Display for EyeTreeValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EyeSelection::Header => write!(f, "Header"),
-            EyeSelection::EyePoint(idx) => write!(f, "{}", idx + 1),
+            EyeTreeValue::Header => write!(f, "Header"),
+            EyeTreeValue::EyePoint(idx) => write!(f, "{}", idx + 1),
         }
     }
 }
-impl EyeSelection {
+impl EyeTreeValue {
     pub fn point(point: Option<usize>) -> Self {
         match point {
             Some(point) => Self::EyePoint(point),
@@ -119,22 +215,22 @@ impl EyeSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
-pub(crate) enum PathSelection {
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+pub(crate) enum PathTreeValue {
     Header,
     Path(usize),             // path idx
     PathPoint(usize, usize), // path idx, point idx
 }
-impl std::fmt::Display for PathSelection {
+impl std::fmt::Display for PathTreeValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PathSelection::Header => write!(f, "Header"),
-            PathSelection::Path(idx) => write!(f, "Path {}", idx + 1),
-            PathSelection::PathPoint(idx, idx2) => write!(f, "Path {} Point {}", idx + 1, idx2 + 1),
+            PathTreeValue::Header => write!(f, "Header"),
+            PathTreeValue::Path(idx) => write!(f, "Path {}", idx + 1),
+            PathTreeValue::PathPoint(idx, idx2) => write!(f, "Path {} Point {}", idx + 1, idx2 + 1),
         }
     }
 }
-impl PathSelection {
+impl PathTreeValue {
     pub fn path_point(path: usize, point: Option<usize>) -> Self {
         match point {
             Some(point) => Self::PathPoint(path, point),
@@ -149,23 +245,23 @@ impl PathSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
-pub(crate) enum TurretSelection {
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+pub(crate) enum TurretTreeValue {
     Header,
     Turret(usize),             // turret idx
     TurretPoint(usize, usize), // turret idx, point idx
 }
 
-impl std::fmt::Display for TurretSelection {
+impl std::fmt::Display for TurretTreeValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TurretSelection::Header => write!(f, "Header"),
-            TurretSelection::Turret(idx) => write!(f, "Turret {}", idx + 1),
-            TurretSelection::TurretPoint(idx, idx2) => write!(f, "Turret {} Point {}", idx + 1, idx2 + 1),
+            TurretTreeValue::Header => write!(f, "Header"),
+            TurretTreeValue::Turret(idx) => write!(f, "Turret {}", idx + 1),
+            TurretTreeValue::TurretPoint(idx, idx2) => write!(f, "Turret {} Point {}", idx + 1, idx2 + 1),
         }
     }
 }
-impl TurretSelection {
+impl TurretTreeValue {
     pub fn turret_point(turret: usize, point: Option<usize>) -> Self {
         match point {
             Some(point) => Self::TurretPoint(turret, point),
@@ -180,20 +276,20 @@ impl TurretSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
-pub(crate) enum SpecialPointSelection {
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+pub(crate) enum SpecialPointTreeValue {
     Header,
     Point(usize),
 }
-impl std::fmt::Display for SpecialPointSelection {
+impl std::fmt::Display for SpecialPointTreeValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SpecialPointSelection::Header => write!(f, "Header"),
-            SpecialPointSelection::Point(idx) => write!(f, "Point {}", idx + 1),
+            SpecialPointTreeValue::Header => write!(f, "Header"),
+            SpecialPointTreeValue::Point(idx) => write!(f, "Point {}", idx + 1),
         }
     }
 }
-impl SpecialPointSelection {
+impl SpecialPointTreeValue {
     pub fn point(point: Option<usize>) -> Self {
         match point {
             Some(point) => Self::Point(point),
@@ -202,23 +298,23 @@ impl SpecialPointSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
-pub(crate) enum GlowSelection {
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+pub(crate) enum GlowTreeValue {
     Header,
     Bank(usize),             // bank idx
     BankPoint(usize, usize), // bank idx, point idx
 }
 
-impl std::fmt::Display for GlowSelection {
+impl std::fmt::Display for GlowTreeValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GlowSelection::Header => write!(f, "Header"),
-            GlowSelection::Bank(idx) => write!(f, "Bank {}", idx + 1),
-            GlowSelection::BankPoint(idx, idx2) => write!(f, "Bank {} Point {}", idx + 1, idx2 + 1),
+            GlowTreeValue::Header => write!(f, "Header"),
+            GlowTreeValue::Bank(idx) => write!(f, "Bank {}", idx + 1),
+            GlowTreeValue::BankPoint(idx, idx2) => write!(f, "Bank {} Point {}", idx + 1, idx2 + 1),
         }
     }
 }
-impl GlowSelection {
+impl GlowTreeValue {
     pub fn bank_point(bank: usize, point: Option<usize>) -> Self {
         match point {
             Some(point) => Self::BankPoint(bank, point),
@@ -233,20 +329,20 @@ impl GlowSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
-pub(crate) enum DockingSelection {
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+pub(crate) enum DockingTreeValue {
     Header,
     Bay(usize), // bank idx
 }
-impl std::fmt::Display for DockingSelection {
+impl std::fmt::Display for DockingTreeValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DockingSelection::Header => write!(f, "Header"),
-            DockingSelection::Bay(idx) => write!(f, "Bay {}", idx + 1),
+            DockingTreeValue::Header => write!(f, "Header"),
+            DockingTreeValue::Bay(idx) => write!(f, "Bay {}", idx + 1),
         }
     }
 }
-impl DockingSelection {
+impl DockingTreeValue {
     pub fn bay(bay: Option<usize>) -> Self {
         match bay {
             Some(bay) => Self::Bay(bay),
@@ -256,7 +352,7 @@ impl DockingSelection {
 }
 
 #[derive(PartialEq, Hash, Debug, Eq, PartialOrd, Ord, Clone, Copy)]
-pub(crate) enum WeaponSelection {
+pub(crate) enum WeaponTreeValue {
     Header,
     PriHeader,
     PriBank(usize),             // bank idx
@@ -265,20 +361,23 @@ pub(crate) enum WeaponSelection {
     SecBank(usize),             // bank idx
     SecBankPoint(usize, usize), // bank idx, point idx
 }
-impl std::fmt::Display for WeaponSelection {
+impl std::fmt::Display for WeaponTreeValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WeaponSelection::Header => write!(f, "Header"),
-            WeaponSelection::PriHeader => write!(f, "Primary Header"),
-            WeaponSelection::PriBank(idx) => write!(f, "Primary Bank {}", idx + 1),
-            WeaponSelection::PriBankPoint(idx, idx2) => write!(f, "Primary Bank {} Point {}", idx + 1, idx2 + 1),
-            WeaponSelection::SecHeader => write!(f, "Secondary Header"),
-            WeaponSelection::SecBank(idx) => write!(f, "Secondary Bank {}", idx + 1),
-            WeaponSelection::SecBankPoint(idx, idx2) => write!(f, "Secondary Bank {} Point {}", idx + 1, idx2 + 1),
+            WeaponTreeValue::Header => write!(f, "Header"),
+            WeaponTreeValue::PriHeader => write!(f, "Primary Header"),
+            WeaponTreeValue::PriBank(idx) => write!(f, "Primary Bank {}", idx + 1),
+            WeaponTreeValue::PriBankPoint(idx, idx2) => write!(f, "Primary Bank {} Point {}", idx + 1, idx2 + 1),
+            WeaponTreeValue::SecHeader => write!(f, "Secondary Header"),
+            WeaponTreeValue::SecBank(idx) => write!(f, "Secondary Bank {}", idx + 1),
+            WeaponTreeValue::SecBankPoint(idx, idx2) => write!(f, "Secondary Bank {} Point {}", idx + 1, idx2 + 1),
         }
     }
 }
-impl WeaponSelection {
+impl WeaponTreeValue {
+    pub fn is_primary(self) -> bool {
+        matches!(self, Self::PriHeader | Self::PriBank(_) | Self::PriBankPoint(..))
+    }
     pub fn bank_point(is_primary: bool, bank: usize, point: Option<usize>) -> Self {
         match (is_primary, point) {
             (true, Some(point)) => Self::PriBankPoint(bank, point),
@@ -297,36 +396,36 @@ impl WeaponSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
-pub(crate) enum TextureSelection {
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+pub(crate) enum TextureTreeValue {
     Header,
     Texture(TextureId),
 }
-impl std::fmt::Display for TextureSelection {
+impl std::fmt::Display for TextureTreeValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TextureSelection::Header => write!(f, "Header"),
-            TextureSelection::Texture(idx) => write!(f, "Texture {}", idx.0 + 1),
+            TextureTreeValue::Header => write!(f, "Header"),
+            TextureTreeValue::Texture(idx) => write!(f, "Texture {}", idx.0 + 1),
         }
     }
 }
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
-pub(crate) enum ThrusterSelection {
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+pub(crate) enum ThrusterTreeValue {
     Header,
     Bank(usize),             // bank idx
     BankPoint(usize, usize), // bank idx, point idx
 }
-impl std::fmt::Display for ThrusterSelection {
+impl std::fmt::Display for ThrusterTreeValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ThrusterSelection::Header => write!(f, "Header"),
-            ThrusterSelection::Bank(idx) => write!(f, "Bank {}", idx + 1),
-            ThrusterSelection::BankPoint(idx, idx2) => write!(f, "Bank {} Point {}", idx + 1, idx2 + 1),
+            ThrusterTreeValue::Header => write!(f, "Header"),
+            ThrusterTreeValue::Bank(idx) => write!(f, "Bank {}", idx + 1),
+            ThrusterTreeValue::BankPoint(idx, idx2) => write!(f, "Bank {} Point {}", idx + 1, idx2 + 1),
         }
     }
 }
-impl ThrusterSelection {
+impl ThrusterTreeValue {
     pub fn bank_point(bank: usize, point: Option<usize>) -> Self {
         match point {
             Some(point) => Self::BankPoint(bank, point),
@@ -341,54 +440,19 @@ impl ThrusterSelection {
     }
 }
 
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
-pub(crate) enum SubObjectSelection {
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+pub(crate) enum SubObjectTreeValue {
     Header,
     SubObject(ObjectId),
 }
 
-impl std::fmt::Display for SubObjectSelection {
+impl std::fmt::Display for SubObjectTreeValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SubObjectSelection::Header => write!(f, "Header"),
-            SubObjectSelection::SubObject(idx) => write!(f, "SubObject {}", idx.0 + 1),
+            SubObjectTreeValue::Header => write!(f, "Header"),
+            SubObjectTreeValue::SubObject(idx) => write!(f, "SubObject {}", idx.0 + 1),
         }
     }
-}
-
-use Set::*;
-
-pub enum Set<T> {
-    All,
-    One(T),
-}
-
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub enum Error {
-    InvalidTurretGunSubobject(usize), // turret index
-    TooManyDebrisObjects,
-    DetailObjWithParent(ObjectId),
-    DetailAndDebrisObj(ObjectId),
-    TooManyVerts(ObjectId),
-    TooManyNorms(ObjectId),
-    // all turret base/gun objects must be disjoint!
-}
-
-#[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
-pub(crate) enum Warning {
-    RadiusTooSmall(Option<ObjectId>),
-    BBoxTooSmall(Option<ObjectId>),
-    DockingBayWithoutPath(usize),
-    ThrusterPropertiesInvalidVersion(usize),
-    WeaponOffsetInvalidVersion(WeaponSelection),
-    InvertedBBox(Option<ObjectId>),
-    UntexturedPolygons,
-    // path with no parent
-    // thruster with no engine subsys
-    // turret uvec != turret normal
-    // subobject vert/norm overbudget
-    // turret subobject properties not set up for a turret
-    // untextured polygons
 }
 
 #[derive(PartialEq, Eq)]
@@ -400,13 +464,18 @@ pub(crate) enum DisplayMode {
 
 #[derive(Default)]
 pub(crate) struct UiState {
-    pub tree_view_selection: TreeSelection,
+    pub tree_view_selection: TreeValue,
+    /// toggles the expanded state of the given tree value next frame
+    pub tree_view_toggle: Option<TreeValue>,
+    /// expands the given tree value next frame
+    pub tree_view_force_open: Option<TreeValue>,
     pub viewport_3d_dirty: bool,
     pub last_selected_subobj: Option<ObjectId>,
     pub properties_panel: PropertiesPanel,
     pub display_radius: bool,
     pub display_bbox: bool,
     pub display_origin: bool,
+    pub display_uvec_fvec: bool,
     pub move_only_offset: bool,
 }
 
@@ -420,21 +489,21 @@ pub(crate) struct PofToolsGui {
     pub ui_state: UiState,
     pub display_mode: DisplayMode,
     pub glow_point_simulation: bool,
-    pub warnings: BTreeSet<Warning>,
-    pub errors: BTreeSet<Error>,
 
     pub camera_pitch: f32,
     pub camera_heading: f32,
     pub camera_scale: f32,
     pub camera_offset: Vec3d,
-    pub hover_lollipop: Option<TreeSelection>,
-    pub drag_lollipop: Option<TreeSelection>,
+    pub camera_orthographic: bool,
+    pub hover_lollipop: Option<TreeValue>,
+    pub drag_lollipop: Option<TreeValue>,
 
     pub buffer_objects: Vec<GlObjectBuffers>, // all the subobjects, conditionally rendered based on the current tree selection
     pub buffer_textures: HashMap<TextureId, SrgbTexture2d>, // map of tex ids to actual textures
     pub buffer_shield: Option<GlBufferedShield>, // the shield, similar to the above
     pub buffer_insignias: Vec<GlBufferedInsignia>, // the insignias, similar to the above
     pub lollipops: Vec<GlLollipops>, // the current set of lollipops being being drawn, grouped by color, and recalculated with viewport_3d_dirty above
+    pub arrowheads: Vec<GlArrowhead>, // The arrowheads to draw
 }
 impl std::ops::Deref for PofToolsGui {
     type Target = UiState;
@@ -458,63 +527,150 @@ impl PofToolsGui {
             ui_state: Default::default(),
             display_mode: DisplayMode::Textured,
             glow_point_simulation: Default::default(),
-            warnings: Default::default(),
-            errors: Default::default(),
             camera_pitch: Default::default(),
             camera_heading: Default::default(),
             camera_scale: Default::default(),
             camera_offset: Default::default(),
+            camera_orthographic: false,
             buffer_objects: Default::default(),
             buffer_textures: Default::default(),
             buffer_shield: Default::default(),
             buffer_insignias: Default::default(),
             lollipops: Default::default(),
+            arrowheads: Default::default(),
             hover_lollipop: None,
             drag_lollipop: None,
         }
     }
 
-    fn tree_selectable_item(&mut self, ui: &mut Ui, name: &str, selection: TreeSelection) {
+    fn tree_selectable_item(&mut self, ui: &mut Ui, name: &str, selection: TreeValue) {
         self.ui_state.tree_selectable_item(&self.model, ui, name, selection);
     }
 }
 
+pub const ERROR_RED: Color32 = Color32::from_rgb(255, 50, 50);
+pub const WARNING_YELLOW: Color32 = Color32::from_rgb(255, 255, 0);
+pub const LIGHT_ORANGE: Color32 = Color32::from_rgb(210, 150, 128);
+pub const LIGHT_BLUE: Color32 = Color32::from_rgb(0xA0, 0xD8, 0xFF);
+
 impl UiState {
-    fn tree_selectable_item(&mut self, model: &Model, ui: &mut Ui, name: &str, selection: TreeSelection) {
-        if ui.selectable_value(&mut self.tree_view_selection, selection, name).clicked() {
+    /// returns the RichText for a given tree value to be displayed, mostly for the purposes of coloring it specially
+    fn tree_val_text(&self, model: &Model, tree_value: TreeValue, this_name: &str) -> RichText {
+        let text = RichText::new(this_name);
+        for error in &model.errors {
+            if let Error::DuplicateSubobjectName(err_id) = *error {
+                match tree_value {
+                    TreeValue::SubObjects(SubObjectTreeValue::Header) => return text.color(ERROR_RED),
+                    TreeValue::SubObjects(SubObjectTreeValue::SubObject(obj_id)) => {
+                        if model.sub_objects[obj_id].name == model.sub_objects[err_id].name {
+                            return text.color(ERROR_RED);
+                        }
+                    }
+                    _ => (),
+                }
+            } else if let Some(error_tree_value) = TreeValue::from_error(*error) {
+                if tree_value == error_tree_value || tree_value.is_ancestor_of(error_tree_value) {
+                    return text.color(ERROR_RED);
+                }
+            }
+        }
+
+        for warning in &model.warnings {
+            if let Warning::DuplicatePathName(warn_idx) = *warning {
+                match tree_value {
+                    TreeValue::Paths(PathTreeValue::Header) => return text.color(WARNING_YELLOW),
+                    TreeValue::Paths(PathTreeValue::Path(path_idx)) => {
+                        if model.paths[path_idx].name == model.paths[warn_idx].name {
+                            return text.color(WARNING_YELLOW);
+                        }
+                    }
+                    _ => (),
+                }
+            } else if let Some(warning_tree_value) = TreeValue::from_warning(*warning) {
+                if tree_value == warning_tree_value || tree_value.is_ancestor_of(warning_tree_value) {
+                    return text.color(WARNING_YELLOW);
+                }
+            }
+        }
+
+        if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(selected_id)) = self.tree_view_selection {
+            if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(this_id)) = tree_value {
+                for link in &model.sub_objects[this_id].name_links {
+                    match *link {
+                        pof::NameLink::DestroyedVersion(id) | pof::NameLink::DestroyedVersionOf(id) if id == selected_id => {
+                            return text.color(Color32::LIGHT_RED)
+                        }
+                        pof::NameLink::LiveDebris(id) | pof::NameLink::LiveDebrisOf(id) if id == selected_id => return text.color(LIGHT_ORANGE),
+                        pof::NameLink::DetailLevel(id, _) | pof::NameLink::DetailLevelOf(id, _) if id == selected_id => {
+                            return text.color(LIGHT_BLUE)
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        text
+    }
+
+    fn tree_selectable_item(&mut self, model: &Model, ui: &mut Ui, name: &str, tree_value: TreeValue) {
+        let text = self.tree_val_text(model, tree_value, name);
+        if ui.selectable_value(&mut self.tree_view_selection, tree_value, text).clicked() {
             self.refresh_properties_panel(model);
             self.viewport_3d_dirty = true;
 
             info!("Switched to {}", self.tree_view_selection);
 
             // maybe update ast selected object
-            if let TreeSelection::SubObjects(SubObjectSelection::SubObject(id)) = self.tree_view_selection {
+            if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = self.tree_view_selection {
                 self.last_selected_subobj = Some(id);
-            } else if let TreeSelection::SubObjects(SubObjectSelection::Header) | TreeSelection::Header = self.tree_view_selection {
+            } else if let TreeValue::SubObjects(SubObjectTreeValue::Header) | TreeValue::Header = self.tree_view_selection {
                 self.last_selected_subobj = model.header.detail_levels.first().copied();
             }
         }
     }
 
-    fn tree_collapsing_item(&mut self, model: &Model, ui: &mut Ui, name: &str, tree_value: TreeSelection, f: impl FnOnce(&mut UiState, &mut Ui)) {
-        let response = CollapsingHeader::new(name)
-            .selectable(true)
-            .id_source(&tree_value)
-            .selected(tree_value == self.tree_view_selection)
-            .show(ui, |ui| f(self, ui));
-        if response.header_response.clicked() {
-            self.tree_view_selection = tree_value;
-            self.refresh_properties_panel(model);
-            self.viewport_3d_dirty = true;
+    fn tree_collapsing_item(&mut self, model: &Model, ui: &mut Ui, name: &str, tree_value: TreeValue, body: impl FnOnce(&mut UiState, &mut Ui)) {
+        let mut state = CollapsingState::load_with_default_open(ui.ctx(), Id::new(tree_value), false);
+        if self.tree_view_toggle == Some(tree_value) {
+            state.toggle(ui);
+            self.tree_view_toggle = None;
+        } else if self.tree_view_force_open.is_some() && tree_value.is_ancestor_of(self.tree_view_force_open.unwrap()) {
+            state.set_open(true);
+        }
 
-            info!("Switched to {}", self.tree_view_selection);
+        let text = self.tree_val_text(model, tree_value, name);
 
-            // maybe update last selected object
-            if let TreeSelection::SubObjects(SubObjectSelection::SubObject(id)) = self.tree_view_selection {
-                self.last_selected_subobj = Some(id);
-            } else if let TreeSelection::SubObjects(SubObjectSelection::Header) | TreeSelection::Header = self.tree_view_selection {
-                self.last_selected_subobj = model.header.detail_levels.first().copied();
-            }
+        state
+            .show_header(ui, |ui| {
+                let response = ui.selectable_label(tree_value == self.tree_view_selection, text);
+
+                if response.double_clicked() {
+                    self.tree_view_toggle = Some(tree_value);
+                } else if response.clicked() {
+                    self.tree_view_selection = tree_value;
+                    self.refresh_properties_panel(model);
+                    self.viewport_3d_dirty = true;
+
+                    info!("Switched to {}", self.tree_view_selection);
+
+                    // maybe update last selected object
+                    if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = self.tree_view_selection {
+                        self.last_selected_subobj = Some(id);
+                    } else if let TreeValue::SubObjects(SubObjectTreeValue::Header) | TreeValue::Header = self.tree_view_selection {
+                        self.last_selected_subobj = model.header.detail_levels.first().copied();
+                    }
+                }
+            })
+            .body(|ui| body(self, ui));
+    }
+
+    pub fn select_new_tree_val(&mut self, new_tree_val: TreeValue) {
+        self.tree_view_selection = new_tree_val;
+        self.tree_view_force_open = Some(new_tree_val);
+        self.viewport_3d_dirty = true;
+        if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = new_tree_val {
+            self.last_selected_subobj = Some(id);
         }
     }
 }
@@ -527,31 +683,86 @@ impl PofToolsGui {
         egui::TopBottomPanel::top("menu").default_height(33.0).min_height(33.0).show(ctx, |ui| {
             Ui::add_space(ui, 6.0);
             ui.horizontal(|ui| {
-                if ui
-                    .add(Button::new(RichText::new("🗁").text_style(TextStyle::Heading)))
-                    .on_hover_text("Open")
-                    .clicked()
-                {
-                    self.start_loading_model(None);
-                    ui.output().cursor_icon = egui::CursorIcon::Wait;
-                }
+                ui.menu_button("File", |ui| {
+                    ui.style_mut().spacing.item_spacing.y = 1.0;
 
-                if ui
-                    .add_enabled(self.errors.is_empty(), Button::new(RichText::new("🖴").text_style(TextStyle::Heading)))
-                    .on_hover_text("Save")
-                    .on_disabled_hover_text("All errors must be corrected before saving.")
-                    .clicked()
-                {
-                    self.model.clean_up();
-
-                    let new_filename = PofToolsGui::save_model(&self.model);
-                    if let Some(filename) = new_filename {
-                        display
-                            .gl_window()
-                            .window()
-                            .set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, filename));
+                    if ui.button("Open").clicked() {
+                        self.start_loading_model(None);
+                        ui.output().cursor_icon = egui::CursorIcon::Wait;
+                        ui.close_menu();
                     }
-                }
+
+                    if ui
+                        .add_enabled(self.model.errors.is_empty(), Button::new("Save"))
+                        .on_disabled_hover_text("All errors must be corrected before saving.")
+                        .clicked()
+                    {
+                        self.model.clean_up();
+
+                        let new_filename = PofToolsGui::save_model(&self.model);
+                        if let Some(filename) = new_filename {
+                            display
+                                .gl_window()
+                                .window()
+                                .set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, filename));
+                        }
+                        ui.close_menu();
+                    }
+
+                    if ui.button("Global Import").on_hover_text("Deletes data from the existing model and replaces it with the target model's. \n\
+                                                                Replaces mass, moment of inertia, weapon points, docking points, thrusters, glow points, \
+                                                                special points, turrets (only exact base and gun object name matches are retained), \
+                                                                paths, eye points, and insignia.").clicked() {
+
+                        let model = crossbeam::thread::scope(|s| s.spawn(|_| PofToolsGui::load_model(None)).join().unwrap()).unwrap();
+
+                        if let Ok(Some(model)) = model {
+                            self.model.global_import(model);
+                            self.tree_view_selection = TreeValue::Header;
+                            self.ui_state.refresh_properties_panel(&self.model);
+                            self.viewport_3d_dirty = true;
+                        }
+                        ui.close_menu();
+                    }
+                });
+
+                ui.menu_button("View", |ui|{
+                    if ui.button(if self.camera_orthographic {"Perspective"} else {"Orthographic"}).clicked() {
+                        self.camera_orthographic = !self.camera_orthographic;
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Front").clicked() {
+                        self.camera_heading = PI;
+                        self.camera_pitch = 0.0;
+                        ui.close_menu();
+                    }
+                    if ui.button("Back").clicked() {
+                        self.camera_heading = 0.0;
+                        self.camera_pitch = 0.0;
+                        ui.close_menu();
+                    }
+                    if ui.button("Right").clicked() {
+                        self.camera_heading = FRAC_PI_2;
+                        self.camera_pitch = 0.0;
+                        ui.close_menu();
+                    }
+                    if ui.button("Left").clicked() {
+                        self.camera_heading = -FRAC_PI_2;
+                        self.camera_pitch = 0.0;
+                        ui.close_menu();
+                    }
+                    if ui.button("Top").clicked() {
+                        self.camera_heading = 0.0;
+                        self.camera_pitch = -FRAC_PI_2;
+                        ui.close_menu();
+                    }
+                    if ui.button("Bottom").clicked() {
+                        self.camera_heading = PI;
+                        self.camera_pitch = FRAC_PI_2;
+                        ui.close_menu();
+                    }
+                });
 
                 ui.separator();
 
@@ -569,8 +780,8 @@ impl PofToolsGui {
                     // we only need to recheck verson-specific warnings, but since those are parameterized, there's no easy way to say
                     // 'those specific warnings but for all their parameters' so just do them all i guess
                     if changed {
-                        PofToolsGui::recheck_warnings(&mut self.warnings, &self.model, All);
-                        PofToolsGui::recheck_errors(&mut self.errors, &self.model, All);
+                        self.model.recheck_warnings(pof::Set::All); // FIX
+                        self.model.recheck_errors(pof::Set::All);
                     }
                 });
 
@@ -612,30 +823,19 @@ impl PofToolsGui {
         });
         let mut warnings = egui::TopBottomPanel::bottom("info bar")
             .resizable(true)
-            .default_height(16.0)
-            .height_range(16.0..=500.0)
+            .default_height(22.0)
+            .height_range(22.0..=500.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .min_scrolled_height(10.0)
                     .show(ui, |ui| {
-                        for error in &self.errors {
-                            match *error {
+                        let mut new_tree_val = None;
+                        let mut first_warning = true;
+                        for &error in &self.model.errors {
+                            let str = match error {
                                 Error::InvalidTurretGunSubobject(turret_num) => {
-                                    let turret_name = if self.model.sub_objects[self.model.turrets[turret_num].base_obj]
-                                        .name
-                                        .to_lowercase()
-                                        .starts_with("turret")
-                                    {
-                                        ""
-                                    } else {
-                                        "turret "
-                                    };
-                                    let str = format!(
-                                        "⊗ {}{} has an invalid gun object",
-                                        turret_name, self.model.sub_objects[self.model.turrets[turret_num].base_obj].name
-                                    );
-                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::RED)));
+                                    format!("⊗ {} has an invalid gun object", self.model.sub_objects[self.model.turrets[turret_num].base_obj].name)
                                 }
                                 Error::TooManyDebrisObjects => {
                                     let mut num_debris = 0;
@@ -644,111 +844,245 @@ impl PofToolsGui {
                                             num_debris += 1;
                                         }
                                     }
-                                    ui.add(Label::new(
-                                        RichText::new(format!(
-                                            "⊗ This model has too many debris objects ({}/{})",
-                                            num_debris,
-                                            pof::MAX_DEBRIS_OBJECTS
-                                        ))
-                                        .text_style(TextStyle::Button)
-                                        .color(Color32::RED),
-                                    ));
+                                    format!("⊗ This model has too many debris objects ({}/{})", num_debris, pof::MAX_DEBRIS_OBJECTS)
                                 }
                                 Error::DetailObjWithParent(id) => {
-                                    ui.add(Label::new(
-                                        RichText::new(format!(
-                                            "⊗ Detail {} object ({}) must be at the top of the heirarchy (no object parent)",
-                                            self.model.header.detail_levels.iter().position(|detail_id| *detail_id == id).unwrap(),
-                                            self.model.sub_objects[id].name,
-                                        ))
-                                        .text_style(TextStyle::Button)
-                                        .color(Color32::RED),
-                                    ));
+                                    format!(
+                                        "⊗ Detail {} object ({}) must be at the top of the hierarchy (no object parent)",
+                                        self.model.header.detail_levels.iter().position(|detail_id| *detail_id == id).unwrap(),
+                                        self.model.sub_objects[id].name,
+                                    )
                                 }
                                 Error::DetailAndDebrisObj(id) => {
-                                    ui.add(Label::new(
-                                        RichText::new(format!(
-                                            "⊗ Detail {} object ({}) cannot also be a debris object",
-                                            self.model.header.detail_levels.iter().position(|detail_id| *detail_id == id).unwrap(),
-                                            self.model.sub_objects[id].name,
-                                        ))
-                                        .text_style(TextStyle::Button)
-                                        .color(Color32::RED),
-                                    ));
+                                    format!(
+                                        "⊗ Detail {} object ({}) cannot also be a debris object",
+                                        self.model.header.detail_levels.iter().position(|detail_id| *detail_id == id).unwrap(),
+                                        self.model.sub_objects[id].name,
+                                    )
                                 }
                                 Error::TooManyVerts(id) => {
-                                    ui.add(Label::new(
-                                        RichText::new(format!(
-                                            "⊗ Subobject {} has more than the {} vertices supported by the currently selected pof version",
-                                            self.model.sub_objects[id].name,
-                                            self.model.max_verts_norms_per_subobj(),
-                                        ))
-                                        .text_style(TextStyle::Button)
-                                        .color(Color32::RED),
-                                    ));
+                                    format!(
+                                        "⊗ Subobject {} has more than the {} vertices supported by the currently selected pof version",
+                                        self.model.sub_objects[id].name,
+                                        self.model.max_verts_norms_per_subobj(),
+                                    )
                                 }
                                 Error::TooManyNorms(id) => {
-                                    ui.add(Label::new(
-                                        RichText::new(format!(
-                                            "⊗ Subobject {} has more than the {} normals supported by the currently selected pof version",
-                                            self.model.sub_objects[id].name,
-                                            self.model.max_verts_norms_per_subobj(),
-                                        ))
-                                        .text_style(TextStyle::Button)
-                                        .color(Color32::RED),
-                                    ));
+                                    format!(
+                                        "⊗ Subobject {} has more than the {} normals supported by the currently selected pof version",
+                                        self.model.sub_objects[id].name,
+                                        self.model.max_verts_norms_per_subobj(),
+                                    )
                                 }
+                                Error::UnnamedSubObject(id) => {
+                                    format!("⊗ Subobject id {:?} requires a name", id)
+                                }
+                                Error::DuplicateSubobjectName(id) => {
+                                    format!("⊗ More than one subobject shares the name '{}'", self.model.sub_objects[id].name)
+                                }
+                            };
+
+                            let text = RichText::new(str).text_style(TextStyle::Button).color(ERROR_RED);
+                            if first_warning {
+                                ui.horizontal(|ui| {
+                                    if let Some(tree_val) = TreeValue::from_error(error) {
+                                        if ui.selectable_label(false, text).clicked() {
+                                            new_tree_val = Some(tree_val);
+                                        }
+                                    } else {
+                                        ui.label(text);
+                                    }
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                                        if !self.model.errors.is_empty() {
+                                            ui.add(Label::new(
+                                                RichText::new(format!("{} ⊗", self.model.errors.len()))
+                                                    .text_style(TextStyle::Button)
+                                                    .color(ERROR_RED),
+                                            ));
+                                        }
+
+                                        if !self.model.warnings.is_empty() {
+                                            ui.add(Label::new(
+                                                RichText::new(format!("{} ⚠", self.model.warnings.len()))
+                                                    .text_style(TextStyle::Button)
+                                                    .color(WARNING_YELLOW),
+                                            ));
+                                        }
+                                    });
+                                });
+                                first_warning = false;
+                            } else if let Some(tree_val) = TreeValue::from_error(error) {
+                                if ui.selectable_label(false, text).clicked() {
+                                    new_tree_val = Some(tree_val);
+                                }
+                            } else {
+                                ui.label(text);
                             }
                         }
-                        for warning in &self.warnings {
-                            match warning {
-                                Warning::RadiusTooSmall(id_opt) => {
-                                    let str = format!(
-                                        "⚠ {}'s radius does not encompass all of its geometry",
-                                        id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
-                                    );
-                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
-                                }
-                                Warning::BBoxTooSmall(id_opt) => {
-                                    let str = format!(
-                                        "⚠ {}'s bounding box does not encompass all of its geometry",
-                                        id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
-                                    );
-                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
-                                }
+
+                        for &warning in &self.model.warnings {
+                            let str = match warning {
                                 Warning::InvertedBBox(id_opt) => {
-                                    let str = format!(
-                                        "⚠ {}'s bounding box is inverted",
-                                        id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
-                                    );
-                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                                    format!("⚠ {}'s bounding box is inverted", id_opt.map_or("The header", |id| &self.model.sub_objects[id].name))
                                 }
                                 Warning::DockingBayWithoutPath(bay_num) => {
-                                    let str = format!(
+                                    format!(
                                         "⚠ Docking bay {} cannot be used by ships without a path",
-                                        self.model.docking_bays[*bay_num].get_name().unwrap_or(&(bay_num + 1).to_string())
-                                    );
-                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                                        self.model.docking_bays[bay_num].get_name().unwrap_or(&(bay_num + 1).to_string())
+                                    )
                                 }
                                 Warning::ThrusterPropertiesInvalidVersion(idx) => {
-                                    let str =
-                                        format!("⚠ Thruster bank {} has properties, which the currently selected version does not support", idx + 1);
-                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                                    format!("⚠ Thruster bank {} has properties, which the currently selected version does not support", idx + 1)
                                 }
-                                Warning::WeaponOffsetInvalidVersion(weapon_selection) => {
-                                    let str = format!(
-                                        "⚠ {} has an external angle offset, which the currently selected version does not support",
-                                        weapon_selection
-                                    );
-                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                                Warning::WeaponOffsetInvalidVersion { primary, bank, point } => {
+                                    format!(
+                                        "⚠ {} bank {}, point {}, has an external angle offset, which the currently selected version does not support",
+                                        if primary { "Primary" } else { "Secondary" },
+                                        bank + 1,
+                                        point + 1
+                                    )
+                                }
+                                Warning::SubObjectTranslationInvalidVersion(id) => {
+                                    format!(
+                                        "⚠ Subobject {} has a translation axis defined, which the currently selected version does not support",
+                                        self.model.sub_objects[id].name
+                                    )
                                 }
                                 Warning::UntexturedPolygons => {
-                                    let str = format!(
+                                    format!(
                                         "⚠ This model has untextured polygons (A texture slot has been added which corresponds to these polygons)"
-                                    );
-                                    ui.add(Label::new(RichText::new(str).text_style(TextStyle::Button).color(Color32::YELLOW)));
+                                    )
                                 }
+                                Warning::TooManyEyePoints => {
+                                    format!("⚠ You cannot have more than {} eye points.", pof::MAX_EYES)
+                                }
+                                Warning::TooManyTextures => {
+                                    format!("⚠ You cannot have more than {} textures.", pof::MAX_TEXTURES)
+                                }
+                                Warning::TooFewTurretFirePoints(idx) => {
+                                    format!("⚠ {} must have at least 1 fire point.", self.model.sub_objects[self.model.turrets[idx].base_obj].name)
+                                }
+                                Warning::TooManyTurretFirePoints(idx) => {
+                                    format!(
+                                        "⚠ {} must have at most {} fire points.",
+                                        self.model.sub_objects[self.model.turrets[idx].base_obj].name,
+                                        pof::MAX_TURRET_POINTS
+                                    )
+                                }
+                                Warning::RadiusTooSmall(id_opt) => {
+                                    format!(
+                                        "⚠ {}'s radius does not encompass all of its geometry",
+                                        id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
+                                    )
+                                }
+                                Warning::BBoxTooSmall(id_opt) => {
+                                    format!(
+                                        "⚠ {}'s bounding box does not encompass all of its geometry",
+                                        id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
+                                    )
+                                }
+                                Warning::DuplicatePathName(path_idx) => {
+                                    format!("⚠ More than one path shares the name '{}'", self.model.paths[path_idx].name)
+                                }
+                                Warning::DuplicateDetailLevel(id) => {
+                                    format!("⚠ Subobject '{}' belongs to more than one detail level", self.model.sub_objects[id].name)
+                                }
+                                Warning::PathNameTooLong(_)
+                                | Warning::SubObjectNameTooLong(_)
+                                | Warning::SpecialPointNameTooLong(_)
+                                | Warning::DockingBayNameTooLong(_) => {
+                                    let field = match warning {
+                                        Warning::PathNameTooLong(idx) => {
+                                            format!("Path name '{}'", self.model.paths[idx].name)
+                                        }
+                                        Warning::SubObjectNameTooLong(id) => {
+                                            format!("Subobject name '{}'", self.model.sub_objects[id].name)
+                                        }
+                                        Warning::SpecialPointNameTooLong(idx) => {
+                                            format!("Special point name '{}'", self.model.special_points[idx].name)
+                                        }
+                                        Warning::DockingBayNameTooLong(idx) => {
+                                            format!("Docking bay name '{}'", self.model.special_points[idx].name)
+                                        }
+                                        _ => unreachable!(),
+                                    };
+                                    format!("⚠ {} is too long (max {} bytes)", field, pof::MAX_NAME_LEN)
+                                }
+                                Warning::GlowBankPropertiesTooLong(_)
+                                | Warning::ThrusterPropertiesTooLong(_)
+                                | Warning::SubObjectPropertiesTooLong(_)
+                                | Warning::DockingBayPropertiesTooLong(_)
+                                | Warning::SpecialPointPropertiesTooLong(_) => {
+                                    let field = match warning {
+                                        Warning::GlowBankPropertiesTooLong(idx) => {
+                                            format!(
+                                                "Glow bank {} ({}) properties",
+                                                idx,
+                                                pof::properties_get_field(&self.model.glow_banks[idx].properties, "$glow_texture")
+                                                    .unwrap_or_default()
+                                            )
+                                        }
+                                        Warning::ThrusterPropertiesTooLong(idx) => {
+                                            format!("Thruster bank {} properties", idx + 1)
+                                        }
+                                        Warning::SubObjectPropertiesTooLong(id) => {
+                                            format!("Subobject {} properties", self.model.sub_objects[id].name)
+                                        }
+                                        Warning::DockingBayPropertiesTooLong(idx) => {
+                                            format!("Docking bay {} properties", idx + 1)
+                                        }
+                                        Warning::SpecialPointPropertiesTooLong(idx) => {
+                                            format!("Special point {} properties", self.model.special_points[idx].name)
+                                        }
+                                        _ => unreachable!(),
+                                    };
+                                    format!("⚠ {} is too long (max {} bytes)", field, pof::MAX_PROPERTIES_LEN)
+                                }
+                            };
+
+                            let text = RichText::new(str).text_style(TextStyle::Button).color(WARNING_YELLOW);
+                            if first_warning {
+                                ui.horizontal(|ui| {
+                                    if let Some(tree_val) = TreeValue::from_warning(warning) {
+                                        if ui.selectable_label(false, text).clicked() {
+                                            new_tree_val = Some(tree_val);
+                                        }
+                                    } else {
+                                        ui.label(text);
+                                    }
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                                        if !self.model.errors.is_empty() {
+                                            ui.add(Label::new(
+                                                RichText::new(format!("{} ⊗", self.model.errors.len()))
+                                                    .text_style(TextStyle::Button)
+                                                    .color(ERROR_RED),
+                                            ));
+                                        }
+
+                                        if !self.model.warnings.is_empty() {
+                                            ui.add(Label::new(
+                                                RichText::new(format!("{} ⚠", self.model.warnings.len()))
+                                                    .text_style(TextStyle::Button)
+                                                    .color(WARNING_YELLOW),
+                                            ));
+                                        }
+                                    });
+                                });
+                                first_warning = false;
+                            } else if let Some(tree_val) = TreeValue::from_warning(warning) {
+                                if ui.selectable_label(false, text).clicked() {
+                                    new_tree_val = Some(tree_val);
+                                }
+                            } else {
+                                ui.label(text);
                             }
+                        }
+
+                        if let Some(tree_val) = new_tree_val {
+                            self.tree_view_selection = tree_val;
+                            self.tree_view_force_open = Some(tree_val);
+                            self.ui_state.refresh_properties_panel(&self.model);
+                            self.ui_state.viewport_3d_dirty = true;
                         }
                     });
             });
@@ -768,18 +1102,14 @@ impl PofToolsGui {
             .width_range(150.0..=500.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    self.tree_selectable_item(ui, "Header", TreeSelection::Header);
+                    self.tree_selectable_item(ui, "Header", TreeValue::Header);
 
                     let num_subobjs = self.model.sub_objects.len();
                     let name = format!("SubObjects{}", if num_subobjs > 0 { format!(", {}", num_subobjs) } else { String::new() });
-                    self.ui_state.tree_collapsing_item(
-                        &self.model,
-                        ui,
-                        &name,
-                        TreeSelection::SubObjects(SubObjectSelection::Header),
-                        |ui_state, ui| {
+                    self.ui_state
+                        .tree_collapsing_item(&self.model, ui, &name, TreeValue::SubObjects(SubObjectTreeValue::Header), |ui_state, ui| {
                             fn make_subobject_child_list(ui_state: &mut UiState, model: &Model, obj: &SubObject, ui: &mut Ui) {
-                                let selection = TreeSelection::SubObjects(SubObjectSelection::SubObject(obj.obj_id));
+                                let selection = TreeValue::SubObjects(SubObjectTreeValue::SubObject(obj.obj_id));
                                 if obj.children().next() == None {
                                     ui_state.tree_selectable_item(model, ui, &obj.name, selection);
                                 } else {
@@ -796,8 +1126,7 @@ impl PofToolsGui {
                                     make_subobject_child_list(ui_state, &self.model, object, ui);
                                 }
                             }
-                        },
-                    );
+                        });
 
                     let num_textures = self.model.textures.len();
                     let name = format!(
@@ -809,127 +1138,105 @@ impl PofToolsGui {
                         }
                     );
                     self.ui_state
-                        .tree_collapsing_item(&self.model, ui, &name, TreeSelection::Textures(TextureSelection::Header), |ui_state, ui| {
+                        .tree_collapsing_item(&self.model, ui, &name, TreeValue::Textures(TextureTreeValue::Header), |ui_state, ui| {
                             for (i, tex) in self.model.textures.iter().enumerate() {
                                 ui_state.tree_selectable_item(
                                     &self.model,
                                     ui,
                                     tex,
-                                    TreeSelection::Textures(TextureSelection::Texture(TextureId(i as u32))),
+                                    TreeValue::Textures(TextureTreeValue::Texture(TextureId(i as u32))),
                                 );
                             }
                         });
 
                     let num_banks = self.model.thruster_banks.len();
                     let name = format!("Thrusters{}", if num_banks > 0 { format!(", {}", num_banks) } else { String::new() });
-                    self.ui_state.tree_collapsing_item(
-                        &self.model,
-                        ui,
-                        &name,
-                        TreeSelection::Thrusters(ThrusterSelection::Header),
-                        |ui_state, ui| {
+                    self.ui_state
+                        .tree_collapsing_item(&self.model, ui, &name, TreeValue::Thrusters(ThrusterTreeValue::Header), |ui_state, ui| {
                             for (i, thruster_bank) in self.model.thruster_banks.iter().enumerate() {
                                 ui_state.tree_collapsing_item(
                                     &self.model,
                                     ui,
                                     &format!("Bank {}, {}", i + 1, thruster_bank.glows.len()),
-                                    TreeSelection::Thrusters(ThrusterSelection::Bank(i)),
+                                    TreeValue::Thrusters(ThrusterTreeValue::Bank(i)),
                                     |ui_state, ui| {
                                         for j in 0..thruster_bank.glows.len() {
                                             ui_state.tree_selectable_item(
                                                 &self.model,
                                                 ui,
                                                 &format!("Point {}", j + 1),
-                                                TreeSelection::Thrusters(ThrusterSelection::BankPoint(i, j)),
+                                                TreeValue::Thrusters(ThrusterTreeValue::BankPoint(i, j)),
                                             );
                                         }
                                     },
                                 );
                             }
-                        },
-                    );
+                        });
 
                     let num_banks = self.model.primary_weps.len() + self.model.secondary_weps.len();
                     let name = format!("Weapons{}", if num_banks > 0 { format!(", {}", num_banks) } else { String::new() });
                     self.ui_state
-                        .tree_collapsing_item(&self.model, ui, &name, TreeSelection::Weapons(WeaponSelection::Header), |ui_state, ui| {
+                        .tree_collapsing_item(&self.model, ui, &name, TreeValue::Weapons(WeaponTreeValue::Header), |ui_state, ui| {
                             let num_banks = self.model.primary_weps.len();
                             let name = format!("Primary Weapons{}", if num_banks > 0 { format!(", {}", num_banks) } else { String::new() });
-                            ui_state.tree_collapsing_item(
-                                &self.model,
-                                ui,
-                                &name,
-                                TreeSelection::Weapons(WeaponSelection::PriHeader),
-                                |ui_state, ui| {
-                                    for (i, primary_bank) in self.model.primary_weps.iter().enumerate() {
-                                        ui_state.tree_collapsing_item(
-                                            &self.model,
-                                            ui,
-                                            &format!("Bank {}, {}", i + 1, primary_bank.len()),
-                                            TreeSelection::Weapons(WeaponSelection::PriBank(i)),
-                                            |ui_state, ui| {
-                                                for j in 0..primary_bank.len() {
-                                                    ui_state.tree_selectable_item(
-                                                        &self.model,
-                                                        ui,
-                                                        &format!("Point {}", j + 1),
-                                                        TreeSelection::Weapons(WeaponSelection::PriBankPoint(i, j)),
-                                                    );
-                                                }
-                                            },
-                                        );
-                                    }
-                                },
-                            );
+                            ui_state.tree_collapsing_item(&self.model, ui, &name, TreeValue::Weapons(WeaponTreeValue::PriHeader), |ui_state, ui| {
+                                for (i, primary_bank) in self.model.primary_weps.iter().enumerate() {
+                                    ui_state.tree_collapsing_item(
+                                        &self.model,
+                                        ui,
+                                        &format!("Bank {}, {}", i + 1, primary_bank.len()),
+                                        TreeValue::Weapons(WeaponTreeValue::PriBank(i)),
+                                        |ui_state, ui| {
+                                            for j in 0..primary_bank.len() {
+                                                ui_state.tree_selectable_item(
+                                                    &self.model,
+                                                    ui,
+                                                    &format!("Point {}", j + 1),
+                                                    TreeValue::Weapons(WeaponTreeValue::PriBankPoint(i, j)),
+                                                );
+                                            }
+                                        },
+                                    );
+                                }
+                            });
 
                             let num_banks = self.model.secondary_weps.len();
                             let name = format!("Secondary Weapons{}", if num_banks > 0 { format!(", {}", num_banks) } else { String::new() });
-                            ui_state.tree_collapsing_item(
-                                &self.model,
-                                ui,
-                                &name,
-                                TreeSelection::Weapons(WeaponSelection::SecHeader),
-                                |ui_state, ui| {
-                                    for (i, secondary_bank) in self.model.secondary_weps.iter().enumerate() {
-                                        ui_state.tree_collapsing_item(
-                                            &self.model,
-                                            ui,
-                                            &format!("Bank {}, {}", i + 1, secondary_bank.len()),
-                                            TreeSelection::Weapons(WeaponSelection::SecBank(i)),
-                                            |ui_state, ui| {
-                                                for j in 0..secondary_bank.len() {
-                                                    ui_state.tree_selectable_item(
-                                                        &self.model,
-                                                        ui,
-                                                        &format!("Point {}", j + 1),
-                                                        TreeSelection::Weapons(WeaponSelection::SecBankPoint(i, j)),
-                                                    );
-                                                }
-                                            },
-                                        );
-                                    }
-                                },
-                            );
+                            ui_state.tree_collapsing_item(&self.model, ui, &name, TreeValue::Weapons(WeaponTreeValue::SecHeader), |ui_state, ui| {
+                                for (i, secondary_bank) in self.model.secondary_weps.iter().enumerate() {
+                                    ui_state.tree_collapsing_item(
+                                        &self.model,
+                                        ui,
+                                        &format!("Bank {}, {}", i + 1, secondary_bank.len()),
+                                        TreeValue::Weapons(WeaponTreeValue::SecBank(i)),
+                                        |ui_state, ui| {
+                                            for j in 0..secondary_bank.len() {
+                                                ui_state.tree_selectable_item(
+                                                    &self.model,
+                                                    ui,
+                                                    &format!("Point {}", j + 1),
+                                                    TreeValue::Weapons(WeaponTreeValue::SecBankPoint(i, j)),
+                                                );
+                                            }
+                                        },
+                                    );
+                                }
+                            });
                         });
 
                     let num_bays = self.model.docking_bays.len();
                     let name = format!("Docking Bays{}", if num_bays > 0 { format!(", {}", num_bays) } else { String::new() });
-                    self.ui_state.tree_collapsing_item(
-                        &self.model,
-                        ui,
-                        &name,
-                        TreeSelection::DockingBays(DockingSelection::Header),
-                        |ui_state, ui| {
+                    self.ui_state
+                        .tree_collapsing_item(&self.model, ui, &name, TreeValue::DockingBays(DockingTreeValue::Header), |ui_state, ui| {
                             for (i, docking_bay) in self.model.docking_bays.iter().enumerate() {
                                 ui_state.tree_selectable_item(
                                     &self.model,
                                     ui,
                                     docking_bay.get_name().unwrap_or(&format!("Bay {}", i + 1)),
-                                    TreeSelection::DockingBays(DockingSelection::Bay(i)),
+                                    TreeValue::DockingBays(DockingTreeValue::Bay(i)),
                                 );
                             }
-                        },
-                    );
+                        });
 
                     let num_glow_banks = self.model.glow_banks.len();
                     let name = format!(
@@ -941,7 +1248,7 @@ impl PofToolsGui {
                         }
                     );
                     self.ui_state
-                        .tree_collapsing_item(&self.model, ui, &name, TreeSelection::Glows(GlowSelection::Header), |ui_state, ui| {
+                        .tree_collapsing_item(&self.model, ui, &name, TreeValue::Glows(GlowTreeValue::Header), |ui_state, ui| {
                             for (i, glow_bank) in self.model.glow_banks.iter().enumerate() {
                                 ui_state.tree_collapsing_item(
                                     &self.model,
@@ -953,14 +1260,14 @@ impl PofToolsGui {
                                             .map_or(String::new(), |tex| format!(" ({})", tex)),
                                         glow_bank.glow_points.len()
                                     ),
-                                    TreeSelection::Glows(GlowSelection::Bank(i)),
+                                    TreeValue::Glows(GlowTreeValue::Bank(i)),
                                     |ui_state, ui| {
                                         for j in 0..glow_bank.glow_points.len() {
                                             ui_state.tree_selectable_item(
                                                 &self.model,
                                                 ui,
                                                 &format!("Point {}", j + 1),
-                                                TreeSelection::Glows(GlowSelection::BankPoint(i, j)),
+                                                TreeValue::Glows(GlowTreeValue::BankPoint(i, j)),
                                             );
                                         }
                                     },
@@ -974,14 +1281,14 @@ impl PofToolsGui {
                         &self.model,
                         ui,
                         &name,
-                        TreeSelection::SpecialPoints(SpecialPointSelection::Header),
+                        TreeValue::SpecialPoints(SpecialPointTreeValue::Header),
                         |ui_state, ui| {
                             for (i, special_point) in self.model.special_points.iter().enumerate() {
                                 ui_state.tree_selectable_item(
                                     &self.model,
                                     ui,
                                     &special_point.name,
-                                    TreeSelection::SpecialPoints(SpecialPointSelection::Point(i)),
+                                    TreeValue::SpecialPoints(SpecialPointTreeValue::Point(i)),
                                 );
                             }
                         },
@@ -990,20 +1297,20 @@ impl PofToolsGui {
                     let num_turrets = self.model.turrets.len();
                     let name = format!("Turrets{}", if num_turrets > 0 { format!(", {}", num_turrets) } else { String::new() });
                     self.ui_state
-                        .tree_collapsing_item(&self.model, ui, &name, TreeSelection::Turrets(TurretSelection::Header), |ui_state, ui| {
+                        .tree_collapsing_item(&self.model, ui, &name, TreeValue::Turrets(TurretTreeValue::Header), |ui_state, ui| {
                             for (i, turret) in self.model.turrets.iter().enumerate() {
                                 ui_state.tree_collapsing_item(
                                     &self.model,
                                     ui,
                                     &format!("{}, {}", self.model.sub_objects[turret.base_obj].name, turret.fire_points.len()),
-                                    TreeSelection::Turrets(TurretSelection::Turret(i)),
+                                    TreeValue::Turrets(TurretTreeValue::Turret(i)),
                                     |ui_state, ui| {
                                         for j in 0..turret.fire_points.len() {
                                             ui_state.tree_selectable_item(
                                                 &self.model,
                                                 ui,
                                                 &format!("Fire Point {}", j + 1),
-                                                TreeSelection::Turrets(TurretSelection::TurretPoint(i, j)),
+                                                TreeValue::Turrets(TurretTreeValue::TurretPoint(i, j)),
                                             );
                                         }
                                     },
@@ -1014,20 +1321,20 @@ impl PofToolsGui {
                     let num_paths = self.model.paths.len();
                     let name = format!("Paths{}", if num_paths > 0 { format!(", {}", num_paths) } else { String::new() });
                     self.ui_state
-                        .tree_collapsing_item(&self.model, ui, &name, TreeSelection::Paths(PathSelection::Header), |ui_state, ui| {
+                        .tree_collapsing_item(&self.model, ui, &name, TreeValue::Paths(PathTreeValue::Header), |ui_state, ui| {
                             for (i, path) in self.model.paths.iter().enumerate() {
                                 ui_state.tree_collapsing_item(
                                     &self.model,
                                     ui,
                                     &format!("{}, {}", path.name, path.points.len()),
-                                    TreeSelection::Paths(PathSelection::Path(i)),
+                                    TreeValue::Paths(PathTreeValue::Path(i)),
                                     |ui_state, ui| {
                                         for j in 0..path.points.len() {
                                             ui_state.tree_selectable_item(
                                                 &self.model,
                                                 ui,
                                                 &format!("Path Point {}", j + 1),
-                                                TreeSelection::Paths(PathSelection::PathPoint(i, j)),
+                                                TreeValue::Paths(PathTreeValue::PathPoint(i, j)),
                                             );
                                         }
                                     },
@@ -1038,13 +1345,13 @@ impl PofToolsGui {
                     let num_insigs = self.model.insignias.len();
                     let name = format!("Insignias{}", if num_insigs > 0 { format!(", {}", num_insigs) } else { String::new() });
                     self.ui_state
-                        .tree_collapsing_item(&self.model, ui, &name, TreeSelection::Insignia(InsigniaSelection::Header), |ui_state, ui| {
+                        .tree_collapsing_item(&self.model, ui, &name, TreeValue::Insignia(InsigniaTreeValue::Header), |ui_state, ui| {
                             for (i, _) in self.model.insignias.iter().enumerate() {
                                 ui_state.tree_selectable_item(
                                     &self.model,
                                     ui,
                                     &format!("Insignia {}", i + 1),
-                                    TreeSelection::Insignia(InsigniaSelection::Insignia(i)),
+                                    TreeValue::Insignia(InsigniaTreeValue::Insignia(i)),
                                 );
                             }
                         });
@@ -1053,27 +1360,27 @@ impl PofToolsGui {
                         &self.model,
                         ui,
                         if self.model.shield_data.is_some() { "Shield" } else { "(No Shield)" },
-                        TreeSelection::Shield,
+                        TreeValue::Shield,
                     );
 
                     let num_eyes = self.model.eye_points.len();
                     let name = format!("Eye Points{}", if num_eyes > 0 { format!(", {}", num_eyes) } else { String::new() });
                     self.ui_state
-                        .tree_collapsing_item(&self.model, ui, &name, TreeSelection::EyePoints(EyeSelection::Header), |ui_state, ui| {
+                        .tree_collapsing_item(&self.model, ui, &name, TreeValue::EyePoints(EyeTreeValue::Header), |ui_state, ui| {
                             for (i, eye) in self.model.eye_points.iter().enumerate() {
                                 ui_state.tree_selectable_item(
                                     &self.model,
                                     ui,
                                     &format!("{} {}", self.model.sub_objects[eye.attached_subobj].name, i + 1),
-                                    TreeSelection::EyePoints(EyeSelection::EyePoint(i)),
+                                    TreeValue::EyePoints(EyeTreeValue::EyePoint(i)),
                                 );
                             }
                         });
 
                     self.ui_state
-                        .tree_selectable_item(&self.model, ui, "Visual Center", TreeSelection::VisualCenter);
+                        .tree_selectable_item(&self.model, ui, "Visual Center", TreeValue::VisualCenter);
 
-                    self.ui_state.tree_selectable_item(&self.model, ui, "Comments", TreeSelection::Comments);
+                    self.ui_state.tree_selectable_item(&self.model, ui, "Comments", TreeValue::Comments);
                 });
             });
 
@@ -1082,6 +1389,9 @@ impl PofToolsGui {
             .show(ctx, |ui| {
                 ui.label("text!");
             });
+
+        // all the tree values needing opening should have been opened by now
+        self.tree_view_force_open = None;
 
         // ==============================================================================================================
         // The 'properties panel' is the section on the right of the UI which contains the specific fields ready for
@@ -1104,239 +1414,5 @@ impl PofToolsGui {
                     self.do_properties_panel(ui, ctx, display);
                 });
             });
-    }
-
-    // rechecks just one or all of the warnings on the model
-    pub fn recheck_errors(errors: &mut BTreeSet<Error>, model: &Model, error_to_check: Set<Error>) {
-        if let One(error) = error_to_check {
-            let failed_check = match error {
-                Error::InvalidTurretGunSubobject(turret) => PofToolsGui::turret_gun_subobj_not_valid(model, turret),
-                Error::TooManyDebrisObjects => model.num_debris_objects() > pof::MAX_DEBRIS_OBJECTS,
-                Error::DetailAndDebrisObj(id) => model.header.detail_levels.contains(&id) && model.sub_objects[id].is_debris_model,
-                Error::DetailObjWithParent(id) => model.header.detail_levels.contains(&id) && model.sub_objects[id].parent().is_some(),
-                Error::TooManyVerts(id) => model.sub_objects[id].bsp_data.verts.len() > model.max_verts_norms_per_subobj(),
-                Error::TooManyNorms(id) => model.sub_objects[id].bsp_data.norms.len() > model.max_verts_norms_per_subobj(),
-            };
-
-            let existing_warning = errors.contains(&error);
-            if existing_warning && !failed_check {
-                errors.remove(&error);
-            } else if !existing_warning && failed_check {
-                errors.insert(error);
-            }
-        } else {
-            errors.clear();
-
-            for i in 0..model.turrets.len() {
-                if PofToolsGui::turret_gun_subobj_not_valid(model, i) {
-                    errors.insert(Error::InvalidTurretGunSubobject(i));
-                }
-            }
-
-            if model.num_debris_objects() > pof::MAX_DEBRIS_OBJECTS {
-                errors.insert(Error::TooManyDebrisObjects);
-            }
-
-            for &id in &model.header.detail_levels {
-                let subobj = &model.sub_objects[id];
-                if subobj.parent().is_some() {
-                    errors.insert(Error::DetailObjWithParent(id));
-                }
-                if subobj.is_debris_model {
-                    errors.insert(Error::DetailAndDebrisObj(id));
-                }
-            }
-
-            for subobj in &model.sub_objects {
-                if subobj.bsp_data.verts.len() > model.max_verts_norms_per_subobj() {
-                    errors.insert(Error::TooManyVerts(subobj.obj_id));
-                }
-
-                if subobj.bsp_data.norms.len() > model.max_verts_norms_per_subobj() {
-                    errors.insert(Error::TooManyNorms(subobj.obj_id));
-                }
-            }
-        }
-    }
-
-    fn turret_gun_subobj_not_valid(model: &Model, turret_num: usize) -> bool {
-        let turret = &model.turrets[turret_num];
-        if turret.base_obj == turret.gun_obj {
-            return false;
-        }
-
-        for &child_id in model.sub_objects[turret.base_obj].children() {
-            if child_id == turret.gun_obj {
-                return false;
-            }
-        }
-
-        true
-    }
-
-    // rechecks just one or all of the warnings on the model
-    pub(crate) fn recheck_warnings(warnings: &mut BTreeSet<Warning>, model: &Model, warning_to_check: Set<Warning>) {
-        if let One(warning) = warning_to_check {
-            let failed_check = match warning {
-                Warning::RadiusTooSmall(subobj_opt) => PofToolsGui::radius_test_failed(model, subobj_opt),
-                Warning::BBoxTooSmall(subobj_opt) => PofToolsGui::bbox_test_failed(model, subobj_opt),
-                Warning::DockingBayWithoutPath(bay_num) => model.docking_bays[bay_num].path.is_none(),
-                Warning::ThrusterPropertiesInvalidVersion(bank_idx) => {
-                    model.version <= Version::V21_16 && !model.thruster_banks[bank_idx].properties.is_empty()
-                }
-                Warning::WeaponOffsetInvalidVersion(weapon_select) => {
-                    (model.version <= Version::V21_17 || model.version == Version::V22_00) && {
-                        if let WeaponSelection::PriBankPoint(bank, point) = weapon_select {
-                            model.primary_weps[bank][point].offset != 0.0
-                        } else if let WeaponSelection::SecBankPoint(bank, point) = weapon_select {
-                            model.secondary_weps[bank][point].offset != 0.0
-                        } else {
-                            false
-                        }
-                    }
-                }
-                Warning::InvertedBBox(id_opt) => {
-                    if let Some(id) = id_opt {
-                        model.sub_objects[id].bbox.is_inverted()
-                    } else {
-                        model.header.bbox.is_inverted()
-                    }
-                }
-                Warning::UntexturedPolygons => model.untextured_idx.is_some(),
-            };
-
-            let existing_warning = warnings.contains(&warning);
-            if existing_warning && !failed_check {
-                warnings.remove(&warning);
-            } else if !existing_warning && failed_check {
-                warnings.insert(warning);
-            }
-        } else {
-            warnings.clear();
-
-            if PofToolsGui::radius_test_failed(model, None) {
-                warnings.insert(Warning::RadiusTooSmall(None));
-            }
-            for subobj in &model.sub_objects {
-                if PofToolsGui::radius_test_failed(model, Some(subobj.obj_id)) {
-                    warnings.insert(Warning::RadiusTooSmall(Some(subobj.obj_id)));
-                }
-            }
-
-            if PofToolsGui::bbox_test_failed(model, None) {
-                warnings.insert(Warning::BBoxTooSmall(None));
-            }
-
-            if model.header.bbox.is_inverted() && model.header.bbox != BoundingBox::EMPTY {
-                warnings.insert(Warning::InvertedBBox(None));
-            }
-
-            for subobj in &model.sub_objects {
-                if PofToolsGui::bbox_test_failed(model, Some(subobj.obj_id)) {
-                    warnings.insert(Warning::BBoxTooSmall(Some(subobj.obj_id)));
-                }
-
-                if subobj.bbox.is_inverted() && subobj.bbox != BoundingBox::EMPTY {
-                    warnings.insert(Warning::InvertedBBox(Some(subobj.obj_id)));
-                }
-            }
-
-            for (i, dock) in model.docking_bays.iter().enumerate() {
-                if dock.path.is_none() {
-                    warnings.insert(Warning::DockingBayWithoutPath(i));
-                }
-            }
-
-            if model.version <= Version::V21_16 {
-                for (i, bank) in model.thruster_banks.iter().enumerate() {
-                    if !bank.properties.is_empty() {
-                        warnings.insert(Warning::ThrusterPropertiesInvalidVersion(i));
-                    }
-                }
-            }
-
-            if model.version <= Version::V21_17 || model.version == Version::V22_00 {
-                for (i, bank) in model.primary_weps.iter().enumerate() {
-                    for (j, point) in bank.iter().enumerate() {
-                        if point.offset != 0.0 {
-                            warnings.insert(Warning::WeaponOffsetInvalidVersion(WeaponSelection::PriBankPoint(i, j)));
-                        }
-                    }
-                }
-                for (i, bank) in model.secondary_weps.iter().enumerate() {
-                    for (j, point) in bank.iter().enumerate() {
-                        if point.offset != 0.0 {
-                            warnings.insert(Warning::WeaponOffsetInvalidVersion(WeaponSelection::SecBankPoint(i, j)));
-                        }
-                    }
-                }
-            }
-
-            if model.untextured_idx.is_some() {
-                warnings.insert(Warning::UntexturedPolygons);
-            }
-        }
-    }
-
-    // tests if the radius for a subobject or the header is too small for its geometry
-    // None means the header/entire model's radius
-    fn radius_test_failed(model: &Model, subobj_opt: Option<ObjectId>) -> bool {
-        if let Some(subobj) = subobj_opt {
-            let subobj = &model.sub_objects[subobj];
-            let radius_with_margin = (1.0 + f32::EPSILON) * subobj.radius;
-            for vert in &subobj.bsp_data.verts {
-                if vert.magnitude() > radius_with_margin {
-                    return true;
-                }
-            }
-        } else {
-            let radius_with_margin = (1.0 + f32::EPSILON) * model.header.max_radius;
-            if let Some(&detail_0) = model.header.detail_levels.first() {
-                for subobj in &model.sub_objects {
-                    // we dont care about subobjects which aren't part of the detail0 hierarchy
-                    if !model.is_obj_id_ancestor(subobj.obj_id, detail_0) {
-                        continue;
-                    }
-
-                    let offset = model.get_total_subobj_offset(subobj.obj_id);
-                    for vert in &subobj.bsp_data.verts {
-                        if (*vert + offset).magnitude() > radius_with_margin {
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-
-        false
-    }
-
-    // tests if the bbox for a subobject or the header is too small for its geometry
-    // None means the header/entire model's radius
-    fn bbox_test_failed(model: &Model, subobj_opt: Option<ObjectId>) -> bool {
-        if let Some(subobj) = subobj_opt {
-            let subobj = &model.sub_objects[subobj];
-            for vert in &subobj.bsp_data.verts {
-                if !subobj.bbox.contains(*vert) {
-                    return true;
-                }
-            }
-        } else if let Some(&detail_0) = model.header.detail_levels.first() {
-            for subobj in &model.sub_objects {
-                // we dont care about subobjects which aren't part of the detail0 hierarchy
-                if !model.is_obj_id_ancestor(subobj.obj_id, detail_0) {
-                    continue;
-                }
-
-                let offset = model.get_total_subobj_offset(subobj.obj_id);
-                for vert in &subobj.bsp_data.verts {
-                    if !model.header.bbox.contains(offset + *vert) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        false
     }
 }

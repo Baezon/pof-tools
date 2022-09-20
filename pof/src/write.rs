@@ -985,14 +985,14 @@ fn make_subobj_node(
             .push(make_properties_node(&mut (), &subobj.properties, format!("{}-", subobj.name)));
     }
 
-    if subobj.movement_type != Default::default() {
+    if subobj.rotation_type != Default::default() {
         node.children
-            .push(DaeNode::new(format!("{}-mov-type", subobj.name), Some(format!("#{}-mov-type:{}", subobj.name, subobj.movement_type as i32))));
+            .push(DaeNode::new(format!("{}-mov-type", subobj.name), Some(format!("#{}-mov-type:{}", subobj.name, subobj.rotation_type as i32))));
     }
 
-    if subobj.movement_axis != Default::default() {
+    if subobj.rotation_axis != Default::default() {
         node.children
-            .push(DaeNode::new(format!("{}-mov-axis", subobj.name), Some(format!("#{}-mov-axis:{}", subobj.name, subobj.movement_axis as i32))));
+            .push(DaeNode::new(format!("{}-mov-axis", subobj.name), Some(format!("#{}-mov-axis:{}", subobj.name, subobj.rotation_axis as i32))));
     }
 
     node.instance_geometry.push(instance);
@@ -1104,6 +1104,14 @@ struct GltfBuilder {
     buffer: Vec<u8>,
 }
 
+fn sanitize_f32(f: f32) -> f32 {
+    if f.is_finite() {
+        f
+    } else {
+        0.
+    }
+}
+
 impl NodeBuilder for json::Node {
     type Ctx = Vec<Self>;
     type Node = Index<Self>;
@@ -1111,17 +1119,18 @@ impl NodeBuilder for json::Node {
         self.children.get_or_insert_with(Default::default)
     }
     fn translate(&mut self, val: [f32; 3]) {
-        self.translation = Some(val)
+        self.translation = Some(val.map(sanitize_f32))
     }
     fn rotate(&mut self, (Vec3d { x, y, z }, angle): (Vec3d, f32)) {
+        let [x, y, z, angle] = [x, y, z, angle].map(sanitize_f32);
         let (sin_a, cos_a) = f32::sin_cos(angle / 2.);
         self.rotation = Some(json::scene::UnitQuaternion([x * sin_a, y * sin_a, z * sin_a, cos_a]));
     }
     fn scale(&mut self, val: [f32; 3]) {
-        self.scale = Some(val)
+        self.scale = Some(val.map(sanitize_f32))
     }
     fn matrix_transform(&mut self, mat: Mat4x4) {
-        self.matrix = Some(*Matrix::from(mat).0)
+        self.matrix = Some(Matrix::from(mat).0.map(sanitize_f32))
     }
     fn build(self, ctx: &mut Vec<Self>) -> Index<Self> {
         GltfBuilder::push(ctx, self)
@@ -1384,14 +1393,14 @@ impl GltfBuilder {
                 .push(make_properties_node(&mut self.root.nodes, &subobj.properties, format!("{}-", subobj.name)));
         }
 
-        if subobj.movement_type != Default::default() {
+        if subobj.rotation_type != Default::default() {
             node.children()
-                .push(NodeIndex::from_id(format!("#{}-mov-type:{}", subobj.name, subobj.movement_type as i32)).build(&mut self.root.nodes));
+                .push(NodeIndex::from_id(format!("#{}-mov-type:{}", subobj.name, subobj.rotation_type as i32)).build(&mut self.root.nodes));
         }
 
-        if subobj.movement_axis != Default::default() {
+        if subobj.rotation_axis != Default::default() {
             node.children()
-                .push(NodeIndex::from_id(format!("#{}-mov-axis:{}", subobj.name, subobj.movement_axis as i32)).build(&mut self.root.nodes));
+                .push(NodeIndex::from_id(format!("#{}-mov-axis:{}", subobj.name, subobj.rotation_axis as i32)).build(&mut self.root.nodes));
         }
 
         node.mesh = Some(geo_id);

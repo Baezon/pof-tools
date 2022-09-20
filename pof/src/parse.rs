@@ -167,11 +167,22 @@ impl<R: Read + Seek> Parser<R> {
                     let bbox = self.read_bbox()?;
                     let name = self.read_string()?;
                     let properties = self.read_string()?;
-                    let movement_type = self.read_i32()?.try_into().unwrap_or_default();
-                    let mut movement_axis = self.read_i32()?.try_into().unwrap_or_default();
-                    if movement_type == SubsysMovementType::None {
-                        movement_axis = SubsysMovementAxis::None
+                    let rotation_type = self.read_i32()?.try_into().unwrap_or_default();
+                    let mut rotation_axis = self.read_i32()?.try_into().unwrap_or_default();
+                    if rotation_type == SubsysRotationType::None {
+                        rotation_axis = SubsysRotationAxis::None
                     }
+
+                    let (translation_type, translation_axis) = if self.version >= Version::V23_01 {
+                        let t_type = self.read_i32()?.try_into().unwrap_or_default();
+                        let mut t_axis = self.read_i32()?.try_into().unwrap_or_default();
+                        if t_type == SubsysTranslationType::None {
+                            t_axis = SubsysTranslationAxis::None
+                        }
+                        (t_type, t_axis)
+                    } else {
+                        (SubsysTranslationType::None, SubsysTranslationAxis::None)
+                    };
 
                     assert!(self.read_i32()? == 0, "chunked models unimplemented in FSO");
                     let bsp_data_buffer = self.read_byte_buffer()?;
@@ -188,12 +199,13 @@ impl<R: Read + Seek> Parser<R> {
                         bbox,
                         name,
                         properties,
-                        movement_type,
-                        movement_axis,
+                        rotation_type,
+                        rotation_axis,
+                        translation_type,
+                        translation_axis,
                         bsp_data,
-                        // these two are to be filled later once we've parsed all the subobjects
-                        children: vec![],
-                        is_debris_model: false,
+                        // these rest are to be filled later once we've parsed all the subobjects
+                        ..Default::default()
                     });
                     //println!("parsed subobject {:#?}", sub_objects[obj_id.0 as usize]);
                 }
@@ -444,7 +456,7 @@ impl<R: Read + Seek> Parser<R> {
         let mut textures = textures.unwrap_or_default();
         let untextured_idx = post_parse_fill_untextured_slot(&mut sub_objects, &mut textures);
 
-        Ok(Model {
+        let mut model = Model {
             version: self.version,
             header: header.expect("No header chunk found???"),
             sub_objects,
@@ -464,7 +476,14 @@ impl<R: Read + Seek> Parser<R> {
             shield_data,
             path_to_file: path.canonicalize().unwrap_or(path),
             untextured_idx,
-        })
+            warnings: Default::default(),
+            errors: Default::default(),
+        };
+        model.recheck_warnings(Set::All);
+        model.recheck_errors(Set::All);
+        model.recalc_semantic_name_links();
+
+        Ok(model)
     }
 
     fn read_list<T>(&mut self, f: impl FnMut(&mut Self) -> io::Result<T>) -> io::Result<Vec<T>> {
@@ -857,8 +876,10 @@ fn push_subobj(
         bbox: Default::default(),
         name: name.to_string(),
         properties: Default::default(),
-        movement_type: Default::default(),
-        movement_axis: Default::default(),
+        rotation_type: Default::default(),
+        rotation_axis: Default::default(),
+        translation_type: Default::default(),
+        translation_axis: Default::default(),
         bsp_data: BspData {
             norms,
             collision_tree: BspData::recalculate(
@@ -871,6 +892,7 @@ fn push_subobj(
         },
         children: Default::default(),
         is_debris_model,
+        ..Default::default()
     };
 
     new_subobj.recalc_bbox();
@@ -942,7 +964,7 @@ trait ParseCtx<'a> {
                         turret.gun_obj = obj_id;
                         turret.base_obj = if name.contains("gun") { parent } else { obj_id };
 
-                        let (pos, norm, _) = node.parse_point(parent_transform, up);
+                        let (pos, norm, _) = node.parse_point(&transform, up);
                         turret.fire_points.push(pos);
                         turret.normal = norm.try_into().unwrap_or_default();
                         continue;
@@ -952,14 +974,14 @@ trait ParseCtx<'a> {
                     } else if name.starts_with('#') && name.contains("mov-type") {
                         if let Some(idx) = name.find(':') {
                             if let Ok(val) = name[(idx + 1)..].parse::<i32>() {
-                                subobj.movement_type = val.try_into().unwrap_or_default();
+                                subobj.rotation_type = val.try_into().unwrap_or_default();
                             }
                         }
                         continue;
                     } else if name.starts_with('#') && name.contains("mov-axis") {
                         if let Some(idx) = name.find(':') {
                             if let Ok(val) = name[(idx + 1)..].parse::<i32>() {
-                                subobj.movement_axis = val.try_into().unwrap_or_default();
+                                subobj.rotation_axis = val.try_into().unwrap_or_default();
                             }
                         }
                         continue;
@@ -1306,7 +1328,7 @@ impl<'a> IsNode<'a> for &'a dae::Node {
 
 struct DaeContext<'a> {
     local_maps: dae::LocalMaps<'a>,
-    material_map: HashMap<&'a String, TextureId>,
+    material_map: HashMap<String, TextureId>,
     up: UpAxis,
 }
 
@@ -1341,11 +1363,26 @@ impl<'a> ParseCtx<'a> for DaeContext<'a> {
                     self.normal_id = ctx.normal_ids[index as usize];
                 }
                 fn add_texcoord(&mut self, _: &VertexContext, reader: &SourceReader<'a, ST>, index: u32, set: Option<u32>) {
-                    assert!(set.map_or(true, |set| set == 0));
-                    let [u, v] = reader.get(index as usize);
-                    self.uv = (u, v);
+                    // maybe raise an import warning over this?
+                    if set == Some(0) {
+                        let [u, v] = reader.get(index as usize);
+                        self.uv = (u, 1. - v);
+                    }
                 }
             }
+            let instance_mat_map: HashMap<_, _> = geo
+                .instance_materials()
+                .iter()
+                .map(|x| {
+                    (
+                        x.symbol.clone(),
+                        match &x.target.val {
+                            dae::Url::Fragment(r) => r.clone(),
+                            dae::Url::Other(_) => panic!(),
+                        },
+                    )
+                })
+                .collect();
 
             let geo = self.local_maps[&geo.url].element.as_mesh().unwrap();
             let verts = geo.vertices.as_ref().unwrap().importer(&self.local_maps).unwrap();
@@ -1358,9 +1395,9 @@ impl<'a> ParseCtx<'a> for DaeContext<'a> {
             for prim_elem in &geo.elements {
                 match prim_elem {
                     dae::Primitive::PolyList(polies) => {
-                        // println!("{:#?}, {:#?}", polies.material, material_map);
+                        //println!("{:#?}, {:#?}, {:#?}", polies.material, instance_mat_map, self.material_map);
                         let texture = match &polies.material {
-                            Some(mat) => self.material_map[mat],
+                            Some(mat) => self.material_map[&instance_mat_map[mat]],
                             None => TextureId::UNTEXTURED,
                         };
 
@@ -1385,9 +1422,9 @@ impl<'a> ParseCtx<'a> for DaeContext<'a> {
                         }
                     }
                     dae::Primitive::Triangles(tris) => {
-                        // println!("{:#?}, {:#?}", tris.material, material_map);
+                        //println!("{:#?}, {:#?}, {:#?}", tris.material, instance_mat_map, self.material_map);
                         let texture = match &tris.material {
-                            Some(mat) => self.material_map[mat],
+                            Some(mat) => self.material_map[&instance_mat_map[mat]],
                             None => TextureId::UNTEXTURED,
                         };
                         let importer = tris.importer(&self.local_maps, verts.clone()).unwrap();
@@ -1433,7 +1470,7 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
 
     document.for_each(|material: &dae::Material| {
         ctx.material_map
-            .insert(material.id.as_ref().unwrap(), TextureId(ctx.material_map.len() as u32));
+            .insert(material.id.as_ref().unwrap().clone(), TextureId(ctx.material_map.len() as u32));
     });
 
     let mut model = Box::new(Model::default());

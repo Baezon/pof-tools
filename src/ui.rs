@@ -59,48 +59,21 @@ impl Default for TreeSelection {
     }
 }
 impl TreeSelection {
-    // fn name<'a>(&self, model: &'a Model) -> &'a str {
-    //     match self {
-    //         TreeSelection::Header => "Header",
-    //         TreeSelection::SubObjects(_) => todo!(),
-    //         TreeSelection::Textures(tex) => match tex {
-    //             TextureSelection::Header => "Textures",
-    //             TextureSelection::Texture(tex) => &model.textures[tex],
-    //         },
-    //         TreeSelection::Weapons(_) => todo!(),
-    //         TreeSelection::DockingBays(_) => todo!(),
-    //         TreeSelection::Thrusters(_) => todo!(),
-    //         TreeSelection::Glows(_) => todo!(),
-    //         TreeSelection::SpecialPoints(_) => todo!(),
-    //         TreeSelection::Turrets(_) => todo!(),
-    //         TreeSelection::Paths(_) => todo!(),
-    //         TreeSelection::Shield => todo!(),
-    //         TreeSelection::Insignia(_) => todo!(),
-    //         TreeSelection::EyePoints(_) => todo!(),
-    //         TreeSelection::AutoCenter => todo!(),
-    //         TreeSelection::Comments => todo!(),
-    //     }
-    // }
-
-    // fn children<R>(&self, model: &Model) {
-    //     match self {
-    //         TreeSelection::Header => todo!(),
-    //         TreeSelection::SubObjects(_) => todo!(),
-    //         TreeSelection::Textures(_) => todo!(),
-    //         TreeSelection::Weapons(_) => todo!(),
-    //         TreeSelection::DockingBays(_) => todo!(),
-    //         TreeSelection::Thrusters(_) => todo!(),
-    //         TreeSelection::Glows(_) => todo!(),
-    //         TreeSelection::SpecialPoints(_) => todo!(),
-    //         TreeSelection::Turrets(_) => todo!(),
-    //         TreeSelection::Paths(_) => todo!(),
-    //         TreeSelection::Shield => todo!(),
-    //         TreeSelection::Insignia(_) => todo!(),
-    //         TreeSelection::EyePoints(_) => todo!(),
-    //         TreeSelection::AutoCenter => todo!(),
-    //         TreeSelection::Comments => todo!(),
-    //     }
-    // }
+    pub fn get_position_ref<'a>(&self, model: &'a mut Model) -> Option<&'a mut Vec3d> {
+        match *self {
+            TreeSelection::Weapons(WeaponSelection::PriBankPoint(i, j)) => Some(&mut model.primary_weps[i][j].position),
+            TreeSelection::Weapons(WeaponSelection::SecBankPoint(i, j)) => Some(&mut model.secondary_weps[i][j].position),
+            TreeSelection::DockingBays(DockingSelection::Bay(i)) => Some(&mut model.docking_bays[i].position),
+            TreeSelection::Thrusters(ThrusterSelection::BankPoint(i, j)) => Some(&mut model.thruster_banks[i].glows[j].position),
+            TreeSelection::Glows(GlowSelection::BankPoint(i, j)) => Some(&mut model.glow_banks[i].glow_points[j].position),
+            TreeSelection::SpecialPoints(SpecialPointSelection::Point(i)) => Some(&mut model.special_points[i].position),
+            TreeSelection::Turrets(TurretSelection::TurretPoint(i, j)) => Some(&mut model.turrets[i].fire_points[j]),
+            TreeSelection::Paths(PathSelection::PathPoint(i, j)) => Some(&mut model.paths[i].points[j].position),
+            TreeSelection::EyePoints(EyeSelection::EyePoint(i)) => Some(&mut model.eye_points[i].position),
+            TreeSelection::VisualCenter => Some(&mut model.visual_center),
+            _ => None,
+        }
+    }
 }
 #[derive(PartialEq, Hash, Debug, Clone, Copy)]
 pub(crate) enum InsigniaSelection {
@@ -454,6 +427,8 @@ pub(crate) struct PofToolsGui {
     pub camera_heading: f32,
     pub camera_scale: f32,
     pub camera_offset: Vec3d,
+    pub hover_lollipop: Option<TreeSelection>,
+    pub drag_lollipop: Option<TreeSelection>,
 
     pub buffer_objects: Vec<GlObjectBuffers>, // all the subobjects, conditionally rendered based on the current tree selection
     pub buffer_textures: HashMap<TextureId, SrgbTexture2d>, // map of tex ids to actual textures
@@ -494,6 +469,8 @@ impl PofToolsGui {
             buffer_shield: Default::default(),
             buffer_insignias: Default::default(),
             lollipops: Default::default(),
+            hover_lollipop: None,
+            drag_lollipop: None,
         }
     }
 
@@ -1098,6 +1075,12 @@ impl PofToolsGui {
 
                     self.ui_state.tree_selectable_item(&self.model, ui, "Comments", TreeSelection::Comments);
                 });
+            });
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().margin(egui::style::Margin::same(5.0)))
+            .show(ctx, |ui| {
+                ui.label("text!");
             });
 
         // ==============================================================================================================

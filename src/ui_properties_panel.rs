@@ -567,7 +567,7 @@ impl UiState {
             TreeSelection::EyePoints(eye_selection) => match eye_selection {
                 EyeSelection::EyePoint(idx) => {
                     self.properties_panel = PropertiesPanel::EyePoint {
-                        position_string: format!("{}", model.eye_points[idx].offset),
+                        position_string: format!("{}", model.eye_points[idx].position),
                         normal_string: format!("{}", model.eye_points[idx].normal.0),
                         attached_subobj_idx: model.eye_points[idx].attached_subobj.0 as usize,
                     }
@@ -2133,8 +2133,8 @@ impl PofToolsGui {
                 ui.add_space(10.0);
 
                 let (pos, norm) = if let TreeSelection::EyePoints(EyeSelection::EyePoint(point)) = self.ui_state.tree_view_selection {
-                    let EyePoint { offset, normal, .. } = &mut self.model.eye_points[point];
-                    (Some(offset), Some(normal))
+                    let EyePoint { position, normal, .. } = &mut self.model.eye_points[point];
+                    (Some(position), Some(normal))
                 } else {
                     (None, None)
                 };

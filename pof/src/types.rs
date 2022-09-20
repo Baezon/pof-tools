@@ -231,9 +231,15 @@ impl Vec3d {
     pub fn magnitude(self) -> f32 {
         f32::sqrt(self.x * self.x + self.y * self.y + self.z * self.z)
     }
+    pub fn magnitude_squared(self) -> f32 {
+        self.x * self.x + self.y * self.y + self.z * self.z
+    }
     pub fn normalize(self) -> Vec3d {
         let mag = self.magnitude();
         self * (1.0 / mag)
+    }
+    pub fn dot(self, other: &Vec3d) -> f32 {
+        (other.x * self.x) + (other.y * self.y) + (other.z * self.z)
     }
     pub fn is_null(self) -> bool {
         self.x.abs() <= 0.000001 && self.y.abs() <= 0.000001 && self.z.abs() <= 0.000001
@@ -570,7 +576,7 @@ mk_struct! {
     #[derive(Default, Debug, Clone)]
     pub struct EyePoint {
         pub attached_subobj: ObjectId,
-        pub offset: Vec3d,
+        pub position: Vec3d,
         pub normal: NormalVec3,
     }
 

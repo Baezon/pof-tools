@@ -242,7 +242,7 @@ impl<R: Read + Seek> Parser<R> {
                     eye_points = Some(self.read_list(|this| {
                         Ok(EyePoint {
                             attached_subobj: ObjectId(this.read_u32()?),
-                            offset: this.read_vec3d()?,
+                            position: this.read_vec3d()?,
                             normal: this.read_vec3d()?.try_into().unwrap_or_default(),
                         })
                     })?);
@@ -1241,7 +1241,7 @@ trait ParseCtx<'a> {
                     let mut new_point = EyePoint::default();
 
                     let (pos, norm, _) = node.parse_point(&transform, up);
-                    new_point.offset = pos;
+                    new_point.position = pos;
                     new_point.normal = norm.try_into().unwrap_or_default();
 
                     for (_, name) in node_children_with_keyword(node, "parent") {

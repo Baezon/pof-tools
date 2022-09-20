@@ -740,7 +740,7 @@ fn make_eyes_node<N: Node>(ctx: &mut N::Ctx, eye_points: &[EyePoint], up: UpAxis
     for (i, point) in eye_points.iter().enumerate() {
         let mut point_node = N::from_name(format!("#e{}", i), format!("#e-point{}", i));
 
-        let pos = point.offset.to_coord(up);
+        let pos = point.position.to_coord(up);
         point_node.translate(pos.into());
         point_node.rotate(vec_to_rotation(&point.normal.0, up));
 

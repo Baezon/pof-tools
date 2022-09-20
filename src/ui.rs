@@ -80,12 +80,12 @@ impl TreeValue {
             TreeValue::Weapons(WeaponTreeValue::PriBankPoint(i, j)) => Some(&mut model.primary_weps[i][j].position),
             TreeValue::Weapons(WeaponTreeValue::SecBankPoint(i, j)) => Some(&mut model.secondary_weps[i][j].position),
             TreeValue::DockingBays(DockingTreeValue::Bay(i)) => Some(&mut model.docking_bays[i].position),
-            TreeValue::Thrusters(ThrusterSelection::BankPoint(i, j)) => Some(&mut model.thruster_banks[i].glows[j].position),
-            TreeValue::Glows(GlowSelection::BankPoint(i, j)) => Some(&mut model.glow_banks[i].glow_points[j].position),
-            TreeValue::SpecialPoints(SpecialPointSelection::Point(i)) => Some(&mut model.special_points[i].position),
-            TreeValue::Turrets(TurretSelection::TurretPoint(i, j)) => Some(&mut model.turrets[i].fire_points[j]),
-            TreeValue::Paths(PathSelection::PathPoint(i, j)) => Some(&mut model.paths[i].points[j].position),
-            TreeValue::EyePoints(EyeSelection::EyePoint(i)) => Some(&mut model.eye_points[i].position),
+            TreeValue::Thrusters(ThrusterTreeValue::BankPoint(i, j)) => Some(&mut model.thruster_banks[i].glows[j].position),
+            TreeValue::Glows(GlowTreeValue::BankPoint(i, j)) => Some(&mut model.glow_banks[i].glow_points[j].position),
+            TreeValue::SpecialPoints(SpecialPointTreeValue::Point(i)) => Some(&mut model.special_points[i].position),
+            TreeValue::Turrets(TurretTreeValue::TurretPoint(i, j)) => Some(&mut model.turrets[i].fire_points[j]),
+            TreeValue::Paths(PathTreeValue::PathPoint(i, j)) => Some(&mut model.paths[i].points[j].position),
+            TreeValue::EyePoints(EyeTreeValue::EyePoint(i)) => Some(&mut model.eye_points[i].position),
             TreeValue::VisualCenter => Some(&mut model.visual_center),
             _ => None,
         }
@@ -455,6 +455,12 @@ impl std::fmt::Display for SubObjectTreeValue {
     }
 }
 
+pub enum DragAxis {
+    YZ,
+    XZ,
+    XY,
+}
+
 #[derive(PartialEq, Eq)]
 pub(crate) enum DisplayMode {
     Wireframe,
@@ -495,8 +501,11 @@ pub(crate) struct PofToolsGui {
     pub camera_scale: f32,
     pub camera_offset: Vec3d,
     pub camera_orthographic: bool,
+
     pub hover_lollipop: Option<TreeValue>,
     pub drag_lollipop: Option<TreeValue>,
+    pub drag_start: Vec3d,
+    pub drag_axis: DragAxis,
 
     pub buffer_objects: Vec<GlObjectBuffers>, // all the subobjects, conditionally rendered based on the current tree selection
     pub buffer_textures: HashMap<TextureId, SrgbTexture2d>, // map of tex ids to actual textures
@@ -540,6 +549,8 @@ impl PofToolsGui {
             arrowheads: Default::default(),
             hover_lollipop: None,
             drag_lollipop: None,
+            drag_start: Vec3d::ZERO,
+            drag_axis: DragAxis::YZ,
         }
     }
 

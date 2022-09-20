@@ -39,6 +39,15 @@ pub(crate) const BOX_VERTS: [Vertex; 8] = [
 
 pub(crate) const BOX_INDICES: [u16; 24] = [0, 1, 1, 3, 3, 2, 2, 0, 0, 4, 1, 5, 3, 7, 2, 6, 4, 5, 5, 7, 7, 6, 6, 4u16];
 
+pub(crate) const OCTAHEDRON_VERTS: [Vertex; 6] = [
+    Vertex { position: (-1.0, 0.0, 0.0), uv: (0.0, 0.0) },
+    Vertex { position: (1.0, 0.0, 0.0), uv: (0.0, 0.0) },
+    Vertex { position: (0.0, -1.0, 0.0), uv: (0.0, 0.0) },
+    Vertex { position: (0.0, 1.0, 0.0), uv: (0.0, 0.0) },
+    Vertex { position: (0.0, 0.0, -1.0), uv: (0.0, 0.0) },
+    Vertex { position: (0.0, 0.0, 1.0), uv: (0.0, 0.0) },
+];
+
 pub(crate) const SPHERE_VERTS: [Vertex; 162] = [
     Vertex {
         position: (-0.6708191, -0.2763973, -0.6881907),
@@ -486,15 +495,16 @@ pub(crate) const SPHERE_INDICES: [u16; 960] = [
 ];
 
 pub(crate) const ARROWHEAD_VERTS: [Vertex; 9] = [
-Vertex { position: (0.0, 0.0, -0.3535533), uv: (0.5, 1.0) },
-Vertex { position: (0.0, 2.0, 0.0), uv: (0.5, 0.5) },
-Vertex { position: (0.25, 0.0, -0.25), uv: (0.853553, 0.853553) },
-Vertex { position: (0.3535533, 0.0, 0.0), uv: (1.0, 0.5) },
-Vertex { position: (0.25, 0.0, 0.25), uv: (0.853553, 0.146447) },
-Vertex { position: (-0.0, 0.0, 0.3535533), uv: (0.5, 0.0) },
-Vertex { position: (-0.25, 0.0, 0.25), uv: (0.146447, 0.146447) },
-Vertex { position: (-0.3535533, 0.0, -0.0), uv: (0.0, 0.5) },
-Vertex { position: (-0.25, 0.0, -0.25), uv: (0.146446, 0.853553) }
+    Vertex { position: (0.0, 0.0, -0.3535533), uv: (0.5, 1.0) },
+    Vertex { position: (0.0, 2.0, 0.0), uv: (0.5, 0.5) },
+    Vertex { position: (0.25, 0.0, -0.25), uv: (0.853553, 0.853553) },
+    Vertex { position: (0.3535533, 0.0, 0.0), uv: (1.0, 0.5) },
+    Vertex { position: (0.25, 0.0, 0.25), uv: (0.853553, 0.146447) },
+    Vertex { position: (-0.0, 0.0, 0.3535533), uv: (0.5, 0.0) },
+    Vertex { position: (-0.25, 0.0, 0.25), uv: (0.146447, 0.146447) },
+    Vertex { position: (-0.3535533, 0.0, -0.0), uv: (0.0, 0.5) },
+    Vertex { position: (-0.25, 0.0, -0.25), uv: (0.146446, 0.853553) },
 ];
-pub(crate) const ARROWHEAD_INDICES: [u16; 42] = [0, 1, 2, 2, 1, 3, 3, 1, 4, 4, 1, 5, 5, 1, 6, 6, 1, 7, 4, 6, 8, 7, 1, 8, 8, 1, 0, 8, 0, 2, 2, 3, 4, 4, 5, 6, 6, 7, 8, 8, 2, 4];
-
+pub(crate) const ARROWHEAD_INDICES: [u16; 42] = [
+    0, 1, 2, 2, 1, 3, 3, 1, 4, 4, 1, 5, 5, 1, 6, 6, 1, 7, 4, 6, 8, 7, 1, 8, 8, 1, 0, 8, 0, 2, 2, 3, 4, 4, 5, 6, 6, 7, 8, 8, 2, 4,
+];

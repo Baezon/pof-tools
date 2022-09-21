@@ -61,19 +61,6 @@ impl Default for TreeValue {
         Self::Header
     }
 }
-#[derive(PartialEq, Hash, Debug, Clone, Copy)]
-pub(crate) enum InsigniaSelection {
-    Header,
-    Insignia(usize), // insignia idx
-}
-impl std::fmt::Display for InsigniaSelection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            InsigniaSelection::Header => write!(f, "Header"),
-            InsigniaSelection::Insignia(idx) => write!(f, "{}", idx + 1),
-        }
-    }
-}
 impl TreeValue {
     pub fn get_position_ref<'a>(&self, model: &'a mut Model) -> Option<&'a mut Vec3d> {
         match *self {
@@ -504,6 +491,9 @@ pub(crate) struct PofToolsGui {
 
     pub hover_lollipop: Option<TreeValue>,
     pub drag_lollipop: Option<TreeValue>,
+    /// drag_lollipop may merely be clicked briefly for the purposes of selection
+    /// this is true when the user has also moved the mouse significantly and is intending to move it
+    pub actually_dragging: bool,
     pub drag_start: Vec3d,
     pub drag_axis: DragAxis,
 
@@ -551,6 +541,7 @@ impl PofToolsGui {
             drag_lollipop: None,
             drag_start: Vec3d::ZERO,
             drag_axis: DragAxis::YZ,
+            actually_dragging: false,
         }
     }
 
@@ -1396,9 +1387,12 @@ impl PofToolsGui {
             });
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().margin(egui::style::Margin::same(5.0)))
+            .frame(egui::Frame::none().inner_margin(egui::style::Margin::same(5.0)))
             .show(ctx, |ui| {
-                ui.label("text!");
+                ui.visuals_mut().override_text_color = Some(Color32::from_gray(80));
+                ui.label("Right-click and drag to rotate");
+                ui.label("Middle-click (or shift-right-click) and drag to pan");
+                ui.label("Left-click on a node to select it, drag to move it");
             });
 
         // all the tree values needing opening should have been opened by now

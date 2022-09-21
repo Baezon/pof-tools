@@ -21,11 +21,10 @@ use glium::{
     texture::SrgbTexture2d,
     BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer,
 };
-use glm::{Mat4x4, Vec3};
+use glm::Mat4x4;
 use native_dialog::FileDialog;
 use pof::{
-    BoundingBox, BspData, Insignia, Model, NameLink, NormalId, ObjVec, ObjectId, Parser, PolyVertex, Polygon, ShieldData, SubObject, TextureId,
-    Vec3d, VertexId,
+    BspData, Insignia, Model, NameLink, NormalId, ObjVec, ObjectId, Parser, PolyVertex, Polygon, ShieldData, SubObject, TextureId, Vec3d, VertexId,
 };
 use simplelog::*;
 use std::{
@@ -469,7 +468,7 @@ impl PofToolsGui {
             self.buffer_shield = Some(GlBufferedShield::new(display, shield));
         }
 
-        self.maybe_recalculate_3d_helpers(display, None);
+        self.maybe_recalculate_3d_helpers(display);
 
         self.model.recheck_warnings(pof::Set::All);
         self.model.recheck_errors(pof::Set::All);
@@ -804,7 +803,7 @@ fn main() {
 
                     pt_gui.get_hover_lollipop(mouse_vec);
 
-                    // start the drag if the user clicked on a lollipop
+                    // start the drag/selection if the user clicked on a lollipop
                     if let Some((vec1, vec2)) = mouse_vec {
                         if egui.egui_ctx.input().pointer.button_clicked(PointerButton::Primary) {
                             if let Some(lollipop) = pt_gui.hover_lollipop {
@@ -820,48 +819,73 @@ fn main() {
                                 if let TreeValue::Turrets(TurretTreeValue::TurretPoint(i, _)) = lollipop {
                                     pt_gui.drag_start += pt_gui.model.get_total_subobj_offset(pt_gui.model.turrets[i].gun_obj);
                                 }
+
+                                pt_gui.select_new_tree_val(lollipop);
                             }
                         }
                     }
 
                     // continue the drag if the user is still dragging the lollipop
                     if let Some(drag_lollipop) = pt_gui.drag_lollipop {
-                        // take into account turret offset
-                        let mut maybe_turret_offset = Vec3d::ZERO;
-                        if let Some(TreeValue::Turrets(TurretTreeValue::TurretPoint(i, _))) = pt_gui.drag_lollipop {
-                            maybe_turret_offset = pt_gui.model.get_total_subobj_offset(pt_gui.model.turrets[i].gun_obj);
+                        // only drag if they've sufficiently moved the mouse
+                        if !pt_gui.actually_dragging
+                            && egui.egui_ctx.input().pointer.press_origin().map_or(false, |origin| {
+                                egui.egui_ctx
+                                    .input()
+                                    .pointer
+                                    .hover_pos()
+                                    .map_or(false, |current_pos| current_pos.distance(origin) > 4.)
+                            })
+                        {
+                            pt_gui.actually_dragging = true;
                         }
 
-                        if let Some(vec_ptr) = drag_lollipop.get_position_ref(&mut pt_gui.model) {
-                            *vec_ptr += maybe_turret_offset; // add this only for the purposes of calculation (subtracted at the end)
-                            let new_pos: Option<Vec3d> = {
-                                let mouse_vec = mouse_vec.unwrap();
-                                let t = match pt_gui.drag_axis {
-                                    DragAxis::YZ => (vec_ptr.x - mouse_vec.0.x) / (mouse_vec.1.x - mouse_vec.0.x),
-                                    DragAxis::XZ => (vec_ptr.y - mouse_vec.0.y) / (mouse_vec.1.y - mouse_vec.0.y),
-                                    DragAxis::XY => (vec_ptr.z - mouse_vec.0.z) / (mouse_vec.1.z - mouse_vec.0.z),
-                                };
-                                let hover_pos = egui.egui_ctx.input().pointer.hover_pos();
-                                let in_3d_viewport = hover_pos.map_or(false, |hover_pos| egui.egui_ctx.available_rect().contains(hover_pos));
-                                if mouse_pos.is_none() || t < -1.0 || t > 1.0 || !egui.egui_ctx.input().pointer.primary_down() || !in_3d_viewport {
-                                    pt_gui.drag_lollipop = None;
-                                    *vec_ptr -= maybe_turret_offset;
-                                    None
-                                } else {
-                                    Some(mouse_vec.0 + (mouse_vec.1 - mouse_vec.0) * t)
-                                }
-                            };
-
-                            if let Some(new_pos) = new_pos {
-                                *vec_ptr = new_pos - maybe_turret_offset;
-                                pt_gui.ui_state.refresh_properties_panel(&pt_gui.model);
-                                pt_gui.ui_state.viewport_3d_dirty = true;
+                        if pt_gui.actually_dragging {
+                            // take into account turret offset
+                            let mut maybe_turret_offset = Vec3d::ZERO;
+                            if let Some(TreeValue::Turrets(TurretTreeValue::TurretPoint(i, _))) = pt_gui.drag_lollipop {
+                                maybe_turret_offset = pt_gui.model.get_total_subobj_offset(pt_gui.model.turrets[i].gun_obj);
                             }
+
+                            if let Some(vec_ptr) = drag_lollipop.get_position_ref(&mut pt_gui.model) {
+                                *vec_ptr += maybe_turret_offset; // add this only for the purposes of calculation (subtracted at the end)
+                                let new_pos: Option<Vec3d> = {
+                                    let mouse_vec = mouse_vec.unwrap();
+                                    let t = match pt_gui.drag_axis {
+                                        DragAxis::YZ => (vec_ptr.x - mouse_vec.0.x) / (mouse_vec.1.x - mouse_vec.0.x),
+                                        DragAxis::XZ => (vec_ptr.y - mouse_vec.0.y) / (mouse_vec.1.y - mouse_vec.0.y),
+                                        DragAxis::XY => (vec_ptr.z - mouse_vec.0.z) / (mouse_vec.1.z - mouse_vec.0.z),
+                                    };
+                                    let hover_pos = egui.egui_ctx.input().pointer.hover_pos();
+                                    let in_3d_viewport = hover_pos.map_or(false, |hover_pos| egui.egui_ctx.available_rect().contains(hover_pos));
+                                    if mouse_pos.is_none() || t < -1.0 || t > 1.0 || !egui.egui_ctx.input().pointer.primary_down() || !in_3d_viewport
+                                    {
+                                        pt_gui.drag_lollipop = None;
+                                        pt_gui.actually_dragging = false;
+                                        *vec_ptr -= maybe_turret_offset;
+                                        None
+                                    } else {
+                                        Some(mouse_vec.0 + (mouse_vec.1 - mouse_vec.0) * t)
+                                    }
+                                };
+
+                                if let Some(new_pos) = new_pos {
+                                    *vec_ptr = new_pos - maybe_turret_offset;
+                                    pt_gui.ui_state.refresh_properties_panel(&pt_gui.model);
+                                    pt_gui.ui_state.viewport_3d_dirty = true;
+                                }
+                            }
+                        }
+
+                        // for when the user releases without dragging
+                        if !egui.egui_ctx.input().pointer.primary_down() {
+                            pt_gui.drag_lollipop = None;
+                            pt_gui.actually_dragging = false;
                         }
                     }
 
                     // maybe redo lollipops and stuff
-                    pt_gui.maybe_recalculate_3d_helpers(&display, mouse_vec);
+                    pt_gui.maybe_recalculate_3d_helpers(&display);
 
                     let model = &pt_gui.model;
 
@@ -1177,7 +1201,7 @@ fn main() {
                     }
 
                     // draw the 'drag axes' if the user is dragging a lollipop
-                    if pt_gui.drag_lollipop.is_some() {
+                    if pt_gui.drag_lollipop.is_some() && pt_gui.actually_dragging {
                         let mut mat = view_mat;
                         mat.prepend_translation_mut(&pt_gui.drag_start.into());
                         mat.prepend_scaling_mut(pt_gui.model.header.max_radius * 2.0);
@@ -1563,12 +1587,12 @@ impl PofToolsGui {
         }
     }
 
-    fn maybe_recalculate_3d_helpers(&mut self, display: &Display, mouse_vec: Option<(Vec3d, Vec3d)>) {
+    fn maybe_recalculate_3d_helpers(&mut self, display: &Display) {
         if self.buffer_objects.is_empty() {
             return;
         }
 
-        // always recalculate for glowpoint sim, TODO maybe make that a little smarter
+        // for lollipop hovering we have to do this every frame, maybe address this later but performance still seems to be ok
         // if !(self.ui_state.viewport_3d_dirty || (self.glow_point_simulation && matches!(self.tree_view_selection, TreeValue::Glows(_)))) {
         //     return;
         // }
@@ -1583,7 +1607,7 @@ impl PofToolsGui {
         self.arrowheads.clear();
 
         let model = &self.model;
-        let hover_lollipop = self.drag_lollipop.or_else(|| self.hover_lollipop);
+        let hover_lollipop = self.drag_lollipop.or(self.hover_lollipop);
 
         const UNSELECTED: usize = 0;
         const SELECTED_POINT: usize = 1;

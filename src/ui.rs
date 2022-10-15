@@ -1078,7 +1078,7 @@ impl PofToolsGui {
                         .tree_collapsing_item(&self.model, ui, &name, TreeValue::SubObjects(SubObjectTreeValue::Header), |ui_state, ui| {
                             fn make_subobject_child_list(ui_state: &mut UiState, model: &Model, obj: &SubObject, ui: &mut Ui) {
                                 let selection = TreeValue::SubObjects(SubObjectTreeValue::SubObject(obj.obj_id));
-                                if obj.children().next() == None {
+                                if obj.children().next().is_none() {
                                     ui_state.tree_selectable_item(model, ui, &obj.name, selection);
                                 } else {
                                     ui_state.tree_collapsing_item(model, ui, &obj.name, selection, |ui_state, ui| {

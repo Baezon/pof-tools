@@ -592,8 +592,7 @@ fn main() {
     }
     info!("Pof Tools {} - {}", POF_TOOLS_VERSION, chrono::Local::now());
 
-    let event_loop = glutin::event_loop::EventLoopBuilder::with_user_event()
-        .build();
+    let event_loop = glutin::event_loop::EventLoopBuilder::with_user_event().build();
     let mut pt_gui = PofToolsGui::new();
     let display = create_display(&event_loop);
 
@@ -701,13 +700,11 @@ fn main() {
                     time if time.is_zero() => {
                         display.gl_window().window().request_redraw();
                         glutin::event_loop::ControlFlow::Poll
-                    },
-                    time => {
-                        match std::time::Instant::now().checked_add(time) {
-                            Some(next_frame_time) => glutin::event_loop::ControlFlow::WaitUntil(next_frame_time),
-                            None => glutin::event_loop::ControlFlow::Wait,
-                        }
                     }
+                    time => match std::time::Instant::now().checked_add(time) {
+                        Some(next_frame_time) => glutin::event_loop::ControlFlow::WaitUntil(next_frame_time),
+                        None => glutin::event_loop::ControlFlow::Wait,
+                    },
                 };
 
                 {
@@ -1217,12 +1214,10 @@ fn main() {
                     time if time.is_zero() => {
                         display.gl_window().window().request_redraw();
                         glutin::event_loop::ControlFlow::Poll
-                    },
-                    time => {
-                        match std::time::Instant::now().checked_add(time) {
-                            Some(next_frame_time) => glutin::event_loop::ControlFlow::WaitUntil(next_frame_time),
-                            None => glutin::event_loop::ControlFlow::Wait,
-                        }
+                    }
+                    time => match std::time::Instant::now().checked_add(time) {
+                        Some(next_frame_time) => glutin::event_loop::ControlFlow::WaitUntil(next_frame_time),
+                        None => glutin::event_loop::ControlFlow::Wait,
                     },
                 };
                 let mut target = display.draw();
@@ -1521,12 +1516,7 @@ impl PofToolsGui {
                     &COLORS,
                     display,
                     model.docking_bays.iter().enumerate().flat_map(|(bay_idx, docking_bay)| {
-                        let mut position = docking_bay.position;
-                        if let Some(parent_name) = pof::properties_get_field(&docking_bay.properties, "$parent_submodel") {
-                            if let Some(id) = model.get_obj_id_by_name(parent_name) {
-                                position += model.get_total_subobj_offset(id);
-                            }
-                        }
+                        let position = docking_bay.position;
                         let radius = self.model.header.max_radius.powf(0.4) / 4.0;
                         let fvec = docking_bay.fvec.0 * radius * 3.0;
                         let uvec = docking_bay.uvec.0 * radius * 3.0;

@@ -1516,7 +1516,7 @@ impl PofToolsGui {
                     &COLORS,
                     display,
                     model.docking_bays.iter().enumerate().flat_map(|(bay_idx, docking_bay)| {
-                        let mut position = docking_bay.position;
+                        let position = docking_bay.position;
                         let radius = self.model.header.max_radius.powf(0.4) / 4.0;
                         let fvec = docking_bay.fvec.0 * radius * 3.0;
                         let uvec = docking_bay.uvec.0 * radius * 3.0;

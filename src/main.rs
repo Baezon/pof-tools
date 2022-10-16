@@ -1778,16 +1778,8 @@ impl PofToolsGui {
                     &COLORS,
                     display,
                     model.docking_bays.iter().enumerate().flat_map(|(bay_idx, docking_bay)| {
-                        let mut position = docking_bay.position;
-                        if let Some(parent_name) = pof::properties_get_field(&docking_bay.properties, "$parent_submodel") {
-                            if let Some(id) = model.get_obj_id_by_name(parent_name) {
-                                position += model.get_total_subobj_offset(id);
-                            }
-                        }
-                        let mut radius = self.model.header.max_radius.powf(0.4) / 4.0;
-                        if hover_lollipop == Some(TreeValue::DockingBays(DockingTreeValue::Bay(bay_idx))) {
-                            radius *= 2.
-                        };
+                        let position = docking_bay.position;
+                        let radius = self.model.header.max_radius.powf(0.4) / 4.0;
                         let fvec = docking_bay.fvec.0 * radius * 3.0;
                         let uvec = docking_bay.uvec.0 * radius * 3.0;
                         let (selection1, selection2) = if selected_bank == Some(bay_idx) {

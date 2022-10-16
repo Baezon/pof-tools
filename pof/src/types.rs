@@ -233,7 +233,7 @@ impl Vec3d {
         (self.x, self.y, self.z)
     }
     pub fn magnitude(self) -> f32 {
-        f32::sqrt(self.x * self.x + self.y * self.y + self.z * self.z)
+        f32::sqrt(self.magnitude_squared())
     }
     pub fn magnitude_squared(self) -> f32 {
         self.x * self.x + self.y * self.y + self.z * self.z

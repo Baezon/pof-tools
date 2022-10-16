@@ -442,6 +442,7 @@ impl std::fmt::Display for SubObjectTreeValue {
     }
 }
 
+#[derive(Copy, Clone)]
 pub enum DragAxis {
     YZ,
     XZ,

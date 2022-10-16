@@ -758,7 +758,6 @@ fn main() {
                     let rect = egui.egui_ctx.available_rect(); // the rectangle not covered by egui UI, i.e. the 3d viewport
                     if rect.is_positive() {
                         let input = egui.egui_ctx.input();
-                        //input.pointer.hover_pos().map(|pos| println!("{:?}", pos));
                         let mouse_pos = input.pointer.hover_pos();
                         let last_click_pos = input.pointer.press_origin();
                         let in_3d_viewport = mouse_pos.map_or(false, |hover_pos| rect.contains(hover_pos));
@@ -809,12 +808,9 @@ fn main() {
                             if let Some(lollipop) = pt_gui.hover_lollipop {
                                 pt_gui.drag_lollipop = Some(lollipop);
                                 let vec = (vec1 - vec2).normalize();
-                                pt_gui.drag_axis = match (vec.x, vec.y, vec.z) {
-                                    _ if vec.x.abs() > vec.y.abs() && vec.x.abs() > vec.z.abs() => DragAxis::YZ,
-                                    _ if vec.y.abs() > vec.x.abs() && vec.y.abs() > vec.z.abs() => DragAxis::XZ,
-                                    _ if vec.z.abs() > vec.x.abs() && vec.z.abs() > vec.y.abs() => DragAxis::XY,
-                                    _ => DragAxis::YZ,
-                                };
+                                let mut arr = [(DragAxis::YZ, vec.x), (DragAxis::XZ, vec.y), (DragAxis::XY, vec.y)];
+                                arr.sort_by(|a, b| b.1.abs().total_cmp(&a.1.abs()));
+                                pt_gui.drag_axis = arr[0].0;
                                 pt_gui.drag_start = *lollipop.get_position_ref(&mut pt_gui.model).unwrap();
                                 if let TreeValue::Turrets(TurretTreeValue::TurretPoint(i, _)) = lollipop {
                                     pt_gui.drag_start += pt_gui.model.get_total_subobj_offset(pt_gui.model.turrets[i].gun_obj);

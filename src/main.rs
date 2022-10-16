@@ -801,7 +801,7 @@ fn main() {
                         })
                     };
 
-                    pt_gui.get_hover_lollipop(mouse_vec);
+                    pt_gui.hover_lollipop = pt_gui.get_hover_lollipop(mouse_vec);
 
                     // start the drag/selection if the user clicked on a lollipop
                     if let Some((vec1, vec2)) = mouse_vec {
@@ -1483,108 +1483,80 @@ fn get_list_of_display_subobjects(model: &Model, tree_selection: TreeValue, last
 }
 
 impl PofToolsGui {
-    fn get_hover_lollipop(&mut self, mouse_vec: Option<(Vec3d, Vec3d)>) {
-        self.hover_lollipop = None;
-        let mouse_vec = if let Some(vecs) = mouse_vec {
-            vecs
-        } else {
-            return;
-        };
-
-        fn best_approach_test(current_best: &mut f32, mouse_vec: (Vec3d, Vec3d), test_point: Vec3d) -> bool {
-            let closest_approach = closest_approach(mouse_vec.0, mouse_vec.1, test_point);
-            let proximity_modified = (closest_approach - test_point).magnitude();
-            if proximity_modified < *current_best {
-                *current_best = proximity_modified;
-                true
-            } else {
-                false
-            }
-        }
+    fn get_hover_lollipop(&mut self, mouse_vec: Option<(Vec3d, Vec3d)>) -> Option<TreeValue> {
+        let (camera_vec, mouse_vec) = mouse_vec?;
 
         let mut best_approach = 0.05 * self.model.header.max_radius;
-        match self.tree_view_selection {
+        let mut result = None;
+        let mut proximity_test = |test_point: Vec3d, value: TreeValue| {
+            let closest_approach = closest_approach(camera_vec, mouse_vec, test_point);
+            let proximity_modified = (closest_approach - test_point).magnitude();
+            if proximity_modified < best_approach {
+                best_approach = proximity_modified;
+                result = Some(value);
+            }
+        };
+        match self.ui_state.tree_view_selection {
             TreeValue::Weapons(_) => {
                 for (i, bank) in self.model.primary_weps.iter().enumerate() {
                     for (j, point) in bank.iter().enumerate() {
-                        if best_approach_test(&mut best_approach, mouse_vec, point.position) {
-                            self.hover_lollipop = Some(TreeValue::Weapons(WeaponTreeValue::PriBankPoint(i, j)));
-                        }
+                        proximity_test(point.position, TreeValue::Weapons(WeaponTreeValue::PriBankPoint(i, j)));
                     }
                 }
                 for (i, bank) in self.model.secondary_weps.iter().enumerate() {
                     for (j, point) in bank.iter().enumerate() {
-                        if best_approach_test(&mut best_approach, mouse_vec, point.position) {
-                            self.hover_lollipop = Some(TreeValue::Weapons(WeaponTreeValue::SecBankPoint(i, j)));
-                        }
+                        proximity_test(point.position, TreeValue::Weapons(WeaponTreeValue::SecBankPoint(i, j)));
                     }
                 }
             }
             TreeValue::DockingBays(_) => {
                 for (i, dock) in self.model.docking_bays.iter().enumerate() {
-                    if best_approach_test(&mut best_approach, mouse_vec, dock.position) {
-                        self.hover_lollipop = Some(TreeValue::DockingBays(DockingTreeValue::Bay(i)));
-                    }
+                    proximity_test(dock.position, TreeValue::DockingBays(DockingTreeValue::Bay(i)));
                 }
             }
             TreeValue::Thrusters(_) => {
                 for (i, bank) in self.model.thruster_banks.iter().enumerate() {
                     for (j, point) in bank.glows.iter().enumerate() {
-                        if best_approach_test(&mut best_approach, mouse_vec, point.position) {
-                            self.hover_lollipop = Some(TreeValue::Thrusters(ThrusterTreeValue::BankPoint(i, j)));
-                        }
+                        proximity_test(point.position, TreeValue::Thrusters(ThrusterTreeValue::BankPoint(i, j)));
                     }
                 }
             }
             TreeValue::Glows(_) => {
                 for (i, bank) in self.model.thruster_banks.iter().enumerate() {
                     for (j, point) in bank.glows.iter().enumerate() {
-                        if best_approach_test(&mut best_approach, mouse_vec, point.position) {
-                            self.hover_lollipop = Some(TreeValue::Glows(GlowTreeValue::BankPoint(i, j)));
-                        }
+                        proximity_test(point.position, TreeValue::Glows(GlowTreeValue::BankPoint(i, j)));
                     }
                 }
             }
             TreeValue::SpecialPoints(_) => {
                 for (i, point) in self.model.special_points.iter().enumerate() {
-                    if best_approach_test(&mut best_approach, mouse_vec, point.position) {
-                        self.hover_lollipop = Some(TreeValue::SpecialPoints(SpecialPointTreeValue::Point(i)));
-                    }
+                    proximity_test(point.position, TreeValue::SpecialPoints(SpecialPointTreeValue::Point(i)));
                 }
             }
             TreeValue::Turrets(_) => {
                 for (i, turret) in self.model.turrets.iter().enumerate() {
                     for (j, point) in turret.fire_points.iter().enumerate() {
                         let point = *point + self.model.get_total_subobj_offset(turret.gun_obj);
-                        if best_approach_test(&mut best_approach, mouse_vec, point) {
-                            self.hover_lollipop = Some(TreeValue::Turrets(TurretTreeValue::TurretPoint(i, j)));
-                        }
+                        proximity_test(point, TreeValue::Turrets(TurretTreeValue::TurretPoint(i, j)));
                     }
                 }
             }
             TreeValue::Paths(_) => {
                 for (i, path) in self.model.paths.iter().enumerate() {
                     for (j, point) in path.points.iter().enumerate() {
-                        if best_approach_test(&mut best_approach, mouse_vec, point.position) {
-                            self.hover_lollipop = Some(TreeValue::Paths(PathTreeValue::PathPoint(i, j)));
-                        }
+                        proximity_test(point.position, TreeValue::Paths(PathTreeValue::PathPoint(i, j)));
                     }
                 }
             }
             TreeValue::EyePoints(_) => {
                 for (i, point) in self.model.eye_points.iter().enumerate() {
-                    if best_approach_test(&mut best_approach, mouse_vec, point.position) {
-                        self.hover_lollipop = Some(TreeValue::EyePoints(EyeTreeValue::EyePoint(i)));
-                    }
+                    proximity_test(point.position, TreeValue::EyePoints(EyeTreeValue::EyePoint(i)));
                 }
             }
-            TreeValue::VisualCenter => {
-                if best_approach_test(&mut best_approach, mouse_vec, self.model.visual_center) {
-                    self.hover_lollipop = Some(TreeValue::VisualCenter);
-                }
-            }
+            TreeValue::VisualCenter => proximity_test(self.model.visual_center, TreeValue::VisualCenter),
             _ => (),
         }
+        result
     }
 
     fn maybe_recalculate_3d_helpers(&mut self, display: &Display) {
@@ -2039,7 +2011,7 @@ fn closest_approach(line_a: Vec3d, line_b: Vec3d, point: Vec3d) -> Vec3d {
     let a2p = point - line_a;
     let a2b = line_b - line_a;
 
-    let a2b_2 = a2b.magnitude() * a2b.magnitude();
+    let a2b_2 = a2b.magnitude_squared();
     let dot = a2p.dot(&a2b);
 
     let t = (dot) / (a2b_2);
@@ -2090,7 +2062,6 @@ fn lollipop_rev_depth_params() -> glium::DrawParameters<'static> {
             ..Default::default()
         },
         blend: ADDITIVE_BLEND,
-        backface_culling: glium::draw_parameters::BackfaceCullingMode::CullingDisabled,
         ..Default::default()
     }
 }
@@ -2103,7 +2074,6 @@ fn drag_axis_params() -> glium::DrawParameters<'static> {
             ..Default::default()
         },
         line_width: Some(2.0),
-        backface_culling: glium::draw_parameters::BackfaceCullingMode::CullingDisabled,
         ..Default::default()
     }
 }

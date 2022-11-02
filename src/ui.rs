@@ -62,6 +62,21 @@ impl Default for TreeValue {
     }
 }
 impl TreeValue {
+    pub fn get_position_ref<'a>(&self, model: &'a mut Model) -> Option<&'a mut Vec3d> {
+        match *self {
+            TreeValue::Weapons(WeaponTreeValue::PriBankPoint(i, j)) => Some(&mut model.primary_weps[i][j].position),
+            TreeValue::Weapons(WeaponTreeValue::SecBankPoint(i, j)) => Some(&mut model.secondary_weps[i][j].position),
+            TreeValue::DockingBays(DockingTreeValue::Bay(i)) => Some(&mut model.docking_bays[i].position),
+            TreeValue::Thrusters(ThrusterTreeValue::BankPoint(i, j)) => Some(&mut model.thruster_banks[i].glows[j].position),
+            TreeValue::Glows(GlowTreeValue::BankPoint(i, j)) => Some(&mut model.glow_banks[i].glow_points[j].position),
+            TreeValue::SpecialPoints(SpecialPointTreeValue::Point(i)) => Some(&mut model.special_points[i].position),
+            TreeValue::Turrets(TurretTreeValue::TurretPoint(i, j)) => Some(&mut model.turrets[i].fire_points[j]),
+            TreeValue::Paths(PathTreeValue::PathPoint(i, j)) => Some(&mut model.paths[i].points[j].position),
+            TreeValue::EyePoints(EyeTreeValue::EyePoint(i)) => Some(&mut model.eye_points[i].position),
+            TreeValue::VisualCenter => Some(&mut model.visual_center),
+            _ => None,
+        }
+    }
     // returns what, if any, tree_value best corresponds to a given error
     fn from_error(error: Error) -> Option<TreeValue> {
         match error {
@@ -427,6 +442,13 @@ impl std::fmt::Display for SubObjectTreeValue {
     }
 }
 
+#[derive(Copy, Clone)]
+pub enum DragAxis {
+    YZ,
+    XZ,
+    XY,
+}
+
 #[derive(PartialEq, Eq)]
 pub(crate) enum DisplayMode {
     Wireframe,
@@ -468,6 +490,14 @@ pub(crate) struct PofToolsGui {
     pub camera_offset: Vec3d,
     pub camera_orthographic: bool,
 
+    pub hover_lollipop: Option<TreeValue>,
+    pub drag_lollipop: Option<TreeValue>,
+    /// drag_lollipop may merely be clicked briefly for the purposes of selection
+    /// this is true when the user has also moved the mouse significantly and is intending to move it
+    pub actually_dragging: bool,
+    pub drag_start: Vec3d,
+    pub drag_axis: DragAxis,
+
     pub buffer_objects: Vec<GlObjectBuffers>, // all the subobjects, conditionally rendered based on the current tree selection
     pub buffer_textures: HashMap<TextureId, SrgbTexture2d>, // map of tex ids to actual textures
     pub buffer_shield: Option<GlBufferedShield>, // the shield, similar to the above
@@ -508,6 +538,11 @@ impl PofToolsGui {
             buffer_insignias: Default::default(),
             lollipops: Default::default(),
             arrowheads: Default::default(),
+            hover_lollipop: None,
+            drag_lollipop: None,
+            drag_start: Vec3d::ZERO,
+            drag_axis: DragAxis::YZ,
+            actually_dragging: false,
         }
     }
 
@@ -1350,6 +1385,15 @@ impl PofToolsGui {
 
                     self.ui_state.tree_selectable_item(&self.model, ui, "Comments", TreeValue::Comments);
                 });
+            });
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().inner_margin(egui::style::Margin::same(5.0)))
+            .show(ctx, |ui| {
+                ui.visuals_mut().override_text_color = Some(Color32::from_gray(80));
+                ui.label("Right-click and drag to rotate");
+                ui.label("Middle-click (or shift-right-click) and drag to pan");
+                ui.label("Left-click on a node to select it, drag to move it");
             });
 
         // all the tree values needing opening should have been opened by now

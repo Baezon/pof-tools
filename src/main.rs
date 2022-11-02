@@ -7,10 +7,14 @@ extern crate log;
 extern crate nalgebra_glm as glm;
 extern crate simplelog;
 
-use crate::ui::{
-    DisplayMode, DockingTreeValue, EyeTreeValue, GlowTreeValue, InsigniaTreeValue, PathTreeValue, SpecialPointTreeValue, SubObjectTreeValue,
-    TextureTreeValue, ThrusterTreeValue, TurretTreeValue, WeaponTreeValue,
+use crate::{
+    primitives::OCTAHEDRON_VERTS,
+    ui::{
+        DisplayMode, DockingTreeValue, DragAxis, EyeTreeValue, GlowTreeValue, InsigniaTreeValue, PathTreeValue, SpecialPointTreeValue,
+        SubObjectTreeValue, TextureTreeValue, ThrusterTreeValue, TurretTreeValue, WeaponTreeValue,
+    },
 };
+use eframe::egui::PointerButton;
 use egui::{Color32, RichText, TextEdit};
 use glium::{
     glutin::{self, event::WindowEvent, window::Icon},
@@ -665,6 +669,7 @@ fn main() {
     let mut lollipop_params = lollipop_params();
     let lollipop_stick_params = lollipop_stick_params();
     let lollipop_rev_depth_params = lollipop_rev_depth_params();
+    let drag_axis_params = drag_axis_params();
 
     let circle_verts = glium::VertexBuffer::new(&display, &*primitives::CIRCLE_VERTS).unwrap();
     let circle_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::LineLoop, &primitives::CIRCLE_INDICES).unwrap();
@@ -713,10 +718,38 @@ fn main() {
 
                     target.clear_color_and_depth((0.0, 0.0, 0.0, 1.0), 1.0);
 
-                    // maybe redo lollipops and stuff
-                    pt_gui.maybe_recalculate_3d_helpers(&display);
-
                     let model = &pt_gui.model;
+
+                    // set up the camera matrix
+                    let perspective_matrix = {
+                        let (width, height) = target.get_dimensions();
+                        let aspect_ratio = height as f32 / width as f32;
+
+                        if pt_gui.camera_orthographic {
+                            let zfar = (model.header.max_radius) * 2.0;
+                            let znear = (model.header.max_radius) * -2.0;
+                            let f = 1.5 / pt_gui.camera_scale;
+                            Mat4x4::from([
+                                [f * aspect_ratio, 0.0, 0.0, 0.0],
+                                [0.0, f, 0.0, 0.0],
+                                [0.0, 0.0, (2.0) / (zfar - znear), 0.0],
+                                [0.0, 0.0, -(zfar + znear) / (zfar - znear), 1.0],
+                            ])
+                        } else {
+                            let fov: f32 = std::f32::consts::PI / 3.0;
+                            let zfar = (model.header.max_radius + pt_gui.camera_scale) * 2.0;
+                            let znear = (model.header.max_radius + pt_gui.camera_scale) / 1000.;
+
+                            let f = 1.0 / (fov / 2.0).tan();
+
+                            Mat4x4::from([
+                                [f * aspect_ratio, 0.0, 0.0, 0.0],
+                                [0.0, f, 0.0, 0.0],
+                                [0.0, 0.0, (zfar + znear) / (zfar - znear), 1.0],
+                                [0.0, 0.0, -(2.0 * zfar * znear) / (zfar - znear), 0.0],
+                            ])
+                        }
+                    };
 
                     let mut view_mat = glm::rotation(pt_gui.camera_pitch, &glm::vec3(1., 0., 0.)); // pitch
                     view_mat *= glm::rotation(pt_gui.camera_heading, &glm::vec3(0., 1., 0.)); // heading
@@ -733,8 +766,7 @@ fn main() {
                             if !input.modifiers.shift && input.pointer.button_down(egui::PointerButton::Secondary) {
                                 pt_gui.camera_heading += input.pointer.delta().x * -0.01;
                                 pt_gui.camera_pitch += input.pointer.delta().y * -0.01;
-                            }
-                            if input.pointer.button_down(egui::PointerButton::Middle)
+                            } else if input.pointer.button_down(egui::PointerButton::Middle)
                                 || input.modifiers.shift && input.pointer.button_down(egui::PointerButton::Secondary)
                             {
                                 let x = input.pointer.delta().x * -0.003 * pt_gui.camera_scale; // for some reason x gets inverted
@@ -755,8 +787,106 @@ fn main() {
                     view_mat.prepend_translation_mut(&glm::vec3(-pt_gui.camera_offset.x, -pt_gui.camera_offset.y, -pt_gui.camera_offset.z));
                     view_mat.prepend_translation_mut(&glm::vec3(-model.visual_center.x, -model.visual_center.y, -model.visual_center.z));
 
-                    let displayed_subobjects =
-                        get_list_of_display_subobjects(model, pt_gui.ui_state.tree_view_selection, pt_gui.ui_state.last_selected_subobj);
+                    let mouse_pos =
+                        egui.egui_ctx.input().pointer.hover_pos().map(|pos| {
+                            ((pos.x / target.get_dimensions().0 as f32) * 2.0 - 1.0, (pos.y / target.get_dimensions().1 as f32) * 2.0 - 1.0)
+                        });
+                    let mouse_vec = {
+                        mouse_pos.map(|pos| {
+                            let matrix = (perspective_matrix * view_mat).try_inverse().unwrap();
+                            let pos1 = &matrix * Vec3d::new(pos.0, -pos.1, 0.0);
+                            let pos2 = &matrix * Vec3d::new(pos.0, -pos.1, 1.0);
+                            (pos1, pos2)
+                        })
+                    };
+
+                    pt_gui.hover_lollipop = pt_gui.get_hover_lollipop(mouse_vec);
+
+                    // start the drag/selection if the user clicked on a lollipop
+                    if let Some((vec1, vec2)) = mouse_vec {
+                        if egui.egui_ctx.input().pointer.button_clicked(PointerButton::Primary) {
+                            if let Some(lollipop) = pt_gui.hover_lollipop {
+                                pt_gui.drag_lollipop = Some(lollipop);
+                                let vec = (vec1 - vec2).normalize();
+                                pt_gui.drag_axis = match (vec.x, vec.y, vec.z) {
+                                    _ if vec.x.abs() > vec.y.abs() && vec.x.abs() > vec.z.abs() => DragAxis::YZ,
+                                    _ if vec.y.abs() > vec.x.abs() && vec.y.abs() > vec.z.abs() => DragAxis::XZ,
+                                    _ if vec.z.abs() > vec.x.abs() && vec.z.abs() > vec.y.abs() => DragAxis::XY,
+                                    _ => DragAxis::YZ,
+                                };
+                                pt_gui.drag_start = *lollipop.get_position_ref(&mut pt_gui.model).unwrap();
+                                if let TreeValue::Turrets(TurretTreeValue::TurretPoint(i, _)) = lollipop {
+                                    pt_gui.drag_start += pt_gui.model.get_total_subobj_offset(pt_gui.model.turrets[i].gun_obj);
+                                }
+
+                                pt_gui.select_new_tree_val(lollipop);
+                            }
+                        }
+                    }
+
+                    // continue the drag if the user is still dragging the lollipop
+                    if let Some(drag_lollipop) = pt_gui.drag_lollipop {
+                        // only drag if they've sufficiently moved the mouse
+                        if !pt_gui.actually_dragging
+                            && egui.egui_ctx.input().pointer.press_origin().map_or(false, |origin| {
+                                egui.egui_ctx
+                                    .input()
+                                    .pointer
+                                    .hover_pos()
+                                    .map_or(false, |current_pos| current_pos.distance(origin) > 4.)
+                            })
+                        {
+                            pt_gui.actually_dragging = true;
+                        }
+
+                        if pt_gui.actually_dragging {
+                            // take into account turret offset
+                            let mut maybe_turret_offset = Vec3d::ZERO;
+                            if let Some(TreeValue::Turrets(TurretTreeValue::TurretPoint(i, _))) = pt_gui.drag_lollipop {
+                                maybe_turret_offset = pt_gui.model.get_total_subobj_offset(pt_gui.model.turrets[i].gun_obj);
+                            }
+
+                            if let Some(vec_ptr) = drag_lollipop.get_position_ref(&mut pt_gui.model) {
+                                *vec_ptr += maybe_turret_offset; // add this only for the purposes of calculation (subtracted at the end)
+                                let new_pos: Option<Vec3d> = {
+                                    let mouse_vec = mouse_vec.unwrap();
+                                    let t = match pt_gui.drag_axis {
+                                        DragAxis::YZ => (vec_ptr.x - mouse_vec.0.x) / (mouse_vec.1.x - mouse_vec.0.x),
+                                        DragAxis::XZ => (vec_ptr.y - mouse_vec.0.y) / (mouse_vec.1.y - mouse_vec.0.y),
+                                        DragAxis::XY => (vec_ptr.z - mouse_vec.0.z) / (mouse_vec.1.z - mouse_vec.0.z),
+                                    };
+                                    let hover_pos = egui.egui_ctx.input().pointer.hover_pos();
+                                    let in_3d_viewport = hover_pos.map_or(false, |hover_pos| egui.egui_ctx.available_rect().contains(hover_pos));
+                                    if mouse_pos.is_none() || t < -1.0 || t > 1.0 || !egui.egui_ctx.input().pointer.primary_down() || !in_3d_viewport
+                                    {
+                                        pt_gui.drag_lollipop = None;
+                                        pt_gui.actually_dragging = false;
+                                        *vec_ptr -= maybe_turret_offset;
+                                        None
+                                    } else {
+                                        Some(mouse_vec.0 + (mouse_vec.1 - mouse_vec.0) * t)
+                                    }
+                                };
+
+                                if let Some(new_pos) = new_pos {
+                                    *vec_ptr = new_pos - maybe_turret_offset;
+                                    pt_gui.ui_state.refresh_properties_panel(&pt_gui.model);
+                                    pt_gui.ui_state.viewport_3d_dirty = true;
+                                }
+                            }
+                        }
+
+                        // for when the user releases without dragging
+                        if !egui.egui_ctx.input().pointer.primary_down() {
+                            pt_gui.drag_lollipop = None;
+                            pt_gui.actually_dragging = false;
+                        }
+                    }
+
+                    // maybe redo lollipops and stuff
+                    pt_gui.maybe_recalculate_3d_helpers(&display);
+
+                    let model = &pt_gui.model;
 
                     // brighten up the dark bits so wireframe is easier to see
                     let mut dark_color;
@@ -790,38 +920,10 @@ fn main() {
                         _ => light_color = [1.0, 1.0, 1.0f32],
                     }
 
-                    // set up the camera matrix
-                    let perspective_matrix = {
-                        let (width, height) = target.get_dimensions();
-                        let aspect_ratio = height as f32 / width as f32;
-
-                        if pt_gui.camera_orthographic {
-                            let zfar = (model.header.max_radius) * 2.0;
-                            let znear = (model.header.max_radius) * -2.0;
-                            let f = 1.5 / pt_gui.camera_scale;
-                            Mat4x4::from([
-                                [f * aspect_ratio, 0.0, 0.0, 0.0],
-                                [0.0, f, 0.0, 0.0],
-                                [0.0, 0.0, (2.0) / (zfar - znear), 0.0],
-                                [0.0, 0.0, -(zfar + znear) / (zfar - znear), 1.0],
-                            ])
-                        } else {
-                            let fov: f32 = std::f32::consts::PI / 3.0;
-                            let zfar = (model.header.max_radius + pt_gui.camera_scale) * 2.0;
-                            let znear = (model.header.max_radius + pt_gui.camera_scale) / 1000.;
-
-                            let f = 1.0 / (fov / 2.0).tan();
-
-                            Mat4x4::from([
-                                [f * aspect_ratio, 0.0, 0.0, 0.0],
-                                [0.0, f, 0.0, 0.0],
-                                [0.0, 0.0, (zfar + znear) / (zfar - znear), 1.0],
-                                [0.0, 0.0, -(2.0 * zfar * znear) / (zfar - znear), 0.0],
-                            ])
-                        }
-                    };
-
                     let light_vec = glm::vec3(0.5, 1.0, -1.0);
+
+                    let displayed_subobjects =
+                        get_list_of_display_subobjects(model, pt_gui.ui_state.tree_view_selection, pt_gui.ui_state.last_selected_subobj);
 
                     // draw the actual subobjects of the model
                     for buffer_objs in &pt_gui.buffer_objects {
@@ -1097,6 +1199,70 @@ fn main() {
                         }
                     }
 
+                    // draw the 'drag axes' if the user is dragging a lollipop
+                    if pt_gui.drag_lollipop.is_some() && pt_gui.actually_dragging {
+                        let mut mat = view_mat;
+                        mat.prepend_translation_mut(&pt_gui.drag_start.into());
+                        mat.prepend_scaling_mut(pt_gui.model.header.max_radius * 2.0);
+
+                        let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * mat).into();
+
+                        let (vert1, vert2, vert3, vert4, color1, color2) = match pt_gui.drag_axis {
+                            DragAxis::YZ => (
+                                OCTAHEDRON_VERTS[2],
+                                OCTAHEDRON_VERTS[3],
+                                OCTAHEDRON_VERTS[4],
+                                OCTAHEDRON_VERTS[5],
+                                [0.0, 1.0, 0.0, 1.0f32],
+                                [0.1, 0.1, 1.0, 1.0f32],
+                            ),
+                            DragAxis::XZ => (
+                                OCTAHEDRON_VERTS[0],
+                                OCTAHEDRON_VERTS[1],
+                                OCTAHEDRON_VERTS[4],
+                                OCTAHEDRON_VERTS[5],
+                                [1.0, 0.0, 0.0, 1.0f32],
+                                [0.1, 0.1, 1.0, 1.0f32],
+                            ),
+                            DragAxis::XY => (
+                                OCTAHEDRON_VERTS[0],
+                                OCTAHEDRON_VERTS[1],
+                                OCTAHEDRON_VERTS[2],
+                                OCTAHEDRON_VERTS[3],
+                                [0.0, 1.0, 0.0, 1.0f32],
+                                [1.0, 0.0, 0.0, 1.0f32],
+                            ),
+                        };
+
+                        let uniforms = glium::uniform! {
+                            vert_matrix: vert_matrix,
+                            lollipop_color: color1,
+                        };
+                        target
+                            .draw(
+                                &glium::VertexBuffer::new(&display, &[vert1, vert2]).unwrap(),
+                                &glium::index::NoIndices(glium::index::PrimitiveType::LinesList),
+                                &lollipop_stick_shader,
+                                &uniforms,
+                                &drag_axis_params,
+                            )
+                            .unwrap();
+
+                        let uniforms = glium::uniform! {
+                            vert_matrix: vert_matrix,
+                            lollipop_color: color2,
+                        };
+                        target
+                            .draw(
+                                &glium::VertexBuffer::new(&display, &[vert3, vert4]).unwrap(),
+                                &glium::index::NoIndices(glium::index::PrimitiveType::LinesList),
+                                &lollipop_stick_shader,
+                                &uniforms,
+                                &drag_axis_params,
+                            )
+                            .unwrap();
+                    }
+
                     // don't display lollipops if you're in header or subobjects, unless display_origin is on, since that's the only lollipop they have
 
                     let display_lollipops = (!matches!(pt_gui.ui_state.tree_view_selection, TreeValue::Header)
@@ -1316,15 +1482,91 @@ fn get_list_of_display_subobjects(model: &Model, tree_selection: TreeValue, last
 }
 
 impl PofToolsGui {
+    fn get_hover_lollipop(&mut self, mouse_vec: Option<(Vec3d, Vec3d)>) -> Option<TreeValue> {
+        let (camera_vec, mouse_vec) = mouse_vec?;
+
+        let mut best_approach = 0.05 * self.model.header.max_radius;
+        let mut result = None;
+        let mut proximity_test = |test_point: Vec3d, value: TreeValue| {
+            let closest_approach = closest_approach(camera_vec, mouse_vec, test_point);
+            let proximity_modified = (closest_approach - test_point).magnitude();
+            if proximity_modified < best_approach {
+                best_approach = proximity_modified;
+                result = Some(value);
+            }
+        };
+        match self.ui_state.tree_view_selection {
+            TreeValue::Weapons(_) => {
+                for (i, bank) in self.model.primary_weps.iter().enumerate() {
+                    for (j, point) in bank.iter().enumerate() {
+                        proximity_test(point.position, TreeValue::Weapons(WeaponTreeValue::PriBankPoint(i, j)));
+                    }
+                }
+                for (i, bank) in self.model.secondary_weps.iter().enumerate() {
+                    for (j, point) in bank.iter().enumerate() {
+                        proximity_test(point.position, TreeValue::Weapons(WeaponTreeValue::SecBankPoint(i, j)));
+                    }
+                }
+            }
+            TreeValue::DockingBays(_) => {
+                for (i, dock) in self.model.docking_bays.iter().enumerate() {
+                    proximity_test(dock.position, TreeValue::DockingBays(DockingTreeValue::Bay(i)));
+                }
+            }
+            TreeValue::Thrusters(_) => {
+                for (i, bank) in self.model.thruster_banks.iter().enumerate() {
+                    for (j, point) in bank.glows.iter().enumerate() {
+                        proximity_test(point.position, TreeValue::Thrusters(ThrusterTreeValue::BankPoint(i, j)));
+                    }
+                }
+            }
+            TreeValue::Glows(_) => {
+                for (i, bank) in self.model.thruster_banks.iter().enumerate() {
+                    for (j, point) in bank.glows.iter().enumerate() {
+                        proximity_test(point.position, TreeValue::Glows(GlowTreeValue::BankPoint(i, j)));
+                    }
+                }
+            }
+            TreeValue::SpecialPoints(_) => {
+                for (i, point) in self.model.special_points.iter().enumerate() {
+                    proximity_test(point.position, TreeValue::SpecialPoints(SpecialPointTreeValue::Point(i)));
+                }
+            }
+            TreeValue::Turrets(_) => {
+                for (i, turret) in self.model.turrets.iter().enumerate() {
+                    for (j, point) in turret.fire_points.iter().enumerate() {
+                        let point = *point + self.model.get_total_subobj_offset(turret.gun_obj);
+                        proximity_test(point, TreeValue::Turrets(TurretTreeValue::TurretPoint(i, j)));
+                    }
+                }
+            }
+            TreeValue::Paths(_) => {
+                for (i, path) in self.model.paths.iter().enumerate() {
+                    for (j, point) in path.points.iter().enumerate() {
+                        proximity_test(point.position, TreeValue::Paths(PathTreeValue::PathPoint(i, j)));
+                    }
+                }
+            }
+            TreeValue::EyePoints(_) => {
+                for (i, point) in self.model.eye_points.iter().enumerate() {
+                    proximity_test(point.position, TreeValue::EyePoints(EyeTreeValue::EyePoint(i)));
+                }
+            }
+            TreeValue::VisualCenter => proximity_test(self.model.visual_center, TreeValue::VisualCenter),
+            _ => (),
+        }
+        result
+    }
+
     fn maybe_recalculate_3d_helpers(&mut self, display: &Display) {
         if self.buffer_objects.is_empty() {
             return;
         }
 
-        // always recalculate for glowpoint sim, TODO maybe make that a little smarter
-        if !(self.ui_state.viewport_3d_dirty || (self.glow_point_simulation && matches!(self.tree_view_selection, TreeValue::Glows(_)))) {
-            return;
-        }
+        // for lollipop hovering we have to do this every frame, maybe address this later but performance still seems to be ok
+        // if !(self.ui_state.viewport_3d_dirty || (self.glow_point_simulation && matches!(self.tree_view_selection, TreeValue::Glows(_)))) {
+        //     return;
+        // }
 
         for buffers in &mut self.buffer_objects {
             for buffer in &mut buffers.buffers {
@@ -1336,6 +1578,7 @@ impl PofToolsGui {
         self.arrowheads.clear();
 
         let model = &self.model;
+        let hover_lollipop = self.drag_lollipop.or(self.hover_lollipop);
 
         const UNSELECTED: usize = 0;
         const SELECTED_POINT: usize = 1;
@@ -1428,7 +1671,10 @@ impl PofToolsGui {
                         thruster_bank.glows.iter().enumerate().map(move |(point_idx, thruster_point)| {
                             let position = thruster_point.position;
                             let normal = thruster_point.normal * thruster_point.radius * 2.0;
-                            let radius = thruster_point.radius;
+                            let mut radius = thruster_point.radius;
+                            if hover_lollipop == Some(TreeValue::Thrusters(ThrusterTreeValue::BankPoint(bank_idx, point_idx))) {
+                                radius = radius * 1.1 + 0.4
+                            };
                             let selection = if selected_bank == Some(bank_idx) {
                                 if selected_point == Some(point_idx) {
                                     SELECTED_POINT
@@ -1444,6 +1690,7 @@ impl PofToolsGui {
                 );
             }
             TreeValue::Weapons(weapons_selection) => {
+                let mut secondary = false;
                 let mut selected_bank = None;
                 let mut selected_point = None;
                 let mut selected_weapon_system = None;
@@ -1453,6 +1700,7 @@ impl PofToolsGui {
                         selected_weapon_system = Some(&model.primary_weps);
                     }
                     WeaponTreeValue::SecBank(bank) => {
+                        secondary = true;
                         selected_bank = Some(bank);
                         selected_weapon_system = Some(&model.secondary_weps);
                     }
@@ -1462,6 +1710,7 @@ impl PofToolsGui {
                         selected_weapon_system = Some(&model.primary_weps);
                     }
                     WeaponTreeValue::SecBankPoint(bank, point) => {
+                        secondary = true;
                         selected_bank = Some(bank);
                         selected_point = Some(point);
                         selected_weapon_system = Some(&model.secondary_weps);
@@ -1481,6 +1730,8 @@ impl PofToolsGui {
                     model.primary_weps.iter().chain(&model.secondary_weps).collect()
                 };
 
+                let primary_banks = self.model.primary_weps.len();
+
                 const COLORS: [[f32; 4]; 3] = [LOLLIPOP_UNSELECTED_COLOR, LOLLIPOP_SELECTED_POINT_COLOR, LOLLIPOP_SELECTED_BANK_COLOR];
                 self.lollipops = build_lollipops(
                     &COLORS,
@@ -1488,7 +1739,17 @@ impl PofToolsGui {
                     weapon_system.iter().enumerate().flat_map(|(bank_idx, weapon_bank)| {
                         weapon_bank.iter().enumerate().map(move |(point_idx, weapon_point)| {
                             let position = weapon_point.position;
-                            let radius = model.header.max_radius * 0.03;
+
+                            let secondary = bank_idx >= primary_banks || secondary;
+                            let radius = if (secondary
+                                && hover_lollipop == Some(TreeValue::Weapons(WeaponTreeValue::SecBankPoint(bank_idx - primary_banks, point_idx))))
+                                || hover_lollipop == Some(TreeValue::Weapons(WeaponTreeValue::PriBankPoint(bank_idx, point_idx)))
+                            {
+                                model.header.max_radius * 0.06
+                            } else {
+                                model.header.max_radius * 0.03
+                            };
+
                             let normal = weapon_point.normal.0 * radius * 2.0;
                             let selection = if selected_bank == Some(bank_idx) {
                                 if selected_point == Some(point_idx) {
@@ -1557,7 +1818,10 @@ impl PofToolsGui {
                         glow_bank.glow_points.iter().enumerate().map(move |(point_idx, glow_point)| {
                             let position = glow_point.position;
                             let normal = glow_point.normal * glow_point.radius * 2.0;
-                            let radius = glow_point.radius * if enabled { 1.0 } else { 0.25 };
+                            let mut radius = glow_point.radius * if enabled { 1.0 } else { 0.25 };
+                            if hover_lollipop == Some(TreeValue::Glows(GlowTreeValue::BankPoint(bank_idx, point_idx))) {
+                                radius *= 2.
+                            };
                             let selection = if selected_bank == Some(bank_idx) {
                                 if selected_point == Some(point_idx) {
                                     SELECTED_POINT
@@ -1585,7 +1849,10 @@ impl PofToolsGui {
                     model.special_points.iter().enumerate().map(|(point_idx, special_point)| {
                         let position = special_point.position;
                         let normal = Default::default(); // 0 vec
-                        let radius = special_point.radius;
+                        let mut radius = special_point.radius;
+                        if hover_lollipop == Some(TreeValue::SpecialPoints(SpecialPointTreeValue::Point(point_idx))) {
+                            radius = radius * 1.1 + 0.4
+                        };
                         let selection = if selected_point == Some(point_idx) { SELECTED_POINT } else { UNSELECTED };
                         (position, normal, radius, selection)
                     }),
@@ -1614,7 +1881,12 @@ impl PofToolsGui {
                         turret.fire_points.iter().enumerate().map(move |(point_idx, fire_point)| {
                             let position = *fire_point + offset;
                             let normal = turret.normal.0 * size * 2.0;
-                            let radius = size;
+                            let radius = if hover_lollipop == Some(TreeValue::Turrets(TurretTreeValue::TurretPoint(turret_idx, point_idx))) {
+                                size * 2.
+                            } else {
+                                size
+                            };
+
                             let selection = if selected_turret == Some(turret_idx) {
                                 if selected_point == Some(point_idx) {
                                     SELECTED_POINT
@@ -1652,7 +1924,10 @@ impl PofToolsGui {
                     model.paths.iter().enumerate().flat_map(|(path_idx, path)| {
                         path.points.iter().enumerate().map(move |(point_idx, path_point)| {
                             let position = path_point.position;
-                            let radius = path_point.radius;
+                            let mut radius = path_point.radius;
+                            if hover_lollipop == Some(TreeValue::Paths(PathTreeValue::PathPoint(path_idx, point_idx))) {
+                                radius = radius * 1.1 + 0.4
+                            };
                             let normal = {
                                 if point_idx != path.points.len() - 1 {
                                     path.points[point_idx + 1].position - path_point.position
@@ -1681,22 +1956,30 @@ impl PofToolsGui {
                 }
 
                 let size = 0.007 * model.header.max_radius;
-
                 const COLORS: [[f32; 4]; 2] = [LOLLIPOP_SELECTED_BANK_COLOR, LOLLIPOP_SELECTED_POINT_COLOR];
                 self.lollipops = build_lollipops(
                     &COLORS,
                     display,
                     model.eye_points.iter().enumerate().map(|(eye_idx, eye_point)| {
-                        let position = eye_point.offset;
+                        let position = eye_point.position;
                         let normal = eye_point.normal.0 * size * 2.0;
-                        let radius = size;
+                        let radius = if hover_lollipop == Some(TreeValue::EyePoints(EyeTreeValue::EyePoint(eye_idx))) {
+                            size * 2.
+                        } else {
+                            size
+                        };
+
                         let selection = if selected_eye == Some(eye_idx) { SELECTED_POINT } else { UNSELECTED };
                         (position, normal, radius, selection)
                     }),
                 );
             }
             TreeValue::VisualCenter => {
-                let size = 0.02 * model.header.max_radius;
+                let size = if hover_lollipop == Some(TreeValue::VisualCenter) {
+                    0.04 * model.header.max_radius
+                } else {
+                    0.02 * model.header.max_radius
+                };
 
                 let mut lollipop_origin = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_BANK_COLOR);
                 lollipop_origin.push(Vec3d::ZERO, Vec3d::ZERO, size);
@@ -1713,6 +1996,18 @@ impl PofToolsGui {
 
         self.ui_state.viewport_3d_dirty = false;
     }
+}
+
+fn closest_approach(line_a: Vec3d, line_b: Vec3d, point: Vec3d) -> Vec3d {
+    let a2p = point - line_a;
+    let a2b = line_b - line_a;
+
+    let a2b_2 = a2b.magnitude_squared();
+    let dot = a2p.dot(&a2b);
+
+    let t = (dot) / (a2b_2);
+
+    (a2b * t) + line_a
 }
 
 const LOLLIPOP_UNSELECTED_COLOR: [f32; 4] = [0.3, 0.3, 0.3, 0.15];
@@ -1758,7 +2053,18 @@ fn lollipop_rev_depth_params() -> glium::DrawParameters<'static> {
             ..Default::default()
         },
         blend: ADDITIVE_BLEND,
-        backface_culling: glium::draw_parameters::BackfaceCullingMode::CullingDisabled,
+        ..Default::default()
+    }
+}
+
+fn drag_axis_params() -> glium::DrawParameters<'static> {
+    glium::DrawParameters {
+        depth: glium::Depth {
+            test: glium::draw_parameters::DepthTest::IfLess,
+            write: false,
+            ..Default::default()
+        },
+        line_width: Some(2.0),
         ..Default::default()
     }
 }

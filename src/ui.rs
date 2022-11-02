@@ -110,6 +110,10 @@ impl TreeValue {
             Warning::DockingBayPropertiesTooLong(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(idx))),
             Warning::GlowBankPropertiesTooLong(idx) => Some(TreeValue::Glows(GlowTreeValue::Bank(idx))),
             Warning::SpecialPointPropertiesTooLong(idx) => Some(TreeValue::SpecialPoints(SpecialPointTreeValue::Point(idx))),
+            Warning::TurretNoFvec(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            Warning::TurretNoUvec(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            Warning::TurretUvecFvecNotPerpendicular(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            
         }
     }
 
@@ -461,6 +465,7 @@ pub(crate) struct PofToolsGui {
     pub ui_state: UiState,
     pub display_mode: DisplayMode,
     pub glow_point_simulation: bool,
+    pub auto_orthogonalize_uvec_fvec: bool,
 
     pub camera_pitch: f32,
     pub camera_heading: f32,
@@ -497,6 +502,7 @@ impl PofToolsGui {
             ui_state: Default::default(),
             display_mode: DisplayMode::Textured,
             glow_point_simulation: Default::default(),
+            auto_orthogonalize_uvec_fvec: true,
             camera_pitch: Default::default(),
             camera_heading: Default::default(),
             camera_scale: Default::default(),
@@ -1005,7 +1011,13 @@ impl PofToolsGui {
                                         _ => unreachable!(),
                                     };
                                     format!("⚠ {} is too long (max {} bytes)", field, pof::MAX_PROPERTIES_LEN)
-                                }
+                                },
+                                Warning::TurretNoFvec(id) =>
+                                    format!("⚠ {} has a uvec, but does not have a fvec", &self.model.sub_objects[id].name),
+                                Warning::TurretNoUvec(id) =>
+                                    format!("⚠ {} has a fvec, but does not have a uvec", &self.model.sub_objects[id].name),
+                                Warning::TurretUvecFvecNotPerpendicular(id) =>
+                                    format!("⚠ {}'s uvec and fvec are not perpendicular to each other", &self.model.sub_objects[id].name),
                             };
 
                             let text = RichText::new(str).text_style(TextStyle::Button).color(WARNING_YELLOW);

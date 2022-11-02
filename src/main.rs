@@ -808,9 +808,12 @@ fn main() {
                             if let Some(lollipop) = pt_gui.hover_lollipop {
                                 pt_gui.drag_lollipop = Some(lollipop);
                                 let vec = (vec1 - vec2).normalize();
-                                let mut arr = [(DragAxis::YZ, vec.x), (DragAxis::XZ, vec.y), (DragAxis::XY, vec.y)];
-                                arr.sort_by(|a, b| b.1.abs().total_cmp(&a.1.abs()));
-                                pt_gui.drag_axis = arr[0].0;
+                                pt_gui.drag_axis = match (vec.x, vec.y, vec.z) {
+                                    _ if vec.x.abs() > vec.y.abs() && vec.x.abs() > vec.z.abs() => DragAxis::YZ,
+                                    _ if vec.y.abs() > vec.x.abs() && vec.y.abs() > vec.z.abs() => DragAxis::XZ,
+                                    _ if vec.z.abs() > vec.x.abs() && vec.z.abs() > vec.y.abs() => DragAxis::XY,
+                                    _ => DragAxis::YZ,
+                                };
                                 pt_gui.drag_start = *lollipop.get_position_ref(&mut pt_gui.model).unwrap();
                                 if let TreeValue::Turrets(TurretTreeValue::TurretPoint(i, _)) = lollipop {
                                     pt_gui.drag_start += pt_gui.model.get_total_subobj_offset(pt_gui.model.turrets[i].gun_obj);

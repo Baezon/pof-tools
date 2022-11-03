@@ -1,3 +1,4 @@
+#![allow(clippy::unnecessary_lazy_evaluations)]
 use std::str::FromStr;
 
 use egui::{style::Widgets, text::LayoutJob, CollapsingHeader, Color32, DragValue, Label, Response, RichText, TextEdit, TextFormat, TextStyle, Ui};
@@ -1080,7 +1081,7 @@ impl PofToolsGui {
                     for i in 0..self.model.sub_objects.len() {
                         // only apply to top-level subobjects (no parent), apply_transform() will
                         // recursively apply the proper transform to its children
-                        if self.model.sub_objects[ObjectId(i as u32)].parent() == None {
+                        if self.model.sub_objects[ObjectId(i as u32)].parent().is_none() {
                             self.model.apply_transform(ObjectId(i as u32), &matrix, true);
                             self.ui_state.viewport_3d_dirty = true;
                             properties_panel_dirty = true;
@@ -1682,7 +1683,7 @@ impl PofToolsGui {
                 ui.add_space(10.0);
 
                 let (pos, norm, radius) = if let TreeValue::Thrusters(ThrusterTreeValue::BankPoint(bank, point)) = self.ui_state.tree_view_selection {
-                    let ThrusterGlow { position, normal, radius } = &mut self.model.thruster_banks[bank as usize].glows[point];
+                    let ThrusterGlow { position, normal, radius } = &mut self.model.thruster_banks[bank].glows[point];
                     (Some(position), Some(normal), Some(radius))
                 } else {
                     (None, None, None)
@@ -1767,7 +1768,7 @@ impl PofToolsGui {
                     if let TreeValue::Weapons(WeaponTreeValue::PriBankPoint(bank, point) | WeaponTreeValue::SecBankPoint(bank, point)) =
                         self.ui_state.tree_view_selection
                     {
-                        let WeaponHardpoint { position, normal, offset } = &mut weapon_system.as_mut().unwrap().0[bank as usize][point];
+                        let WeaponHardpoint { position, normal, offset } = &mut weapon_system.as_mut().unwrap().0[bank][point];
                         (Some(position), Some(normal), Some(offset))
                     } else {
                         (None, None, None)
@@ -2020,11 +2021,11 @@ impl PofToolsGui {
 
                 let (disp_time, on_time, off_time, lod, glow_type) =
                     if let TreeValue::Glows(GlowTreeValue::BankPoint(bank, _)) = self.ui_state.tree_view_selection {
-                        let GlowPointBank { disp_time, on_time, off_time, lod, glow_type, .. } = &mut self.model.glow_banks[bank as usize];
+                        let GlowPointBank { disp_time, on_time, off_time, lod, glow_type, .. } = &mut self.model.glow_banks[bank];
 
                         (Some(disp_time), Some(on_time), Some(off_time), Some(lod), Some(glow_type))
                     } else if let TreeValue::Glows(GlowTreeValue::Bank(bank)) = self.ui_state.tree_view_selection {
-                        let GlowPointBank { disp_time, on_time, off_time, lod, glow_type, .. } = &mut self.model.glow_banks[bank as usize];
+                        let GlowPointBank { disp_time, on_time, off_time, lod, glow_type, .. } = &mut self.model.glow_banks[bank];
 
                         (Some(disp_time), Some(on_time), Some(off_time), Some(lod), Some(glow_type))
                     } else {
@@ -2079,9 +2080,9 @@ impl PofToolsGui {
                 ui.separator();
 
                 let glow_points = if let TreeValue::Glows(GlowTreeValue::BankPoint(bank, _)) = self.ui_state.tree_view_selection {
-                    Some(&mut self.model.glow_banks[bank as usize].glow_points)
+                    Some(&mut self.model.glow_banks[bank].glow_points)
                 } else if let TreeValue::Glows(GlowTreeValue::Bank(bank)) = self.ui_state.tree_view_selection {
-                    Some(&mut self.model.glow_banks[bank as usize].glow_points)
+                    Some(&mut self.model.glow_banks[bank].glow_points)
                 } else {
                     None
                 };
@@ -2292,7 +2293,7 @@ impl PofToolsGui {
                 ui.add_space(10.0);
 
                 let pos = if let TreeValue::Turrets(TurretTreeValue::TurretPoint(turret, point)) = self.ui_state.tree_view_selection {
-                    Some(&mut self.model.turrets[turret as usize].fire_points[point])
+                    Some(&mut self.model.turrets[turret].fire_points[point])
                 } else {
                     None
                 };
@@ -2359,7 +2360,7 @@ impl PofToolsGui {
                 ui.add_space(10.0);
 
                 let (radius, pos) = if let TreeValue::Paths(PathTreeValue::PathPoint(path, point)) = self.ui_state.tree_view_selection {
-                    let PathPoint { position, radius, .. } = &mut self.model.paths[path as usize].points[point];
+                    let PathPoint { position, radius, .. } = &mut self.model.paths[path].points[point];
                     (Some(radius), Some(position))
                 } else {
                     (None, None)

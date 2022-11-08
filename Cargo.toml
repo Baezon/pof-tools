@@ -24,3 +24,4 @@ once_cell = "1.10"
 # for display starup log date/time
 chrono = "0.4.19"
 itertools = "0.10.3"
+undo = "0.47.2"

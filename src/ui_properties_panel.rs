@@ -10,21 +10,28 @@ use pof::{
 };
 
 use crate::ui::{
-    DockingTreeValue, EyeTreeValue, GlowTreeValue, InsigniaTreeValue, PathTreeValue, PofToolsGui, SpecialPointTreeValue, SubObjectTreeValue,
-    TextureTreeValue, ThrusterTreeValue, TreeValue, TurretTreeValue, UiState, WeaponTreeValue, ERROR_RED, LIGHT_BLUE, LIGHT_ORANGE, WARNING_YELLOW,
+    DockingTreeValue, EyeTreeValue, GlowTreeValue, IndexingButtonsAction, InsigniaTreeValue, PathTreeValue, PofToolsGui, SpecialPointTreeValue,
+    SubObjectTreeValue, TextureTreeValue, ThrusterTreeValue, TreeValue, TurretTreeValue, UiState, UndoAction, WeaponTreeValue, ERROR_RED, LIGHT_BLUE,
+    LIGHT_ORANGE, WARNING_YELLOW,
 };
 
 const NON_BREAK_SPACE: char = '\u{00A0}';
 
-enum IndexingButtonsResponse {
+pub enum IndexingButtonsResponse<T: Clone> {
     Switch(usize),
     Copy(usize),
     Delete(usize),
     Push,
+    Insert(usize, Box<T>),
 }
-impl IndexingButtonsResponse {
-    fn apply<T: Clone + Default>(self, data_vec: &mut Vec<T>) -> Option<usize> {
-        match self {
+impl<T: Clone> IndexingButtonsResponse<T> {
+    /// applies the response, manipulating the data vector, returning the new index the UI should switch to (if any)
+    /// and mutates itself into its inverse, for the benefit of the undo system
+    pub fn apply(&mut self, data_vec: &mut Vec<T>) -> Option<usize>
+    where
+        T: Default,
+    {
+        match *self {
             IndexingButtonsResponse::Switch(idx) => {
                 assert!(idx < data_vec.len());
                 Some(idx)
@@ -34,11 +41,13 @@ impl IndexingButtonsResponse {
                 let new_idx = data_vec.len();
                 let item = data_vec[idx].clone();
                 data_vec.push(item);
+                *self = IndexingButtonsResponse::Delete(data_vec.len() - 1);
                 Some(new_idx)
             }
             IndexingButtonsResponse::Delete(idx) => {
                 assert!(idx < data_vec.len());
-                data_vec.remove(idx);
+                let data = data_vec.remove(idx);
+                *self = IndexingButtonsResponse::Insert(idx, Box::new(data));
                 if idx < data_vec.len() {
                     Some(idx)
                 } else {
@@ -48,8 +57,44 @@ impl IndexingButtonsResponse {
             IndexingButtonsResponse::Push => {
                 let new_idx = data_vec.len();
                 data_vec.push(Default::default());
+                *self = IndexingButtonsResponse::Delete(data_vec.len() - 1);
                 Some(new_idx)
             }
+            IndexingButtonsResponse::Insert(idx, _) => {
+                // swap the Insert with a Delete, and cleanly extract the data from the box into the vector
+                if let IndexingButtonsResponse::Insert(idx, data) = std::mem::replace(self, IndexingButtonsResponse::Delete(idx)) {
+                    data_vec.insert(idx, *data);
+                } else {
+                    unreachable!();
+                }
+                None
+            }
+        }
+    }
+
+    pub fn get_new_ui_idx(&self, data_vec: &Vec<T>) -> Option<usize>
+    where
+        T: Default,
+    {
+        match *self {
+            IndexingButtonsResponse::Switch(idx) => {
+                assert!(idx < data_vec.len());
+                Some(idx)
+            }
+            IndexingButtonsResponse::Copy(idx) => {
+                assert!(idx < data_vec.len());
+                Some(data_vec.len())
+            }
+            IndexingButtonsResponse::Delete(idx) => {
+                assert!(idx < data_vec.len());
+                if idx < data_vec.len() - 1 {
+                    Some(idx)
+                } else {
+                    idx.checked_sub(1)
+                }
+            }
+            IndexingButtonsResponse::Push => Some(data_vec.len()),
+            IndexingButtonsResponse::Insert(..) => None,
         }
     }
 }
@@ -68,9 +113,9 @@ impl UiState {
     }
 
     #[must_use]
-    fn list_manipulator_widget(
+    fn list_manipulator_widget<T: Clone>(
         ui: &mut Ui, current_num: Option<usize>, list_len: Option<usize>, index_name: &str,
-    ) -> Option<IndexingButtonsResponse> {
+    ) -> Option<IndexingButtonsResponse<T>> {
         enum Icon {
             Arrow,
             Plus,
@@ -585,7 +630,7 @@ impl UiState {
 }
 
 #[derive(Default)]
-pub(crate) struct TransformWindow {
+pub struct TransformWindow {
     open: bool,
     vector: String,
     value: String,
@@ -605,7 +650,7 @@ impl Default for TransformType {
     }
 }
 
-pub(crate) enum PropertiesPanel {
+pub enum PropertiesPanel {
     Header {
         bbox_min_string: String,
         bbox_max_string: String,
@@ -810,7 +855,9 @@ impl PropertiesPanel {
 }
 
 impl PofToolsGui {
-    pub(crate) fn do_properties_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, display: &Display) {
+    pub(crate) fn do_properties_panel(
+        &mut self, ui: &mut egui::Ui, ctx: &egui::Context, display: &Display, undo_history: &mut undo::History<UndoAction>,
+    ) {
         let mut reload_textures = false;
         let mut properties_panel_dirty = false;
         let mut buffer_ids_to_rebuild = vec![];
@@ -1697,12 +1744,21 @@ impl PofToolsGui {
                 UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
 
                 if let Some(response) = bank_idx_response {
-                    let new_idx = response.apply(&mut self.model.thruster_banks);
+                    let new_idx = response.get_new_ui_idx(&self.model.thruster_banks);
+
+                    undo_history
+                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::ThrusterBanks(response)))
+                        .unwrap();
+
                     self.model.recheck_warnings(All); //FIX
 
                     select_new_tree_val!(TreeValue::Thrusters(ThrusterTreeValue::bank(new_idx)));
                 } else if let Some(response) = point_idx_response {
-                    let new_idx = response.apply(&mut self.model.thruster_banks[bank_num.unwrap()].glows);
+                    let new_idx = response.get_new_ui_idx(&self.model.thruster_banks[bank_num.unwrap()].glows);
+
+                    undo_history
+                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::ThrusterBankPoints(bank_num.unwrap(), response)))
+                        .unwrap();
 
                     select_new_tree_val!(TreeValue::Thrusters(ThrusterTreeValue::bank_point(bank_num.unwrap(), new_idx)));
                 }
@@ -1794,14 +1850,34 @@ impl PofToolsGui {
 
                 if let Some(response) = bank_idx_response {
                     let (weapon_system, is_primary) = weapon_system.unwrap();
-                    let new_idx = response.apply(weapon_system);
+                    let new_idx = response.get_new_ui_idx(weapon_system);
+
+                    if is_primary {
+                        undo_history
+                            .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::PrimaryBanks(response)))
+                            .unwrap();
+                    } else {
+                        undo_history
+                            .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::SecondaryBanks(response)))
+                            .unwrap();
+                    }
 
                     self.model.recheck_warnings(All); // FIX
 
                     select_new_tree_val!(TreeValue::Weapons(WeaponTreeValue::bank(is_primary, new_idx)));
                 } else if let Some(response) = point_idx_response {
                     let (weapon_system, is_primary) = weapon_system.unwrap();
-                    let new_idx = response.apply(&mut weapon_system[bank_num.unwrap()]);
+                    let new_idx = response.get_new_ui_idx(&weapon_system[bank_num.unwrap()]);
+
+                    if is_primary {
+                        undo_history
+                            .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::PrimaryBankPoints(bank_num.unwrap(), response)))
+                            .unwrap();
+                    } else {
+                        undo_history
+                            .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::SecondaryBankPoints(bank_num.unwrap(), response)))
+                            .unwrap();
+                    }
 
                     self.model.recheck_warnings(All); // FIX
 
@@ -1968,7 +2044,11 @@ impl PofToolsGui {
                 ui.label(job);
 
                 if let Some(response) = bay_idx_response {
-                    let new_idx = response.apply(&mut self.model.docking_bays);
+                    let new_idx = response.get_new_ui_idx(&self.model.docking_bays);
+
+                    undo_history
+                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::DockingBays(response)))
+                        .unwrap();
 
                     self.model.recheck_warnings(All); // FIX
 
@@ -2107,12 +2187,20 @@ impl PofToolsGui {
                 UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
 
                 if let Some(response) = bank_idx_response {
-                    let new_idx = response.apply(&mut self.model.glow_banks);
+                    let new_idx = response.get_new_ui_idx(&self.model.glow_banks);
+
+                    undo_history
+                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::GlowBanks(response)))
+                        .unwrap();
 
                     self.model.recheck_warnings(All); // FIX
                     select_new_tree_val!(TreeValue::Glows(GlowTreeValue::bank(new_idx)));
                 } else if let Some(response) = point_idx_response {
-                    let new_idx = response.apply(&mut self.model.glow_banks[bank_num.unwrap()].glow_points);
+                    let new_idx = response.get_new_ui_idx(&self.model.glow_banks[bank_num.unwrap()].glow_points);
+
+                    undo_history
+                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::GlowBankPoints(bank_num.unwrap(), response)))
+                        .unwrap();
 
                     self.model.recheck_warnings(All); // FIX
                     select_new_tree_val!(TreeValue::Glows(GlowTreeValue::bank_point(bank_num.unwrap(), new_idx)));
@@ -2206,7 +2294,11 @@ impl PofToolsGui {
                 UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
 
                 if let Some(response) = spec_point_idx_response {
-                    let new_idx = response.apply(&mut self.model.special_points);
+                    let new_idx = response.get_new_ui_idx(&self.model.special_points);
+
+                    undo_history
+                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::SpecialPoints(response)))
+                        .unwrap();
 
                     self.model.recheck_warnings(All); // FIX
 
@@ -2302,14 +2394,22 @@ impl PofToolsGui {
                 UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
 
                 if let Some(response) = turret_idx_response {
-                    let new_idx = response.apply(&mut self.model.turrets);
+                    let new_idx = response.get_new_ui_idx(&self.model.turrets);
+
+                    undo_history
+                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::Turrets(response)))
+                        .unwrap();
 
                     self.model.recheck_errors(All); // FIX
                     self.model.recheck_warnings(All); // FIX
 
                     select_new_tree_val!(TreeValue::Turrets(TurretTreeValue::turret(new_idx)));
                 } else if let Some(response) = point_idx_response {
-                    let new_idx = response.apply(&mut self.model.turrets[turret_num.unwrap()].fire_points);
+                    let new_idx = response.get_new_ui_idx(&self.model.turrets[turret_num.unwrap()].fire_points);
+
+                    undo_history
+                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::TurretPoints(turret_num.unwrap(), response)))
+                        .unwrap();
 
                     self.model.recheck_errors(All); // FIX
                     self.model.recheck_warnings(All); // FIX
@@ -2375,13 +2475,21 @@ impl PofToolsGui {
                     if let IndexingButtonsResponse::Delete(idx) = response {
                         self.model.path_removal_fixup(PathId(idx as u32));
                     }
-                    let new_idx = response.apply(&mut self.model.paths);
+                    let new_idx = response.get_new_ui_idx(&self.model.paths);
+
+                    undo_history
+                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::Paths(response)))
+                        .unwrap();
 
                     self.model.recheck_warnings(All); // FIX
 
                     select_new_tree_val!(TreeValue::Paths(PathTreeValue::path(new_idx)));
                 } else if let Some(response) = point_idx_response {
-                    let new_idx = response.apply(&mut self.model.paths[path_num.unwrap()].points);
+                    let new_idx = response.get_new_ui_idx(&self.model.paths[path_num.unwrap()].points);
+
+                    undo_history
+                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::PathPoints(path_num.unwrap(), response)))
+                        .unwrap();
 
                     select_new_tree_val!(TreeValue::Paths(PathTreeValue::path_point(path_num.unwrap(), new_idx)));
                 }
@@ -2456,7 +2564,11 @@ impl PofToolsGui {
                 UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
 
                 if let Some(response) = eye_idx_response {
-                    let new_idx = response.apply(&mut self.model.eye_points);
+                    let new_idx = response.get_new_ui_idx(&self.model.eye_points);
+
+                    undo_history
+                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::EyePoints(response)))
+                        .unwrap();
 
                     self.model.recheck_warnings(All); //FIX
 

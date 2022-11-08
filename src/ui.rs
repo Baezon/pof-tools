@@ -3,7 +3,10 @@ use glium::{
     texture::{RawImage2d, SrgbTexture2d},
     Display,
 };
-use pof::{Error, Model, SubObject, TextureId, Vec3d, Version, Warning};
+use pof::{
+    Dock, Error, EyePoint, GlowPoint, GlowPointBank, Model, Path, PathPoint, SpecialPoint, SubObject, TextureId, ThrusterBank, ThrusterGlow, Turret,
+    Vec3d, Version, Warning, WeaponHardpoint,
+};
 use std::{
     collections::HashMap,
     f32::consts::{FRAC_PI_2, PI},
@@ -14,11 +17,12 @@ use eframe::egui::{self, Button, TextStyle, Ui};
 use pof::ObjectId;
 
 use crate::{
-    ui_properties_panel::PropertiesPanel, GlArrowhead, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers, POF_TOOLS_VERSION,
+    ui_properties_panel::{IndexingButtonsResponse, PropertiesPanel},
+    GlArrowhead, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers, POF_TOOLS_VERSION,
 };
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, PartialOrd, Ord)]
-pub(crate) enum TreeValue {
+pub enum TreeValue {
     Header,
     SubObjects(SubObjectTreeValue),
     Textures(TextureTreeValue),
@@ -159,7 +163,7 @@ impl TreeValue {
     }
 }
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
-pub(crate) enum InsigniaTreeValue {
+pub enum InsigniaTreeValue {
     Header,
     Insignia(usize), // insignia idx
 }
@@ -172,7 +176,7 @@ impl std::fmt::Display for InsigniaTreeValue {
     }
 }
 impl InsigniaTreeValue {
-    fn _insignia(point: Option<usize>) -> Self {
+    fn insignia(point: Option<usize>) -> Self {
         match point {
             Some(point) => Self::Insignia(point),
             None => Self::Header,
@@ -181,7 +185,7 @@ impl InsigniaTreeValue {
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
-pub(crate) enum EyeTreeValue {
+pub enum EyeTreeValue {
     Header,
     EyePoint(usize), // eye idx
 }
@@ -203,7 +207,7 @@ impl EyeTreeValue {
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
-pub(crate) enum PathTreeValue {
+pub enum PathTreeValue {
     Header,
     Path(usize),             // path idx
     PathPoint(usize, usize), // path idx, point idx
@@ -233,7 +237,7 @@ impl PathTreeValue {
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
-pub(crate) enum TurretTreeValue {
+pub enum TurretTreeValue {
     Header,
     Turret(usize),             // turret idx
     TurretPoint(usize, usize), // turret idx, point idx
@@ -264,7 +268,7 @@ impl TurretTreeValue {
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
-pub(crate) enum SpecialPointTreeValue {
+pub enum SpecialPointTreeValue {
     Header,
     Point(usize),
 }
@@ -286,7 +290,7 @@ impl SpecialPointTreeValue {
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
-pub(crate) enum GlowTreeValue {
+pub enum GlowTreeValue {
     Header,
     Bank(usize),             // bank idx
     BankPoint(usize, usize), // bank idx, point idx
@@ -317,7 +321,7 @@ impl GlowTreeValue {
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
-pub(crate) enum DockingTreeValue {
+pub enum DockingTreeValue {
     Header,
     Bay(usize), // bank idx
 }
@@ -339,7 +343,7 @@ impl DockingTreeValue {
 }
 
 #[derive(PartialEq, Hash, Debug, Eq, PartialOrd, Ord, Clone, Copy)]
-pub(crate) enum WeaponTreeValue {
+pub enum WeaponTreeValue {
     Header,
     PriHeader,
     PriBank(usize),             // bank idx
@@ -384,7 +388,7 @@ impl WeaponTreeValue {
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
-pub(crate) enum TextureTreeValue {
+pub enum TextureTreeValue {
     Header,
     Texture(TextureId),
 }
@@ -396,9 +400,17 @@ impl std::fmt::Display for TextureTreeValue {
         }
     }
 }
+impl TextureTreeValue {
+    pub fn tex(idx: Option<TextureId>) -> Self {
+        match idx {
+            Some(idx) => Self::Texture(idx),
+            None => Self::Header,
+        }
+    }
+}
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
-pub(crate) enum ThrusterTreeValue {
+pub enum ThrusterTreeValue {
     Header,
     Bank(usize),             // bank idx
     BankPoint(usize, usize), // bank idx, point idx
@@ -428,7 +440,7 @@ impl ThrusterTreeValue {
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
-pub(crate) enum SubObjectTreeValue {
+pub enum SubObjectTreeValue {
     Header,
     SubObject(ObjectId),
 }
@@ -438,6 +450,14 @@ impl std::fmt::Display for SubObjectTreeValue {
         match self {
             SubObjectTreeValue::Header => write!(f, "Header"),
             SubObjectTreeValue::SubObject(idx) => write!(f, "SubObject {}", idx.0 + 1),
+        }
+    }
+}
+impl SubObjectTreeValue {
+    pub fn subobj(id: Option<ObjectId>) -> Self {
+        match id {
+            Some(id) => Self::SubObject(id),
+            None => Self::Header,
         }
     }
 }
@@ -457,7 +477,7 @@ pub(crate) enum DisplayMode {
 }
 
 #[derive(Default)]
-pub(crate) struct UiState {
+pub struct UiState {
     pub tree_view_selection: TreeValue,
     /// toggles the expanded state of the given tree value next frame
     pub tree_view_toggle: Option<TreeValue>,
@@ -678,11 +698,159 @@ impl UiState {
     }
 }
 
+pub enum IndexingButtonsAction {
+    PrimaryBanks(IndexingButtonsResponse<Vec<WeaponHardpoint>>),
+    PrimaryBankPoints(usize, IndexingButtonsResponse<WeaponHardpoint>),
+    SecondaryBanks(IndexingButtonsResponse<Vec<WeaponHardpoint>>),
+    SecondaryBankPoints(usize, IndexingButtonsResponse<WeaponHardpoint>),
+    DockingBays(IndexingButtonsResponse<Dock>),
+    ThrusterBanks(IndexingButtonsResponse<ThrusterBank>),
+    ThrusterBankPoints(usize, IndexingButtonsResponse<ThrusterGlow>),
+    GlowBanks(IndexingButtonsResponse<GlowPointBank>),
+    GlowBankPoints(usize, IndexingButtonsResponse<GlowPoint>),
+    SpecialPoints(IndexingButtonsResponse<SpecialPoint>),
+    Turrets(IndexingButtonsResponse<Turret>),
+    TurretPoints(usize, IndexingButtonsResponse<Vec3d>),
+    Paths(IndexingButtonsResponse<Path>),
+    PathPoints(usize, IndexingButtonsResponse<PathPoint>),
+    EyePoints(IndexingButtonsResponse<EyePoint>),
+}
+
+pub enum UndoAction {
+    MoveLollipop { tree_val: TreeValue, delta_vec: Vec3d },
+    IxBAction(IndexingButtonsAction),
+}
+
+impl undo::Action for UndoAction {
+    type Target = Model;
+    type Output = ();
+    type Error = &'static str;
+
+    fn apply(&mut self, target: &mut Model) -> undo::Result<UndoAction> {
+        match self {
+            UndoAction::MoveLollipop { tree_val, delta_vec } => {
+                let pos_ref = tree_val.get_position_ref(target);
+                if let Some(pos_ref) = pos_ref {
+                    *pos_ref += *delta_vec;
+                    *delta_vec = -*delta_vec;
+                    Ok(())
+                } else {
+                    Err("No position ref for tree_val")
+                }
+            }
+            UndoAction::IxBAction(action) => {
+                use IndexingButtonsAction::*;
+                match action {
+                    SpecialPoints(response) => response.apply(&mut target.special_points),
+                    PrimaryBanks(response) => response.apply(&mut target.primary_weps),
+                    PrimaryBankPoints(idx, response) => response.apply(&mut target.primary_weps[*idx]),
+                    SecondaryBanks(response) => response.apply(&mut target.secondary_weps),
+                    SecondaryBankPoints(idx, response) => response.apply(&mut target.secondary_weps[*idx]),
+                    DockingBays(response) => response.apply(&mut target.docking_bays),
+                    ThrusterBanks(response) => response.apply(&mut target.thruster_banks),
+                    ThrusterBankPoints(idx, response) => response.apply(&mut target.thruster_banks[*idx].glows),
+                    GlowBanks(response) => response.apply(&mut target.glow_banks),
+                    GlowBankPoints(idx, response) => response.apply(&mut target.glow_banks[*idx].glow_points),
+                    Turrets(response) => response.apply(&mut target.turrets),
+                    TurretPoints(idx, response) => response.apply(&mut target.turrets[*idx].fire_points),
+                    Paths(response) => response.apply(&mut target.paths),
+                    PathPoints(idx, response) => response.apply(&mut target.paths[*idx].points),
+                    EyePoints(response) => response.apply(&mut target.eye_points),
+                };
+
+                Ok(())
+            }
+        }
+    }
+
+    fn undo(&mut self, target: &mut Model) -> undo::Result<UndoAction> {
+        self.apply(target)
+    }
+
+    fn merge(&mut self, other: &mut Self) -> undo::Merged
+    where
+        Self: Sized,
+    {
+        match (self, other) {
+            (
+                UndoAction::MoveLollipop { tree_val: tree_val1, delta_vec: vec1 },
+                UndoAction::MoveLollipop { tree_val: tree_val2, delta_vec: vec2 },
+            ) if tree_val1 == tree_val2 => {
+                *vec1 += *vec2;
+                undo::Merged::Yes
+            }
+            _ => undo::Merged::No,
+        }
+    }
+}
+
 impl PofToolsGui {
+    pub fn santizie_ui_state(&mut self) {
+        let (idx, len) = match self.tree_view_selection {
+            TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) => (id.0 as usize, self.model.sub_objects.len()),
+            TreeValue::Textures(TextureTreeValue::Texture(id)) => (id.0 as usize, self.model.textures.len()),
+            TreeValue::Weapons(WeaponTreeValue::PriBank(idx)) => (idx, self.model.primary_weps.len()),
+            TreeValue::Weapons(WeaponTreeValue::PriBankPoint(bank_idx, idx)) => (idx, self.model.primary_weps[bank_idx].len()),
+            TreeValue::Weapons(WeaponTreeValue::SecBank(idx)) => (idx, self.model.secondary_weps.len()),
+            TreeValue::Weapons(WeaponTreeValue::SecBankPoint(bank_idx, idx)) => (idx, self.model.secondary_weps[bank_idx].len()),
+            TreeValue::DockingBays(DockingTreeValue::Bay(idx)) => (idx, self.model.docking_bays.len()),
+            TreeValue::Thrusters(ThrusterTreeValue::Bank(idx)) => (idx, self.model.thruster_banks.len()),
+            TreeValue::Thrusters(ThrusterTreeValue::BankPoint(bank_idx, idx)) => (idx, self.model.thruster_banks[bank_idx].glows.len()),
+            TreeValue::Glows(GlowTreeValue::Bank(idx)) => (idx, self.model.glow_banks.len()),
+            TreeValue::Glows(GlowTreeValue::BankPoint(bank_idx, idx)) => (idx, self.model.glow_banks[bank_idx].glow_points.len()),
+            TreeValue::SpecialPoints(SpecialPointTreeValue::Point(idx)) => (idx, self.model.special_points.len()),
+            TreeValue::Turrets(TurretTreeValue::Turret(idx)) => (idx, self.model.turrets.len()),
+            TreeValue::Turrets(TurretTreeValue::TurretPoint(tur_idx, idx)) => (idx, self.model.turrets[tur_idx].fire_points.len()),
+            TreeValue::Paths(PathTreeValue::Path(idx)) => (idx, self.model.paths.len()),
+            TreeValue::Paths(PathTreeValue::PathPoint(path_idx, idx)) => (idx, self.model.paths[path_idx].points.len()),
+            TreeValue::EyePoints(EyeTreeValue::EyePoint(idx)) => (idx, self.model.eye_points.len()),
+            TreeValue::Insignia(InsigniaTreeValue::Insignia(idx)) => (idx, self.model.insignias.len()),
+            _ => return,
+        };
+
+        let new_idx = if len > 0 {
+            if idx >= len {
+                Some(len - 1)
+            } else {
+                Some(idx)
+            }
+        } else {
+            None
+        };
+
+        self.tree_view_selection = match self.tree_view_selection {
+            TreeValue::SubObjects(SubObjectTreeValue::SubObject(_)) => {
+                TreeValue::SubObjects(SubObjectTreeValue::subobj(new_idx.map(|idx| ObjectId(idx as u32))))
+            }
+            TreeValue::Textures(TextureTreeValue::Texture(_)) => TreeValue::Textures(TextureTreeValue::tex(new_idx.map(|idx| TextureId(idx as u32)))),
+            TreeValue::Weapons(WeaponTreeValue::PriBank(_)) => TreeValue::Weapons(WeaponTreeValue::bank(true, new_idx)),
+            TreeValue::Weapons(WeaponTreeValue::PriBankPoint(bank_idx, _)) => {
+                TreeValue::Weapons(WeaponTreeValue::bank_point(true, bank_idx, new_idx))
+            }
+            TreeValue::Weapons(WeaponTreeValue::SecBank(_)) => TreeValue::Weapons(WeaponTreeValue::bank(false, new_idx)),
+            TreeValue::Weapons(WeaponTreeValue::SecBankPoint(bank_idx, _)) => {
+                TreeValue::Weapons(WeaponTreeValue::bank_point(false, bank_idx, new_idx))
+            }
+            TreeValue::DockingBays(DockingTreeValue::Bay(_)) => TreeValue::DockingBays(DockingTreeValue::bay(new_idx)),
+            TreeValue::Thrusters(ThrusterTreeValue::Bank(_)) => TreeValue::Thrusters(ThrusterTreeValue::bank(new_idx)),
+            TreeValue::Thrusters(ThrusterTreeValue::BankPoint(bank_idx, _)) => TreeValue::Thrusters(ThrusterTreeValue::bank_point(bank_idx, new_idx)),
+            TreeValue::Glows(GlowTreeValue::Bank(_)) => TreeValue::Glows(GlowTreeValue::bank(new_idx)),
+            TreeValue::Glows(GlowTreeValue::BankPoint(bank_idx, _)) => TreeValue::Glows(GlowTreeValue::bank_point(bank_idx, new_idx)),
+            TreeValue::SpecialPoints(SpecialPointTreeValue::Point(_)) => TreeValue::SpecialPoints(SpecialPointTreeValue::point(new_idx)),
+            TreeValue::Turrets(TurretTreeValue::Turret(_)) => TreeValue::Turrets(TurretTreeValue::turret(new_idx)),
+            TreeValue::Turrets(TurretTreeValue::TurretPoint(tur_idx, _)) => TreeValue::Turrets(TurretTreeValue::turret_point(tur_idx, new_idx)),
+            TreeValue::Paths(PathTreeValue::Path(_)) => TreeValue::Paths(PathTreeValue::path(new_idx)),
+            TreeValue::Paths(PathTreeValue::PathPoint(path_idx, _)) => TreeValue::Paths(PathTreeValue::path_point(path_idx, new_idx)),
+            TreeValue::EyePoints(EyeTreeValue::EyePoint(_)) => TreeValue::EyePoints(EyeTreeValue::point(new_idx)),
+            TreeValue::Insignia(InsigniaTreeValue::Insignia(_)) => TreeValue::Insignia(InsigniaTreeValue::insignia(new_idx)),
+            _ => panic!(),
+        };
+    }
+
     // =====================================================
     // The big top-level function for drawing and interacting with all of the UI
     // ====================================================
-    pub fn show_ui(&mut self, ctx: &egui::Context, display: &Display) {
+    pub fn show_ui(&mut self, ctx: &egui::Context, display: &Display, undo_history: &mut undo::History<UndoAction>) {
         egui::TopBottomPanel::top("menu").default_height(33.0).min_height(33.0).show(ctx, |ui| {
             Ui::add_space(ui, 6.0);
             ui.horizontal(|ui| {
@@ -787,6 +955,18 @@ impl PofToolsGui {
                         self.model.recheck_errors(pof::Set::All);
                     }
                 });
+
+                ui.separator();
+
+                if ui.button("⎗").clicked() {
+                    undo_history.undo(&mut *self.model);
+                    self.santizie_ui_state();
+                }
+
+                if ui.button("⎘").clicked() {
+                    undo_history.redo(&mut *self.model);
+                    self.santizie_ui_state();
+                }
 
                 ui.separator();
 
@@ -1417,7 +1597,7 @@ impl PofToolsGui {
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     ui.add_space(3.0);
 
-                    self.do_properties_panel(ui, ctx, display);
+                    self.do_properties_panel(ui, ctx, display, undo_history);
                 });
             });
     }

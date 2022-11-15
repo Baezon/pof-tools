@@ -442,7 +442,7 @@ impl std::fmt::Display for SubObjectTreeValue {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub enum DragAxis {
     YZ,
     XZ,
@@ -1391,9 +1391,13 @@ impl PofToolsGui {
             .frame(egui::Frame::none().inner_margin(egui::style::Margin::same(5.0)))
             .show(ctx, |ui| {
                 ui.visuals_mut().override_text_color = Some(Color32::from_gray(80));
-                ui.label("Right-click and drag to rotate");
-                ui.label("Middle-click (or shift-right-click) and drag to pan");
-                ui.label("Left-click on a node to select it, drag to move it");
+                if self.actually_dragging {
+                    ui.label("Use shift, ctrl, or alt to constrain movement axes");
+                } else {
+                    ui.label("Right-click and drag to rotate");
+                    ui.label("Middle-click (or shift-right-click) and drag to pan");
+                    ui.label("Left-click on a node to select it, drag to move it");
+                }
             });
 
         // all the tree values needing opening should have been opened by now

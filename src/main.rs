@@ -808,11 +808,19 @@ fn main() {
                             if let Some(lollipop) = pt_gui.hover_lollipop {
                                 pt_gui.drag_lollipop = Some(lollipop);
                                 let vec = (vec1 - vec2).normalize();
-                                pt_gui.drag_axis = match (vec.x, vec.y, vec.z) {
-                                    _ if vec.x.abs() > vec.y.abs() && vec.x.abs() > vec.z.abs() => DragAxis::YZ,
-                                    _ if vec.y.abs() > vec.x.abs() && vec.y.abs() > vec.z.abs() => DragAxis::XZ,
-                                    _ if vec.z.abs() > vec.x.abs() && vec.z.abs() > vec.y.abs() => DragAxis::XY,
-                                    _ => DragAxis::YZ,
+                                pt_gui.drag_axis = {
+                                    let modifiers = egui.egui_ctx.input().modifiers;
+                                    match (modifiers.shift, modifiers.ctrl, modifiers.alt) {
+                                        (true, _, _) => DragAxis::YZ,
+                                        (_, true, _) => DragAxis::XZ,
+                                        (_, _, true) => DragAxis::XY,
+                                        _ => match (vec.x, vec.y, vec.z) {
+                                            _ if vec.x.abs() > vec.y.abs() && vec.x.abs() > vec.z.abs() => DragAxis::YZ,
+                                            _ if vec.y.abs() > vec.x.abs() && vec.y.abs() > vec.z.abs() => DragAxis::XZ,
+                                            _ if vec.z.abs() > vec.x.abs() && vec.z.abs() > vec.y.abs() => DragAxis::XY,
+                                            _ => DragAxis::YZ,
+                                        },
+                                    }
                                 };
                                 pt_gui.drag_start = *lollipop.get_position_ref(&mut pt_gui.model).unwrap();
                                 if let TreeValue::Turrets(TurretTreeValue::TurretPoint(i, _)) = lollipop {
@@ -848,6 +856,25 @@ fn main() {
 
                             if let Some(vec_ptr) = drag_lollipop.get_position_ref(&mut pt_gui.model) {
                                 *vec_ptr += maybe_turret_offset; // add this only for the purposes of calculation (subtracted at the end)
+
+                                // if the user pressed a hotkey, reset drag_start and use a new axis
+                                let modifiers = egui.egui_ctx.input().modifiers;
+                                pt_gui.drag_axis = match (modifiers.shift, modifiers.ctrl, modifiers.alt) {
+                                    (true, _, _) if pt_gui.drag_axis != DragAxis::YZ => {
+                                        pt_gui.drag_start = *vec_ptr;
+                                        DragAxis::YZ
+                                    }
+                                    (_, true, _) if pt_gui.drag_axis != DragAxis::XZ => {
+                                        pt_gui.drag_start = *vec_ptr;
+                                        DragAxis::XZ
+                                    }
+                                    (_, _, true) if pt_gui.drag_axis != DragAxis::XY => {
+                                        pt_gui.drag_start = *vec_ptr;
+                                        DragAxis::XY
+                                    }
+                                    _ => pt_gui.drag_axis,
+                                };
+
                                 let new_pos: Option<Vec3d> = {
                                     let mouse_vec = mouse_vec.unwrap();
                                     let t = match pt_gui.drag_axis {

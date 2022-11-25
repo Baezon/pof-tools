@@ -1593,7 +1593,7 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
         .map(|mat| mat.name().unwrap().strip_suffix("-material").unwrap_or(mat.name().unwrap()).to_string())
         .collect();
 
-    GltfContext { buffers }.parse_top_level_nodes(&mut model, gltf.default_scene().unwrap().nodes());
+    GltfContext { buffers }.parse_top_level_nodes(&mut model, gltf.default_scene().expect("Default scene in gltf file not set!").nodes());
     model
 }
 

@@ -958,12 +958,12 @@ impl PofToolsGui {
 
                 ui.separator();
 
-                if ui.button("⎗").clicked() {
+                if ui.add_enabled(undo_history.can_undo(), egui::Button::new("⎗")).on_hover_text("Undo").clicked() {
                     undo_history.undo(&mut *self.model);
                     self.santizie_ui_state();
                 }
 
-                if ui.button("⎘").clicked() {
+                if ui.add_enabled(undo_history.can_redo(), egui::Button::new("⎘")).on_hover_text("Redo").clicked() {
                     undo_history.redo(&mut *self.model);
                     self.santizie_ui_state();
                 }

@@ -1802,7 +1802,10 @@ impl PofToolsGui {
                     display,
                     model.docking_bays.iter().enumerate().flat_map(|(bay_idx, docking_bay)| {
                         let position = docking_bay.position;
-                        let radius = self.model.header.max_radius.powf(0.4) / 4.0;
+                        let mut radius = self.model.header.max_radius.powf(0.4) / 4.0;
+                        if hover_lollipop == Some(TreeValue::DockingBays(DockingTreeValue::Bay(bay_idx))) {
+                            radius *= 2.
+                        };
                         let fvec = docking_bay.fvec.0 * radius * 3.0;
                         let uvec = docking_bay.uvec.0 * radius * 3.0;
                         let (selection1, selection2) = if selected_bank == Some(bay_idx) {

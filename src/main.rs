@@ -2,6 +2,7 @@
 // VVV wasn't sure how to handle it so i leave it on for debug but turn it off for release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![allow(clippy::useless_format)]
+#![allow(clippy::explicit_auto_deref)]
 #[macro_use]
 extern crate log;
 extern crate nalgebra_glm as glm;
@@ -11,7 +12,7 @@ use crate::{
     primitives::OCTAHEDRON_VERTS,
     ui::{
         DisplayMode, DockingTreeValue, DragAxis, EyeTreeValue, GlowTreeValue, InsigniaTreeValue, PathTreeValue, SpecialPointTreeValue,
-        SubObjectTreeValue, TextureTreeValue, ThrusterTreeValue, TurretTreeValue, WeaponTreeValue,
+        SubObjectTreeValue, TextureTreeValue, ThrusterTreeValue, TurretTreeValue, UndoAction, WeaponTreeValue,
     },
 };
 use eframe::egui::PointerButton;
@@ -688,6 +689,8 @@ fn main() {
     pt_gui.camera_offset = Vec3d::ZERO;
     pt_gui.camera_scale = model.header.max_radius * 2.0;
 
+    let mut undo_history = undo::History::new();
+
     let mut errored = None;
     info!("Beginning event loop...");
 
@@ -699,7 +702,7 @@ fn main() {
 
                 pt_gui.handle_texture_loading_thread(&display);
 
-                let repaint_after = egui.run(&display, |ctx| pt_gui.show_ui(ctx, &display));
+                let repaint_after = egui.run(&display, |ctx| pt_gui.show_ui(ctx, &display, &mut undo_history));
 
                 *control_flow = match repaint_after {
                     time if time.is_zero() => {
@@ -717,6 +720,16 @@ fn main() {
                     let mut target = display.draw();
 
                     target.clear_color_and_depth((0.0, 0.0, 0.0, 1.0), 1.0);
+
+                    // undo/redo
+                    let input = egui.egui_ctx.input();
+                    let ctrl = input.modifiers.ctrl;
+                    let z = input.key_pressed(egui::Key::Z);
+                    drop(input);
+                    if egui.egui_ctx.memory().focus().is_none() && ctrl && z {
+                        undo_history.undo(&mut *pt_gui.model);
+                        pt_gui.santizie_ui_state();
+                    }
 
                     let model = &pt_gui.model;
 
@@ -854,22 +867,20 @@ fn main() {
                                 maybe_turret_offset = pt_gui.model.get_total_subobj_offset(pt_gui.model.turrets[i].gun_obj);
                             }
 
-                            if let Some(vec_ptr) = drag_lollipop.get_position_ref(&mut pt_gui.model) {
-                                *vec_ptr += maybe_turret_offset; // add this only for the purposes of calculation (subtracted at the end)
-
+                            if let Some(vec) = drag_lollipop.get_position_ref(&mut pt_gui.model) {
                                 // if the user pressed a hotkey, reset drag_start and use a new axis
                                 let modifiers = egui.egui_ctx.input().modifiers;
                                 pt_gui.drag_axis = match (modifiers.shift, modifiers.ctrl, modifiers.alt) {
                                     (true, _, _) if pt_gui.drag_axis != DragAxis::YZ => {
-                                        pt_gui.drag_start = *vec_ptr;
+                                        pt_gui.drag_start = *vec + maybe_turret_offset;
                                         DragAxis::YZ
                                     }
                                     (_, true, _) if pt_gui.drag_axis != DragAxis::XZ => {
-                                        pt_gui.drag_start = *vec_ptr;
+                                        pt_gui.drag_start = *vec + maybe_turret_offset;
                                         DragAxis::XZ
                                     }
                                     (_, _, true) if pt_gui.drag_axis != DragAxis::XY => {
-                                        pt_gui.drag_start = *vec_ptr;
+                                        pt_gui.drag_start = *vec + maybe_turret_offset;
                                         DragAxis::XY
                                     }
                                     _ => pt_gui.drag_axis,
@@ -878,17 +889,19 @@ fn main() {
                                 let new_pos: Option<Vec3d> = {
                                     let mouse_vec = mouse_vec.unwrap();
                                     let t = match pt_gui.drag_axis {
-                                        DragAxis::YZ => (vec_ptr.x - mouse_vec.0.x) / (mouse_vec.1.x - mouse_vec.0.x),
-                                        DragAxis::XZ => (vec_ptr.y - mouse_vec.0.y) / (mouse_vec.1.y - mouse_vec.0.y),
-                                        DragAxis::XY => (vec_ptr.z - mouse_vec.0.z) / (mouse_vec.1.z - mouse_vec.0.z),
+                                        DragAxis::YZ => ((*vec + maybe_turret_offset).x - mouse_vec.0.x) / (mouse_vec.1.x - mouse_vec.0.x),
+                                        DragAxis::XZ => ((*vec + maybe_turret_offset).y - mouse_vec.0.y) / (mouse_vec.1.y - mouse_vec.0.y),
+                                        DragAxis::XY => ((*vec + maybe_turret_offset).z - mouse_vec.0.z) / (mouse_vec.1.z - mouse_vec.0.z),
                                     };
                                     let hover_pos = egui.egui_ctx.input().pointer.hover_pos();
                                     let in_3d_viewport = hover_pos.map_or(false, |hover_pos| egui.egui_ctx.available_rect().contains(hover_pos));
-                                    if mouse_pos.is_none() || t < -1.0 || t > 1.0 || !egui.egui_ctx.input().pointer.primary_down() || !in_3d_viewport
+                                    if mouse_pos.is_none()
+                                        || !(-1.0..=1.0).contains(&t)
+                                        || !egui.egui_ctx.input().pointer.primary_down()
+                                        || !in_3d_viewport
                                     {
                                         pt_gui.drag_lollipop = None;
                                         pt_gui.actually_dragging = false;
-                                        *vec_ptr -= maybe_turret_offset;
                                         None
                                     } else {
                                         Some(mouse_vec.0 + (mouse_vec.1 - mouse_vec.0) * t)
@@ -896,7 +909,11 @@ fn main() {
                                 };
 
                                 if let Some(new_pos) = new_pos {
-                                    *vec_ptr = new_pos - maybe_turret_offset;
+                                    let delta_vec = new_pos - maybe_turret_offset - *vec;
+                                    undo_history
+                                        .apply(&mut *pt_gui.model, UndoAction::MoveLollipop { tree_val: drag_lollipop, delta_vec })
+                                        .unwrap();
+
                                     pt_gui.ui_state.refresh_properties_panel(&pt_gui.model);
                                     pt_gui.ui_state.viewport_3d_dirty = true;
                                 }
@@ -909,6 +926,10 @@ fn main() {
                             pt_gui.actually_dragging = false;
                         }
                     }
+
+                    //
+                    // TIME TO RENDER STUFF =======================================================================================
+                    //
 
                     // maybe redo lollipops and stuff
                     pt_gui.maybe_recalculate_3d_helpers(&display);
@@ -1268,7 +1289,7 @@ fn main() {
                         target
                             .draw(
                                 &glium::VertexBuffer::new(&display, &[vert1, vert2]).unwrap(),
-                                &glium::index::NoIndices(glium::index::PrimitiveType::LinesList),
+                                glium::index::NoIndices(glium::index::PrimitiveType::LinesList),
                                 &lollipop_stick_shader,
                                 &uniforms,
                                 &drag_axis_params,
@@ -1282,7 +1303,7 @@ fn main() {
                         target
                             .draw(
                                 &glium::VertexBuffer::new(&display, &[vert3, vert4]).unwrap(),
-                                &glium::index::NoIndices(glium::index::PrimitiveType::LinesList),
+                                glium::index::NoIndices(glium::index::PrimitiveType::LinesList),
                                 &lollipop_stick_shader,
                                 &uniforms,
                                 &drag_axis_params,

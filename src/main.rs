@@ -1569,8 +1569,8 @@ impl PofToolsGui {
                 }
             }
             TreeValue::Glows(_) => {
-                for (i, bank) in self.model.thruster_banks.iter().enumerate() {
-                    for (j, point) in bank.glows.iter().enumerate() {
+                for (i, bank) in self.model.glow_banks.iter().enumerate() {
+                    for (j, point) in bank.glow_points.iter().enumerate() {
                         proximity_test(point.position, TreeValue::Glows(GlowTreeValue::BankPoint(i, j)));
                     }
                 }

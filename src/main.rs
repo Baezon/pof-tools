@@ -841,6 +841,7 @@ fn main() {
                                 }
 
                                 pt_gui.select_new_tree_val(lollipop);
+                                pt_gui.ui_state.properties_panel_dirty = true;
                             }
                         }
                     }

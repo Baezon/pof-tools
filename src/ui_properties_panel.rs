@@ -859,13 +859,12 @@ impl PofToolsGui {
         &mut self, ui: &mut egui::Ui, ctx: &egui::Context, display: &Display, undo_history: &mut undo::History<UndoAction>,
     ) {
         let mut reload_textures = false;
-        let mut properties_panel_dirty = false;
         let mut buffer_ids_to_rebuild = vec![];
 
         macro_rules! select_new_tree_val {
             ($x:expr) => {
                 self.ui_state.select_new_tree_val($x);
-                properties_panel_dirty = true;
+                self.ui_state.properties_panel_dirty = true;
             };
         }
 
@@ -895,7 +894,7 @@ impl PofToolsGui {
 
                     if response.clicked() {
                         self.model.recalc_bbox();
-                        properties_panel_dirty = true;
+                        self.ui_state.properties_panel_dirty = true;
                         bbox_changed = true;
                     }
                     display_bbox = response.hovered() || response.has_focus() || display_bbox;
@@ -951,7 +950,7 @@ impl PofToolsGui {
                     if response.clicked() {
                         self.model.recalc_radius();
                         radius_changed = true;
-                        properties_panel_dirty = true;
+                        self.ui_state.properties_panel_dirty = true;
                     }
                     display_radius = response.hovered() || response.has_focus() || display_radius;
                 });
@@ -973,7 +972,7 @@ impl PofToolsGui {
                     ui.add(egui::Label::new("Mass:"));
                     if ui.button("Recalculate").clicked() {
                         self.model.recalc_mass();
-                        properties_panel_dirty = true;
+                        self.ui_state.properties_panel_dirty = true;
                     }
                 });
                 UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, Some(&mut self.model.header.mass), mass_string);
@@ -982,7 +981,7 @@ impl PofToolsGui {
                     ui.add(egui::Label::new("Moment of Inertia:"));
                     if ui.button("Recalculate").clicked() {
                         self.model.recalc_moi();
-                        properties_panel_dirty = true;
+                        self.ui_state.properties_panel_dirty = true;
                     }
                 });
                 UiState::model_value_edit(
@@ -1131,7 +1130,7 @@ impl PofToolsGui {
                         if self.model.sub_objects[ObjectId(i as u32)].parent().is_none() {
                             self.model.apply_transform(ObjectId(i as u32), &matrix, true);
                             self.ui_state.viewport_3d_dirty = true;
-                            properties_panel_dirty = true;
+                            self.ui_state.properties_panel_dirty = true;
                         }
 
                         buffer_ids_to_rebuild.push(ObjectId(i as u32));
@@ -1238,7 +1237,7 @@ impl PofToolsGui {
 
                     if response.clicked() {
                         self.model.sub_objects[selected_id.unwrap()].recalc_bbox();
-                        properties_panel_dirty = true;
+                        self.ui_state.properties_panel_dirty = true;
                         bbox_changed = true;
                     }
                     display_bbox = response.hovered() || response.has_focus() || display_bbox;
@@ -1306,7 +1305,7 @@ impl PofToolsGui {
 
                         self.ui_state.viewport_3d_dirty = true;
                         buffer_ids_to_rebuild.push(selected_id.unwrap());
-                        properties_panel_dirty = true;
+                        self.ui_state.properties_panel_dirty = true;
                     }
                     self.ui_state.display_origin |= response.hovered() || response.has_focus();
                 });
@@ -1353,7 +1352,7 @@ impl PofToolsGui {
 
                     if response.clicked() {
                         self.model.sub_objects[selected_id.unwrap()].recalc_radius();
-                        properties_panel_dirty = true;
+                        self.ui_state.properties_panel_dirty = true;
                         radius_changed = true;
                     }
                     display_radius = response.hovered() || response.has_focus() || display_radius;
@@ -1390,7 +1389,7 @@ impl PofToolsGui {
                     if let Some(id) = selected_id {
                         self.model.apply_transform(id, &matrix, false);
                         self.ui_state.viewport_3d_dirty = true;
-                        properties_panel_dirty = true;
+                        self.ui_state.properties_panel_dirty = true;
 
                         self.model
                             .do_for_recursive_subobj_children(id, &mut |subobj| buffer_ids_to_rebuild.push(subobj.obj_id));
@@ -2597,8 +2596,9 @@ impl PofToolsGui {
             self.load_textures();
         }
 
-        if properties_panel_dirty {
+        if self.ui_state.properties_panel_dirty {
             self.ui_state.refresh_properties_panel(&self.model);
+            self.ui_state.properties_panel_dirty = false;
         }
 
         self.rebuild_subobj_buffers(display, buffer_ids_to_rebuild);

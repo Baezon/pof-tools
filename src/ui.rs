@@ -484,6 +484,7 @@ pub struct UiState {
     /// expands the given tree value next frame
     pub tree_view_force_open: Option<TreeValue>,
     pub viewport_3d_dirty: bool,
+    pub properties_panel_dirty: bool,
     pub last_selected_subobj: Option<ObjectId>,
     pub properties_panel: PropertiesPanel,
     pub display_radius: bool,

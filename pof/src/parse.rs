@@ -159,7 +159,7 @@ impl<R: Read + Seek> Parser<R> {
                     let parent = if parent == u32::MAX {
                         None
                     } else {
-                        assert!(sub_objects[parent as usize].is_some(), "parent out of order");
+                        // assert!(sub_objects[parent as usize].is_some(), "parent out of order");
                         Some(ObjectId(parent))
                     };
 

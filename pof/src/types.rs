@@ -11,7 +11,7 @@ use itertools::Itertools;
 
 use byteorder::{WriteBytesExt, LE};
 pub use dae_parser::UpAxis;
-use glm::{TMat4, Vec3};
+use glm::{TMat3, TMat4, Vec3};
 use nalgebra::Matrix3;
 use nalgebra_glm::Mat4;
 extern crate nalgebra_glm as glm;
@@ -414,6 +414,22 @@ impl MulAssign<f32> for Mat3d {
     }
 }
 
+pub fn mat4_rotation_and_scaling_only(matrix: &TMat4<f32>) -> TMat4<f32> {
+    let zero = Vec3d::ZERO.into();
+    let translation = matrix.transform_point(&zero) - zero;
+    matrix.append_translation(&(-translation))
+}
+
+pub fn mat4_rotation_only(matrix: &TMat4<f32>) -> TMat4<f32> {
+    let matrix = mat4_rotation_and_scaling_only(matrix);
+    let x = matrix.transform_vector(&Vec3::x());
+    let y = matrix.transform_vector(&Vec3::y());
+    let z = matrix.transform_vector(&Vec3::z());
+    let mut arr = [x, y, z];
+    Vec3::orthonormalize(&mut arr);
+    TMat3::from_columns(&arr).to_homogeneous()
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct NormalVec3(pub Vec3d);
 
@@ -595,6 +611,14 @@ mk_struct! {
         pub turrets: Vec<ObjectId>,
     }
 }
+impl EyePoint {
+    pub fn apply_transform(&mut self, matrix: &TMat4<f32>) {
+        self.position = matrix * self.position;
+
+        let matrix = mat4_rotation_only(matrix);
+        self.normal = (&matrix * self.normal.0).try_into().unwrap();
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct Path {
@@ -620,6 +644,17 @@ impl Debug for Path {
             .field("parent", &self.parent)
             .field("points", &self.points.len())
             .finish()
+    }
+}
+
+impl Path {
+    pub fn apply_transform(&mut self, matrix: &TMat4<f32>) {
+        let scalar = matrix.determinant().abs().powf(1. / 3.);
+
+        for point in &mut self.points {
+            point.position = matrix * point.position;
+            point.radius *= scalar;
+        }
     }
 }
 
@@ -731,6 +766,14 @@ impl Serialize for SpecialPoint {
         self.radius.write_to(w)
     }
 }
+impl SpecialPoint {
+    pub fn apply_transform(&mut self, matrix: &TMat4<f32>) {
+        let scalar = matrix.determinant().abs().powf(1. / 3.);
+
+        self.position = matrix * self.position;
+        self.radius *= scalar;
+    }
+}
 
 #[derive(Default, Debug, Clone)]
 pub struct WeaponHardpoint {
@@ -747,6 +790,13 @@ impl Serialize for WeaponHardpoint {
             self.offset.write_to(w)?;
         }
         Ok(())
+    }
+}
+impl WeaponHardpoint {
+    pub fn apply_transform(&mut self, matrix: &TMat4<f32>) {
+        self.position = matrix * self.position;
+        let matrix = mat4_rotation_only(&matrix);
+        self.normal = (&matrix * self.normal.0).try_into().unwrap();
     }
 }
 
@@ -773,6 +823,17 @@ impl Serialize for ThrusterGlow {
             self.radius.write_to(w)?;
         }
         Ok(())
+    }
+}
+impl ThrusterGlow {
+    pub fn apply_transform(&mut self, matrix: &TMat4<f32>) {
+        self.position = matrix * self.position;
+
+        let scalar = matrix.determinant().abs().powf(1. / 3.);
+        self.radius *= scalar;
+
+        let matrix = mat4_rotation_only(&matrix);
+        self.normal = (&matrix * self.normal).normalize();
     }
 }
 
@@ -807,6 +868,17 @@ impl Default for GlowPoint {
             normal: Default::default(),
             radius: 1.0,
         }
+    }
+}
+impl GlowPoint {
+    pub fn apply_transform(&mut self, matrix: &TMat4<f32>) {
+        self.position = matrix * self.position;
+
+        let scalar = matrix.determinant().abs().powf(1. / 3.);
+        self.radius *= scalar;
+
+        let matrix = mat4_rotation_only(&matrix);
+        self.normal = (&matrix * self.normal).normalize();
     }
 }
 
@@ -885,6 +957,49 @@ impl ShieldData {
         } else {
             recalc_recurse(&mut poly_infos.iter().collect::<Vec<_>>())
         }
+    }
+
+    pub fn recalculate_bboxes(&mut self) {
+        if let Some(tree) = &mut self.collision_tree {
+            recalculate_bboxes_recurse(&self.verts, &self.polygons, tree);
+        }
+
+        fn recalculate_bboxes_recurse(verts: &[Vec3d], polygons: &[ShieldPolygon], node: &mut ShieldNode) {
+            match node {
+                ShieldNode::Split { bbox, front, back } => {
+                    recalculate_bboxes_recurse(verts, polygons, front);
+                    recalculate_bboxes_recurse(verts, polygons, back);
+
+                    *bbox = BoundingBox::EMPTY;
+                    let child_bbox = match **front {
+                        ShieldNode::Split { ref bbox, .. } => bbox,
+                        ShieldNode::Leaf { ref bbox, .. } => bbox,
+                    };
+                    bbox.expand_bbox(child_bbox);
+                    let child_bbox = match **back {
+                        ShieldNode::Split { ref bbox, .. } => bbox,
+                        ShieldNode::Leaf { ref bbox, .. } => bbox,
+                    };
+                    bbox.expand_bbox(child_bbox);
+                }
+                ShieldNode::Leaf { bbox, poly_list } => {
+                    *bbox = BoundingBox::EMPTY;
+                    for id in poly_list {
+                        bbox.expand_vec(verts[polygons[id.0 as usize].verts.0 .0 as usize]);
+                        bbox.expand_vec(verts[polygons[id.0 as usize].verts.1 .0 as usize]);
+                        bbox.expand_vec(verts[polygons[id.0 as usize].verts.2 .0 as usize]);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn apply_transform(&mut self, matrix: &TMat4<f32>) {
+        for vert in &mut self.verts {
+            *vert = matrix * *vert;
+        }
+
+        self.recalculate_bboxes();
     }
 }
 
@@ -1441,6 +1556,14 @@ impl Dock {
         }
         None
     }
+
+    pub fn apply_transform(&mut self, matrix: &TMat4<f32>) {
+        self.position = matrix * self.position;
+
+        let matrix = mat4_rotation_only(&matrix);
+        self.fvec = (&matrix * self.fvec.0).try_into().unwrap();
+        self.uvec = (&matrix * self.uvec.0).try_into().unwrap();
+    }
 }
 
 pub const MAX_TURRET_POINTS: usize = 10;
@@ -1477,6 +1600,18 @@ impl Debug for Turret {
     }
 }
 
+impl Turret {
+    pub fn apply_transform(&mut self, matrix: &TMat4<f32>) {
+        let matrix = mat4_rotation_and_scaling_only(matrix);
+        for point in &mut self.fire_points {
+            *point = &matrix * *point;
+        }
+
+        let matrix = mat4_rotation_only(&matrix);
+        self.normal = (&matrix * self.normal.0).try_into().unwrap();
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Insignia {
     pub detail_level: u32,
@@ -1495,6 +1630,16 @@ impl Serialize for Insignia {
             face.write_to(w)?;
         }
         Ok(())
+    }
+}
+
+impl Insignia {
+    pub fn apply_transform(&mut self, matrix: &TMat4<f32>) {
+        for point in &mut self.vertices {
+            *point = matrix * *point;
+        }
+
+        self.offset = matrix * self.offset;
     }
 }
 
@@ -2105,7 +2250,71 @@ impl Model {
         num_debris
     }
 
-    pub fn apply_transform(&mut self, id: ObjectId, matrix: &TMat4<f32>, transform_offset: bool) {
+    pub fn apply_transform(&mut self, matrix: &TMat4<f32>) {
+        for i in 0..self.sub_objects.len() {
+            // only apply to top-level subobjects (no parent), apply_transform() will
+            // recursively apply the proper transform to its children
+            if self.sub_objects[ObjectId(i as u32)].parent().is_none() {
+                self.apply_subobj_transform(ObjectId(i as u32), &matrix, true);
+            }
+        }
+
+        self.recalc_bbox();
+        self.recalc_radius();
+
+        for path in &mut self.paths {
+            path.apply_transform(&matrix);
+        }
+
+        for point in &mut self.special_points {
+            point.apply_transform(&matrix);
+        }
+
+        for bank in &mut self.primary_weps {
+            for point in bank {
+                point.apply_transform(&matrix);
+            }
+        }
+        for bank in &mut self.secondary_weps {
+            for point in bank {
+                point.apply_transform(&matrix);
+            }
+        }
+
+        for bank in &mut self.thruster_banks {
+            for point in &mut bank.glows {
+                point.apply_transform(&matrix);
+            }
+        }
+
+        for bank in &mut self.glow_banks {
+            for point in &mut bank.glow_points {
+                point.apply_transform(&matrix);
+            }
+        }
+
+        for dock in &mut self.docking_bays {
+            dock.apply_transform(&matrix);
+        }
+
+        for eye in &mut self.eye_points {
+            eye.apply_transform(&matrix)
+        }
+
+        for insignia in &mut self.insignias {
+            insignia.apply_transform(&matrix);
+        }
+
+        for turret in &mut self.turrets {
+            turret.apply_transform(&matrix);
+        }
+
+        if let Some(shield) = &mut self.shield_data {
+            shield.apply_transform(&matrix);
+        }
+    }
+
+    pub fn apply_subobj_transform(&mut self, id: ObjectId, matrix: &TMat4<f32>, transform_offset: bool) {
         let zero = Vec3d::ZERO.into();
         let translation = matrix.transform_point(&zero) - zero;
         let matrix = &matrix.append_translation(&(-translation));
@@ -2140,7 +2349,7 @@ impl Model {
         let children = subobj.children.clone();
 
         for child_id in children {
-            self.apply_transform(child_id, matrix, true)
+            self.apply_subobj_transform(child_id, matrix, true)
         }
     }
 
@@ -2163,7 +2372,7 @@ impl Model {
         subobj.bbox.max -= diff;
         subobj.bbox.min -= diff;
         subobj.offset = new_offset;
-        self.apply_transform(id, &glm::translation(&(-diff).into()), false);
+        self.apply_subobj_transform(id, &glm::translation(&(-diff).into()), false);
         self.sub_objects[id].recalc_radius();
     }
 

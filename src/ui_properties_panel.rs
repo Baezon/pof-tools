@@ -374,7 +374,8 @@ impl UiState {
                     });
                     ui.separator();
                     ui.label("Scalar (negative values flip):");
-                    if transform_window.value.parse::<f32>().is_err() {
+                    let parsed_val = transform_window.value.parse::<f32>();
+                    if parsed_val.is_err() || parsed_val.unwrap() < 1e-6 {
                         ui.visuals_mut().override_text_color = Some(ERROR_RED);
                     }
                     ui.text_edit_singleline(&mut transform_window.value);
@@ -389,7 +390,7 @@ impl UiState {
                             _ => unreachable!(),
                         };
                         mat = glm::scaling(&vector);
-                        valid_input = true;
+                        valid_input = scalar >= 1e-6;
                     }
                 }
                 TransformType::Translate => {
@@ -860,6 +861,7 @@ impl PofToolsGui {
     ) {
         let mut reload_textures = false;
         let mut buffer_ids_to_rebuild = vec![];
+        let mut rebuild_all_buffers = false;
 
         macro_rules! select_new_tree_val {
             ($x:expr) => {
@@ -1124,20 +1126,10 @@ impl PofToolsGui {
                     transform_window.open = true;
                 }
                 if let Some(matrix) = UiState::show_transform_window(ctx, transform_window) {
-                    for i in 0..self.model.sub_objects.len() {
-                        // only apply to top-level subobjects (no parent), apply_transform() will
-                        // recursively apply the proper transform to its children
-                        if self.model.sub_objects[ObjectId(i as u32)].parent().is_none() {
-                            self.model.apply_transform(ObjectId(i as u32), &matrix, true);
-                            self.ui_state.viewport_3d_dirty = true;
-                            self.ui_state.properties_panel_dirty = true;
-                        }
-
-                        buffer_ids_to_rebuild.push(ObjectId(i as u32));
-                    }
-
-                    self.model.recalc_bbox();
-                    self.model.recalc_radius();
+                    self.model.apply_transform(&matrix);
+                    rebuild_all_buffers = true;
+                    self.ui_state.viewport_3d_dirty = true;
+                    self.ui_state.properties_panel_dirty = true;
                 }
 
                 ui.add_space(10.0);
@@ -1387,7 +1379,7 @@ impl PofToolsGui {
                 }
                 if let Some(matrix) = UiState::show_transform_window(ctx, transform_window) {
                     if let Some(id) = selected_id {
-                        self.model.apply_transform(id, &matrix, false);
+                        self.model.apply_subobj_transform(id, &matrix, false);
                         self.ui_state.viewport_3d_dirty = true;
                         self.ui_state.properties_panel_dirty = true;
 
@@ -2601,6 +2593,12 @@ impl PofToolsGui {
             self.ui_state.properties_panel_dirty = false;
         }
 
-        self.rebuild_subobj_buffers(display, buffer_ids_to_rebuild);
+        if rebuild_all_buffers {
+            self.rebuild_all_subobj_buffers(display);
+            self.rebuild_all_insignia_buffers(display);
+            self.rebuild_shield_buffer(display);
+        } else {
+            self.rebuild_subobj_buffers(display, buffer_ids_to_rebuild);
+        }
     }
 }

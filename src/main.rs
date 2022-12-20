@@ -559,6 +559,25 @@ impl PofToolsGui {
             }
         }
     }
+
+    pub fn rebuild_all_subobj_buffers(&mut self, display: &Display) {
+        let ids = (0..self.model.sub_objects.len()).map(|idx| ObjectId(idx as u32)).collect();
+        self.rebuild_subobj_buffers(display, ids);
+    }
+
+    pub fn rebuild_all_insignia_buffers(&mut self, display: &Display) {
+        for (i, buffer) in self.buffer_insignias.iter_mut().enumerate() {
+            *buffer = GlBufferedInsignia::new(display, &self.model.insignias[i]);
+        }
+    }
+
+    pub fn rebuild_shield_buffer(&mut self, display: &Display) {
+        if let Some(shield) = &self.model.shield_data {
+            self.buffer_shield = Some(GlBufferedShield::new(display, shield));
+        } else {
+            self.buffer_shield = None;
+        }
+    }
 }
 
 const POF_TOOLS_VERSION: &str = env!("CARGO_PKG_VERSION");

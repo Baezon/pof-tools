@@ -999,6 +999,11 @@ impl ShieldData {
             *vert = matrix * *vert;
         }
 
+        let matrix = mat4_rotation_only(&matrix);
+        for poly in &mut self.polygons {
+            poly.normal = &matrix * poly.normal;
+        }
+
         self.recalculate_bboxes();
     }
 }

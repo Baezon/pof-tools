@@ -2343,7 +2343,8 @@ impl Model {
             *norm = (&norm_matrix * *norm).normalize();
         }
 
-        subobj.bsp_data.collision_tree.recalculate_bboxes(&subobj.bsp_data.verts);
+        subobj.bsp_data.collision_tree =
+            BspData::recalculate(&subobj.bsp_data.verts, subobj.bsp_data.collision_tree.leaves().map(|(_, poly)| poly.clone()));
 
         subobj.bbox = *subobj.bsp_data.collision_tree.bbox();
 

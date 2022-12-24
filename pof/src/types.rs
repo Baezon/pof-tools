@@ -1052,6 +1052,10 @@ impl BspNode {
         BspNodeIter { stack: vec![self] }
     }
 
+    pub fn into_leaves(self) -> BspNodeIntoIter {
+        BspNodeIntoIter { stack: vec![Box::new(self)] }
+    }
+
     pub fn sum_of_bboxes(&self) -> f32 {
         match self {
             BspNode::Split { bbox, front, back, .. } => bbox.volume() + front.sum_of_bboxes() + back.sum_of_bboxes(),
@@ -1121,6 +1125,29 @@ impl<'a> Iterator for BspNodeIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match self.stack.pop()? {
+                BspNode::Split { front, back, .. } => {
+                    self.stack.push(back);
+                    self.stack.push(front);
+                }
+                BspNode::Leaf { bbox, poly } => {
+                    return Some((bbox, poly));
+                }
+                BspNode::Empty => {}
+            }
+        }
+    }
+}
+
+pub struct BspNodeIntoIter {
+    stack: Vec<Box<BspNode>>,
+}
+
+impl Iterator for BspNodeIntoIter {
+    type Item = (BoundingBox, Polygon);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match *self.stack.pop()? {
                 BspNode::Split { front, back, .. } => {
                     self.stack.push(back);
                     self.stack.push(front);
@@ -2343,7 +2370,8 @@ impl Model {
             *norm = (&norm_matrix * *norm).normalize();
         }
 
-        subobj.bsp_data.collision_tree.recalculate_bboxes(&subobj.bsp_data.verts);
+        subobj.bsp_data.collision_tree =
+            BspData::recalculate(&subobj.bsp_data.verts, std::mem::take(&mut subobj.bsp_data.collision_tree).into_leaves().map(|(_, poly)| poly));
 
         subobj.bbox = *subobj.bsp_data.collision_tree.bbox();
 

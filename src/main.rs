@@ -1663,48 +1663,48 @@ impl PofToolsGui {
                             buffer.tint_val = 0.2;
                         }
                     }
+                }
 
-                    let radius = model.sub_objects[obj_id].radius;
-                    let size = 0.05 * radius;
-                    let pos = model.get_total_subobj_offset(obj_id);
+                let radius = model.sub_objects[obj_id].radius;
+                let size = 0.05 * radius;
+                let pos = model.get_total_subobj_offset(obj_id);
 
-                    let mut ball_origin = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_POINT_COLOR);
-                    // Origin lollipop (ball only)
-                    ball_origin.push(pos, Vec3d::ZERO, size);
-                    let ball_origin = ball_origin.finish(display);
-                    self.lollipops = vec![ball_origin];
+                let mut ball_origin = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_POINT_COLOR);
+                // Origin lollipop (ball only)
+                ball_origin.push(pos, Vec3d::ZERO, size);
+                let ball_origin = ball_origin.finish(display);
+                self.lollipops = vec![ball_origin];
 
-                    if let Some((uvec, fvec)) = model.sub_objects[obj_id].uvec_fvec() {
-                        // Set up arrowhead sticks
-                        let stick_length = 2. * radius;
-                        // Blue lollipop (stick only) for uvec
-                        let mut stick_uvec = GlLollipopsBuilder::new(UVEC_COLOR);
-                        stick_uvec.push(pos, uvec * stick_length, 0.);
-                        let stick_uvec = stick_uvec.finish(display);
-                        self.lollipops.push(stick_uvec);
-                        // Green lollipop (stick only) for fvec
-                        let mut stick_fvec = GlLollipopsBuilder::new(FVEC_COLOR);
-                        stick_fvec.push(pos, fvec * stick_length, 0.);
-                        let stick_fvec = stick_fvec.finish(display);
-                        self.lollipops.push(stick_fvec);
-                        // Set up arrowheads
-                        let uvec_pos = pos + uvec * stick_length;
-                        let fvec_pos = pos + fvec * stick_length;
-                        let uvec_matrix = {
-                            let mut m = glm::translation::<f32>(&uvec_pos.into());
-                            m *= uvec.to_rotation_matrix();
-                            m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
-                            m
-                        };
-                        let fvec_matrix = {
-                            let mut m = glm::translation::<f32>(&fvec_pos.into());
-                            m *= fvec.to_rotation_matrix();
-                            m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
-                            m
-                        };
-                        self.arrowheads.push(GlArrowhead { color: UVEC_COLOR, transform: uvec_matrix });
-                        self.arrowheads.push(GlArrowhead { color: FVEC_COLOR, transform: fvec_matrix });
-                    }
+                if let Some((uvec, fvec)) = model.sub_objects[obj_id].uvec_fvec() {
+                    // Set up arrowhead sticks
+                    let stick_length = 2. * radius;
+                    // Blue lollipop (stick only) for uvec
+                    let mut stick_uvec = GlLollipopsBuilder::new(UVEC_COLOR);
+                    stick_uvec.push(pos, uvec * stick_length, 0.);
+                    let stick_uvec = stick_uvec.finish(display);
+                    self.lollipops.push(stick_uvec);
+                    // Green lollipop (stick only) for fvec
+                    let mut stick_fvec = GlLollipopsBuilder::new(FVEC_COLOR);
+                    stick_fvec.push(pos, fvec * stick_length, 0.);
+                    let stick_fvec = stick_fvec.finish(display);
+                    self.lollipops.push(stick_fvec);
+                    // Set up arrowheads
+                    let uvec_pos = pos + uvec * stick_length;
+                    let fvec_pos = pos + fvec * stick_length;
+                    let uvec_matrix = {
+                        let mut m = glm::translation::<f32>(&uvec_pos.into());
+                        m *= uvec.to_rotation_matrix();
+                        m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
+                        m
+                    };
+                    let fvec_matrix = {
+                        let mut m = glm::translation::<f32>(&fvec_pos.into());
+                        m *= fvec.to_rotation_matrix();
+                        m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
+                        m
+                    };
+                    self.arrowheads.push(GlArrowhead { color: UVEC_COLOR, transform: uvec_matrix });
+                    self.arrowheads.push(GlArrowhead { color: FVEC_COLOR, transform: fvec_matrix });
                 }
             }
             TreeValue::Textures(TextureTreeValue::Texture(tex)) => {

@@ -1130,7 +1130,7 @@ impl NodeBuilder for json::Node {
         self.scale = Some(val.map(sanitize_f32))
     }
     fn matrix_transform(&mut self, mat: Mat4x4) {
-        self.matrix = Some(Matrix::from(mat).0.map(sanitize_f32))
+        self.matrix = Some(Matrix::from(mat.transpose()).0.map(sanitize_f32))
     }
     fn build(self, ctx: &mut Vec<Self>) -> Index<Self> {
         GltfBuilder::push(ctx, self)

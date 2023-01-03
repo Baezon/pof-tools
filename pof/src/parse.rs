@@ -415,7 +415,7 @@ impl<R: Read + Seek> Parser<R> {
                     self.file.read_exact(&mut buffer)?;
 
                     let end = buffer.iter().position(|&char| char == 0).unwrap_or(buffer.len());
-                    comments = Some(String::from_utf8(buffer[..end].into()).unwrap());
+                    comments = Some(String::from_utf8_lossy(buffer[..end].into()).to_string());
                     // println!("{:#?}", comments);
                 }
                 _ => {
@@ -502,7 +502,7 @@ impl<R: Read + Seek> Parser<R> {
     fn read_string(&mut self) -> io::Result<String> {
         let buf = self.read_byte_buffer()?;
         let end = buf.iter().position(|&char| char == 0).unwrap_or(buf.len());
-        Ok(String::from_utf8(buf[..end].into()).unwrap())
+        Ok(String::from_utf8_lossy(buf[..end].into()).to_string())
     }
 
     fn read_u32(&mut self) -> io::Result<u32> {

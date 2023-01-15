@@ -1659,8 +1659,9 @@ impl PofToolsGui {
                     self.model.recheck_warnings(One(Warning::UntexturedPolygons));
                 }
 
+                ui.add_space(5.0);
                 if TreeValue::Textures(TextureTreeValue::tex(self.model.untextured_idx)) == self.ui_state.tree_view_selection {
-                    ui.label("If this is intentional, FSO will ignore textures named \"invisible\"");
+                    ui.label("If this is intentional, you may prefer \"invisible\", which FSO will ignore.");
                 }
             }
             PropertiesPanel::Thruster {

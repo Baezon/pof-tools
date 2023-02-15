@@ -6,6 +6,8 @@ I'm more than willing to accept any code contributions, and if you have any bugs
 
 One of the big goals of this project is to present an interface that is more intuitive and helps users in creating models. And to that end Pof Tools already has a few features over PCS2, such as displaying warnings and errors for problems in the model, realtime simulation of glow point 'blinking', and making sure that sub object fields are only populated with valid entries for that type.
 
+HlP forums: https://www.hard-light.net/forums/index.php?topic=98096.0
+
 # 'pof' crate
 
 This comes with the rust crate 'pof' which handles reading/writing pof files and extracting all of the info into native rust data structures if you want to make a program that interacts with pof files but doesn't need any of the GUI stuff.

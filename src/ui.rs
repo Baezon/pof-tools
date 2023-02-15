@@ -95,7 +95,7 @@ impl TreeValue {
     }
 
     // returns what, if any, tree_value best corresponds to a given warning
-    fn from_warning(warning: Warning) -> Option<TreeValue> {
+    fn from_warning(warning: Warning, model: &Model) -> Option<TreeValue> {
         match warning {
             Warning::RadiusTooSmall(None) => Some(TreeValue::Header),
             Warning::BBoxTooSmall(None) => Some(TreeValue::Header),
@@ -104,7 +104,7 @@ impl TreeValue {
             Warning::BBoxTooSmall(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
             Warning::InvertedBBox(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
             Warning::SubObjectTranslationInvalidVersion(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
-            Warning::UntexturedPolygons => None,
+            Warning::UntexturedPolygons => Some(TreeValue::Textures(TextureTreeValue::tex(model.untextured_idx))),
             Warning::DockingBayWithoutPath(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(idx))),
             Warning::ThrusterPropertiesInvalidVersion(idx) => Some(TreeValue::Thrusters(ThrusterTreeValue::Bank(idx))),
             Warning::WeaponOffsetInvalidVersion { primary, bank, point } => {
@@ -610,7 +610,7 @@ impl UiState {
                     }
                     _ => (),
                 }
-            } else if let Some(warning_tree_value) = TreeValue::from_warning(*warning) {
+            } else if let Some(warning_tree_value) = TreeValue::from_warning(*warning, model) {
                 if tree_value == warning_tree_value || tree_value.is_ancestor_of(warning_tree_value) {
                     return text.color(WARNING_YELLOW);
                 }
@@ -1227,7 +1227,7 @@ impl PofToolsGui {
                             let text = RichText::new(str).text_style(TextStyle::Button).color(WARNING_YELLOW);
                             if first_warning {
                                 ui.horizontal(|ui| {
-                                    if let Some(tree_val) = TreeValue::from_warning(warning) {
+                                    if let Some(tree_val) = TreeValue::from_warning(warning, &self.model) {
                                         if ui.selectable_label(false, text).clicked() {
                                             new_tree_val = Some(tree_val);
                                         }
@@ -1253,7 +1253,7 @@ impl PofToolsGui {
                                     });
                                 });
                                 first_warning = false;
-                            } else if let Some(tree_val) = TreeValue::from_warning(warning) {
+                            } else if let Some(tree_val) = TreeValue::from_warning(warning, &self.model) {
                                 if ui.selectable_label(false, text).clicked() {
                                     new_tree_val = Some(tree_val);
                                 }

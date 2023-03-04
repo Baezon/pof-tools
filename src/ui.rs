@@ -4,8 +4,8 @@ use glium::{
     Display,
 };
 use pof::{
-    Dock, Error, EyePoint, GlowPoint, GlowPointBank, Model, Path, PathPoint, SpecialPoint, SubObject, TextureId, ThrusterBank, ThrusterGlow, Turret,
-    Vec3d, Version, Warning, WeaponHardpoint,
+    properties_get_field, Dock, Error, EyePoint, GlowPoint, GlowPointBank, Model, Path, PathPoint, SpecialPoint, SubObject, TextureId, ThrusterBank,
+    ThrusterGlow, Turret, Vec3d, Version, Warning, WeaponHardpoint,
 };
 use std::{
     collections::HashMap,
@@ -129,6 +129,7 @@ impl TreeValue {
             Warning::DockingBayPropertiesTooLong(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(idx))),
             Warning::GlowBankPropertiesTooLong(idx) => Some(TreeValue::Glows(GlowTreeValue::Bank(idx))),
             Warning::SpecialPointPropertiesTooLong(idx) => Some(TreeValue::SpecialPoints(SpecialPointTreeValue::Point(idx))),
+            Warning::InvalidDockParentSubmodel(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(idx))),
         }
     }
 
@@ -1170,6 +1171,16 @@ impl PofToolsGui {
                                 }
                                 Warning::DuplicateDetailLevel(id) => {
                                     format!("⚠ Subobject '{}' belongs to more than one detail level", self.model.sub_objects[id].name)
+                                }
+                                Warning::InvalidDockParentSubmodel(idx) => {
+                                    let dock_name = self.model.docking_bays[idx]
+                                        .get_name()
+                                        .map_or(format!("Docking bay {}", idx), |name| format!("Docking bay '{}'", name));
+                                    format!(
+                                        "⚠ Could not find parent submodel '{}' for {}",
+                                        properties_get_field(&self.model.docking_bays[idx].properties, "$parent_submodel").unwrap(),
+                                        dock_name
+                                    )
                                 }
                                 Warning::PathNameTooLong(_)
                                 | Warning::SubObjectNameTooLong(_)

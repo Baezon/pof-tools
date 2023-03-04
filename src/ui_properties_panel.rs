@@ -1920,7 +1920,19 @@ impl PofToolsGui {
                     }
                 });
 
-                let mut subobj_names_list = vec![String::new()];
+                let mut subobj_names_list = vec!["None".to_string()];
+
+                let mut warning_idx = None;
+                if bay_num.map_or(false, |idx| self.model.warnings.contains(&Warning::InvalidDockParentSubmodel(idx))) {
+                    // this bay has an invalid parent object, so add whatever its name is to the list
+                    subobj_names_list.push(
+                        pof::properties_get_field(&self.model.docking_bays[bay_num.unwrap()].properties, "$parent_submodel")
+                            .unwrap()
+                            .to_string(),
+                    );
+                    warning_idx = Some(1);
+                }
+
                 subobj_names_list.extend(self.model.get_subobj_names().into_iter());
 
                 let mut parent_id = if let Some(bay) = bay_num {
@@ -1934,13 +1946,16 @@ impl PofToolsGui {
                     0 // doesnt matter
                 };
 
-                if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, &mut parent_id, bay_num, "Parent Object", None, None) {
+                if let Some(new_subobj) =
+                    UiState::subobject_combo_box(ui, &subobj_names_list, &mut parent_id, bay_num, "Parent Object", None, warning_idx)
+                {
                     pof::properties_update_field(
                         &mut self.model.docking_bays[bay_num.unwrap()].properties,
                         "$parent_submodel",
                         &subobj_names_list[new_subobj],
                     );
                     self.model.recheck_warnings(One(Warning::DockingBayPropertiesTooLong(bay_num.unwrap())));
+                    self.model.recheck_warnings(One(Warning::InvalidDockParentSubmodel(bay_num.unwrap())));
                     self.ui_state.viewport_3d_dirty = true;
                 }
 
@@ -1986,6 +2001,7 @@ impl PofToolsGui {
                             }
                             self.model.recheck_warnings(One(Warning::DockingBayNameTooLong(bay)));
                             self.model.recheck_warnings(One(Warning::DockingBayPropertiesTooLong(bay)));
+                            self.model.recheck_warnings(One(Warning::InvalidDockParentSubmodel(bay_num.unwrap())));
                         }
                     } else {
                         ui.add_enabled(false, egui::TextEdit::multiline(&mut String::new()).desired_rows(1));

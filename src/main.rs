@@ -1418,10 +1418,10 @@ fn main() {
                         if let Some(val) = properties_get_field(&model.sub_objects[id].properties, "$fov").and_then(|str| str.parse::<f32>().ok()) {
                             let max_fov = properties_get_field(&model.sub_objects[id].properties, "$max_fov")
                                 .and_then(|str| str.parse::<f32>().ok())
-                                .unwrap_or(0.0);
+                                .unwrap_or(90.0);
                             let base_fov = properties_get_field(&model.sub_objects[id].properties, "$base_fov")
                                 .and_then(|str| str.parse::<f32>().ok())
-                                .unwrap_or(180.0);
+                                .unwrap_or(360.0);
 
                             let turret_idx = pt_gui
                                 .model
@@ -1440,8 +1440,8 @@ fn main() {
                                 world_offset: [offset.x, offset.y, offset.z],
                                 scale: pt_gui.model.header.max_radius * 0.4,
                                 fov: val * 0.5 * PI / 180.0,
-                                max_fov: max_fov * PI / 180.0,
-                                base_fov: base_fov * PI / 180.0,
+                                max_fov: (90.0 - max_fov) * PI / 180.0,
+                                base_fov: base_fov * 0.5 * PI / 180.0,
                                 lollipop_color: [1.0, 0.0, 0.0, 1.0f32],
                             };
                             target

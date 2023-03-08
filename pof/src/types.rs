@@ -2624,7 +2624,7 @@ impl Model {
         let mut arr = if let Some((uvec, fvec)) = self.sub_objects[turret.base_obj].uvec_fvec() {
             [uvec.into(), fvec.into()]
         } else {
-            [turret.normal.0.into(), Vec3d::new(1.0, 1.0, 1.0).into()] // arbitrary fvec
+            [turret.normal.0.into(), Vec3d::new(0.0, 0.0, 1.0).into()]
         };
 
         Vec3::orthonormalize(&mut arr);

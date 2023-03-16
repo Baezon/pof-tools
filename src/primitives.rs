@@ -39,6 +39,15 @@ pub(crate) const BOX_VERTS: [Vertex; 8] = [
 
 pub(crate) const BOX_INDICES: [u16; 24] = [0, 1, 1, 3, 3, 2, 2, 0, 0, 4, 1, 5, 3, 7, 2, 6, 4, 5, 5, 7, 7, 6, 6, 4u16];
 
+pub(crate) const SQUARE_VERTS: [Vertex; 4] = [
+    Vertex { position: (1.0, 1.0, 0.0), uv: (1.0, 0.0) },
+    Vertex { position: (-1.0, 1.0, 0.0), uv: (0.0, 0.0) },
+    Vertex { position: (-1.0, -1.0, 0.0), uv: (0.0, 1.0) },
+    Vertex { position: (1.0, -1.0, 0.0), uv: (1.0, 1.0) },
+];
+
+pub(crate) const SQUARE_INDICES: [u16; 6] = [1, 0, 2, 0, 3, 2];
+
 pub(crate) const OCTAHEDRON_VERTS: [Vertex; 6] = [
     Vertex { position: (-1.0, 0.0, 0.0), uv: (0.0, 0.0) },
     Vertex { position: (1.0, 0.0, 0.0), uv: (0.0, 0.0) },

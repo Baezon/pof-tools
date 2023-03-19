@@ -18,7 +18,7 @@ use pof::ObjectId;
 
 use crate::{
     ui_properties_panel::{IndexingButtonsResponse, PropertiesPanel},
-    GlArrowhead, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers, POF_TOOLS_VERSION,
+    GlArrowhead, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers, Graphics, POF_TOOLS_VERSION,
 };
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, PartialOrd, Ord)]
@@ -520,6 +520,7 @@ pub(crate) struct PofToolsGui {
     pub drag_start: Vec3d,
     pub drag_axis: DragAxis,
 
+    pub graphics: Graphics,
     pub buffer_objects: Vec<GlObjectBuffers>, // all the subobjects, conditionally rendered based on the current tree selection
     pub buffer_textures: HashMap<TextureId, SrgbTexture2d>, // map of tex ids to actual textures
     pub buffer_shield: Option<GlBufferedShield>, // the shield, similar to the above
@@ -540,7 +541,7 @@ impl std::ops::DerefMut for PofToolsGui {
     }
 }
 impl PofToolsGui {
-    pub fn new() -> Self {
+    pub fn new(display: &Display) -> Self {
         Self {
             model: Default::default(),
             model_loading_thread: Default::default(),
@@ -565,6 +566,7 @@ impl PofToolsGui {
             drag_start: Vec3d::ZERO,
             drag_axis: DragAxis::YZ,
             actually_dragging: false,
+            graphics: Graphics::init(display),
         }
     }
 

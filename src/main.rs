@@ -1564,7 +1564,7 @@ impl PofToolsGui {
             }
         };
         match self.ui_state.tree_view_selection {
-            TreeValue::Weapons(_) => {
+            TreeValue::Weapons(WeaponTreeValue::Header) => {
                 for (i, bank) in self.model.primary_weps.iter().enumerate() {
                     for (j, point) in bank.iter().enumerate() {
                         proximity_test(point.position, TreeValue::Weapons(WeaponTreeValue::PriBankPoint(i, j)));
@@ -1573,6 +1573,24 @@ impl PofToolsGui {
                 for (i, bank) in self.model.secondary_weps.iter().enumerate() {
                     for (j, point) in bank.iter().enumerate() {
                         proximity_test(point.position, TreeValue::Weapons(WeaponTreeValue::SecBankPoint(i, j)));
+                    }
+                }
+            }
+            TreeValue::Weapons(WeaponTreeValue::SecBank(_))
+            | TreeValue::Weapons(WeaponTreeValue::SecBankPoint(..))
+            | TreeValue::Weapons(WeaponTreeValue::SecHeader) => {
+                for (i, bank) in self.model.secondary_weps.iter().enumerate() {
+                    for (j, point) in bank.iter().enumerate() {
+                        proximity_test(point.position, TreeValue::Weapons(WeaponTreeValue::SecBankPoint(i, j)));
+                    }
+                }
+            }
+            TreeValue::Weapons(WeaponTreeValue::PriBank(_))
+            | TreeValue::Weapons(WeaponTreeValue::PriBankPoint(..))
+            | TreeValue::Weapons(WeaponTreeValue::PriHeader) => {
+                for (i, bank) in self.model.primary_weps.iter().enumerate() {
+                    for (j, point) in bank.iter().enumerate() {
+                        proximity_test(point.position, TreeValue::Weapons(WeaponTreeValue::PriBankPoint(i, j)));
                     }
                 }
             }
@@ -1755,7 +1773,7 @@ impl PofToolsGui {
                 );
             }
             TreeValue::Weapons(weapons_selection) => {
-                let mut secondary = false;
+                let mut only_secondaries_displayed = false;
                 let mut selected_bank = None;
                 let mut selected_point = None;
                 let mut selected_weapon_system = None;
@@ -1765,7 +1783,7 @@ impl PofToolsGui {
                         selected_weapon_system = Some(&model.primary_weps);
                     }
                     WeaponTreeValue::SecBank(bank) => {
-                        secondary = true;
+                        only_secondaries_displayed = true;
                         selected_bank = Some(bank);
                         selected_weapon_system = Some(&model.secondary_weps);
                     }
@@ -1775,7 +1793,7 @@ impl PofToolsGui {
                         selected_weapon_system = Some(&model.primary_weps);
                     }
                     WeaponTreeValue::SecBankPoint(bank, point) => {
-                        secondary = true;
+                        only_secondaries_displayed = true;
                         selected_bank = Some(bank);
                         selected_point = Some(point);
                         selected_weapon_system = Some(&model.secondary_weps);
@@ -1784,6 +1802,7 @@ impl PofToolsGui {
                         selected_weapon_system = Some(&model.primary_weps);
                     }
                     WeaponTreeValue::SecHeader => {
+                        only_secondaries_displayed = true;
                         selected_weapon_system = Some(&model.secondary_weps);
                     }
                     _ => {}
@@ -1805,11 +1824,15 @@ impl PofToolsGui {
                         weapon_bank.iter().enumerate().map(move |(point_idx, weapon_point)| {
                             let position = weapon_point.position;
 
-                            let secondary = bank_idx >= primary_banks || secondary;
-                            let radius = if (secondary
+                            // we're hovering a secondary if the bank is beyond the number of primary banks (because we're displaying everything and they were chained together)
+                            // or we're only displaying secondaries in the first place
+                            let hovered = (bank_idx >= primary_banks
                                 && hover_lollipop == Some(TreeValue::Weapons(WeaponTreeValue::SecBankPoint(bank_idx - primary_banks, point_idx))))
-                                || hover_lollipop == Some(TreeValue::Weapons(WeaponTreeValue::PriBankPoint(bank_idx, point_idx)))
-                            {
+                                || (only_secondaries_displayed
+                                    && hover_lollipop == Some(TreeValue::Weapons(WeaponTreeValue::SecBankPoint(bank_idx, point_idx))))
+                                || hover_lollipop == Some(TreeValue::Weapons(WeaponTreeValue::PriBankPoint(bank_idx, point_idx)));
+
+                            let radius = if hovered {
                                 model.header.max_radius * 0.06
                             } else {
                                 model.header.max_radius * 0.03

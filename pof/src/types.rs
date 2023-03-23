@@ -1961,6 +1961,9 @@ impl Model {
                     .special_points
                     .get(idx)
                     .map_or(false, |spec_point| spec_point.properties.len() > MAX_PROPERTIES_LEN),
+                Warning::InvalidDockParentSubmodel(idx) => self.docking_bays.get(idx).map_or(false, |dock| {
+                    properties_get_field(&dock.properties, "$parent_submodel").map_or(false, |name| self.get_obj_id_by_name(name).is_none())
+                }),
             };
 
             let existing_warning = self.warnings.contains(&warning);
@@ -2021,6 +2024,10 @@ impl Model {
 
                 if properties_get_field(&dock.properties, "$name").unwrap_or_default().len() > MAX_NAME_LEN {
                     self.warnings.insert(Warning::DockingBayNameTooLong(i));
+                }
+
+                if properties_get_field(&dock.properties, "$parent_submodel").map_or(false, |name| self.get_obj_id_by_name(name).is_none()) {
+                    self.warnings.insert(Warning::InvalidDockParentSubmodel(i));
                 }
             }
 
@@ -2675,6 +2682,7 @@ pub enum Warning {
     DuplicateDetailLevel(ObjectId),
     TooManyEyePoints,
     TooManyTextures,
+    InvalidDockParentSubmodel(usize),
 
     PathNameTooLong(usize),
     SpecialPointNameTooLong(usize),

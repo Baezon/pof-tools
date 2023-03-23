@@ -10,8 +10,8 @@ byteorder = "1.2"
 #dae-parser = {path = "dae-parser-0.8.3", features = ["nalgebra"]}
 dae-parser = {version = "0.8", features = ["nalgebra"]}
 walkdir = "2"
-nalgebra = "0.30.1"
-nalgebra-glm = "0.16"
+nalgebra = "0.31"
+nalgebra-glm = "0.17"
 # for... gltf
 gltf = "1.0"
 urlencoding = "2.1"

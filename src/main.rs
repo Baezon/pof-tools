@@ -33,7 +33,7 @@ use std::{
     collections::HashMap,
     f32::consts::PI,
     fs::File,
-    io::{Cursor, Read},
+    io::{Cursor, Read, Write},
     path::PathBuf,
     sync::mpsc::TryRecvError,
 };
@@ -619,13 +619,13 @@ fn main() {
     info!("Pof Tools {} - {}", POF_TOOLS_VERSION, chrono::Local::now());
 
     let event_loop = glutin::event_loop::EventLoopBuilder::with_user_event().build();
-    let mut pt_gui = PofToolsGui::new();
     let display = create_display(&event_loop);
+    let mut pt_gui = PofToolsGui::new(&display);
 
     // this creates the raw bytes from png, how i make the icon
-    // File::create("icon.raw")
+    // File::create("zforward.raw")
     //     .unwrap()
-    //     .write_all(&image::open("icon.png").unwrap().into_rgba8().to_vec());
+    //     .write_all(&image::open("zforward.png").unwrap().into_rgba8().to_vec());
 
     let mut args = std::env::args();
     args.next();
@@ -636,77 +636,6 @@ fn main() {
     pt_gui.start_loading_model(path);
 
     let model = &pt_gui.model;
-
-    // lots of graphics stuff to initialize
-    let default_material_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, DEFAULT_MAT_FRAGMENT_SHADER, None).unwrap();
-    let textured_material_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, TEXTURED_FRAGMENT_SHADER, None).unwrap();
-    let shield_shader = glium::Program::from_source(&display, DEFAULT_VERTEX_SHADER, SHIELD_FRAGMENT_SHADER, None).unwrap();
-    let wireframe_shader = glium::Program::from_source(&display, NO_NORMS_VERTEX_SHADER, WIRE_FRAGMENT_SHADER, None).unwrap();
-    let lollipop_stick_shader = glium::Program::from_source(&display, NO_NORMS_VERTEX_SHADER, LOLLIPOP_STICK_FRAGMENT_SHADER, None).unwrap();
-    let lollipop_shader = glium::Program::from_source(&display, LOLLIPOP_VERTEX_SHADER, LOLLIPOP_FRAGMENT_SHADER, None).unwrap();
-    let arrowhead_shader = glium::Program::from_source(&display, NO_NORMS_VERTEX_SHADER, LOLLIPOP_FRAGMENT_SHADER, None).unwrap();
-    let fov_shader = glium::Program::from_source(&display, FOV_VERTEX_SHADER, LOLLIPOP_STICK_FRAGMENT_SHADER, None).unwrap();
-
-    let mut default_material_draw_params = glium::DrawParameters {
-        depth: glium::Depth {
-            test: glium::draw_parameters::DepthTest::IfLess,
-            write: true,
-            ..Default::default()
-        },
-        line_width: Some(1.0),
-        backface_culling: glium::draw_parameters::BackfaceCullingMode::CullCounterClockwise,
-        ..Default::default()
-    };
-    let arrowhead_draw_params = glium::DrawParameters {
-        /* blend: glium::Blend {
-            color: glium::BlendingFunction::Addition,
-            alpha: glium::BlendingFunction::Addition,
-            ..Default::default(),
-        }, */
-        depth: glium::Depth {
-            test: glium::draw_parameters::DepthTest::Overwrite,
-            write: false,
-            ..Default::default()
-        },
-        ..default_material_draw_params.clone()
-    };
-    let shield_draw_params = glium::DrawParameters {
-        depth: glium::Depth {
-            test: glium::draw_parameters::DepthTest::IfLess,
-            write: true,
-            ..Default::default()
-        },
-        blend: glium::Blend::alpha_blending(),
-        backface_culling: glium::draw_parameters::BackfaceCullingMode::CullCounterClockwise,
-        ..Default::default()
-    };
-    let wireframe_params = glium::DrawParameters {
-        depth: glium::Depth {
-            test: glium::draw_parameters::DepthTest::Overwrite,
-            ..Default::default()
-        },
-        line_width: Some(1.0),
-        backface_culling: glium::draw_parameters::BackfaceCullingMode::CullingDisabled,
-        ..Default::default()
-    };
-    let mut lollipop_params = lollipop_params();
-    let lollipop_stick_params = lollipop_stick_params();
-    let lollipop_rev_depth_params = lollipop_rev_depth_params();
-    let drag_axis_params = drag_axis_params();
-
-    let circle_verts = glium::VertexBuffer::new(&display, &*primitives::CIRCLE_VERTS).unwrap();
-    let circle_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::LineLoop, &primitives::CIRCLE_INDICES).unwrap();
-
-    let box_verts = glium::VertexBuffer::new(&display, &primitives::BOX_VERTS).unwrap();
-    let box_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::LinesList, &primitives::BOX_INDICES).unwrap();
-
-    let icosphere_verts = glium::VertexBuffer::new(&display, &primitives::SPHERE_VERTS).unwrap();
-    let icosphere_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::TrianglesList, &primitives::SPHERE_INDICES).unwrap();
-
-    let arrowhead_verts = glium::VertexBuffer::new(&display, &primitives::ARROWHEAD_VERTS).unwrap();
-    let arrowhead_indices = glium::IndexBuffer::new(&display, glium::index::PrimitiveType::TrianglesList, &primitives::ARROWHEAD_INDICES).unwrap();
-
-    let frustum_verts = glium::VertexBuffer::new(&display, &primitives::FRUSTUM_VERTS).unwrap();
 
     pt_gui.camera_heading = 2.7;
     pt_gui.camera_pitch = -0.4;
@@ -790,6 +719,8 @@ fn main() {
 
                     let mut view_mat = glm::rotation(pt_gui.camera_pitch, &glm::vec3(1., 0., 0.)); // pitch
                     view_mat *= glm::rotation(pt_gui.camera_heading, &glm::vec3(0., 1., 0.)); // heading
+
+                    let rot_only_view_mat = view_mat;
 
                     // handle user interactions like rotating the camera
                     let rect = egui.egui_ctx.available_rect(); // the rectangle not covered by egui UI, i.e. the 3d viewport
@@ -956,6 +887,43 @@ fn main() {
                     // TIME TO RENDER STUFF =======================================================================================
                     //
 
+                    // start with the 'orient billboards', the text in the distance that says forward, left, etc
+                    for i in 0..6 {
+                        let mut matrix = rot_only_view_mat;
+                        match i {
+                            1 => matrix *= glm::rotation(std::f32::consts::PI, &glm::vec3(0.0, 1.0, 0.0)),
+                            2 => matrix *= glm::rotation(-std::f32::consts::FRAC_PI_2, &glm::vec3(0.0, 1.0, 0.0)),
+                            3 => matrix *= glm::rotation(std::f32::consts::FRAC_PI_2, &glm::vec3(0.0, 1.0, 0.0)),
+                            4 => matrix *= glm::rotation(-std::f32::consts::FRAC_PI_2, &glm::vec3(1.0, 0.0, 0.0)),
+                            5 => matrix *= glm::rotation(std::f32::consts::FRAC_PI_2, &glm::vec3(1.0, 0.0, 0.0)),
+                            _ => (),
+                        }
+
+                        if !pt_gui.camera_orthographic {
+                            matrix.append_translation_mut(&glm::vec3(0.0, 0.0, 0.001f32));
+                            matrix.prepend_translation_mut(&glm::vec3(0.0, 0.0, 10.0f32));
+                        } else {
+                            matrix.append_scaling_mut(pt_gui.model.header.max_radius * 0.3);
+                            matrix.prepend_translation_mut(&glm::vec3(0.0, 0.0, 6.5));
+                        }
+
+                        let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * matrix).into();
+                        let uniforms = glium::uniform! {
+                            vert_matrix: vert_matrix,
+                            tex: &pt_gui.graphics.orient_billboards[i],
+                        };
+
+                        target
+                            .draw(
+                                &pt_gui.graphics.square_verts,
+                                &pt_gui.graphics.square_indices,
+                                &pt_gui.graphics.flat_textured_material_shader,
+                                &uniforms,
+                                &pt_gui.graphics.orient_billboards_params,
+                            )
+                            .unwrap();
+                    }
+
                     // maybe redo lollipops and stuff
                     pt_gui.maybe_recalculate_3d_helpers(&display);
 
@@ -964,12 +932,13 @@ fn main() {
                     // brighten up the dark bits so wireframe is easier to see
                     let mut dark_color;
                     if pt_gui.display_mode == DisplayMode::Wireframe {
-                        default_material_draw_params.polygon_mode = glium::draw_parameters::PolygonMode::Line;
-                        default_material_draw_params.backface_culling = glium::draw_parameters::BackfaceCullingMode::CullingDisabled;
+                        pt_gui.graphics.default_material_draw_params.polygon_mode = glium::draw_parameters::PolygonMode::Line;
+                        pt_gui.graphics.default_material_draw_params.backface_culling = glium::draw_parameters::BackfaceCullingMode::CullingDisabled;
                         dark_color = [0.2, 0.2, 0.2f32];
                     } else {
-                        default_material_draw_params.polygon_mode = glium::draw_parameters::PolygonMode::Fill;
-                        default_material_draw_params.backface_culling = glium::draw_parameters::BackfaceCullingMode::CullCounterClockwise;
+                        pt_gui.graphics.default_material_draw_params.polygon_mode = glium::draw_parameters::PolygonMode::Fill;
+                        pt_gui.graphics.default_material_draw_params.backface_culling =
+                            glium::draw_parameters::BackfaceCullingMode::CullCounterClockwise;
                         dark_color = [0.01, 0.01, 0.01f32];
                     }
 
@@ -1040,9 +1009,9 @@ fn main() {
                                         .draw(
                                             (&buffer_obj.vertices, &buffer_obj.normals),
                                             indices,
-                                            &textured_material_shader,
+                                            &pt_gui.graphics.textured_material_shader,
                                             &uniforms,
-                                            &default_material_draw_params,
+                                            &pt_gui.graphics.default_material_draw_params,
                                         )
                                         .unwrap();
                                 } else {
@@ -1061,9 +1030,9 @@ fn main() {
                                         .draw(
                                             (&buffer_obj.vertices, &buffer_obj.normals),
                                             indices,
-                                            &default_material_shader,
+                                            &pt_gui.graphics.default_material_shader,
                                             &uniforms,
-                                            &default_material_draw_params,
+                                            &pt_gui.graphics.default_material_draw_params,
                                         )
                                         .unwrap();
                                 }
@@ -1108,9 +1077,9 @@ fn main() {
                                     .draw(
                                         (&insig_buffer.vertices, &insig_buffer.normals),
                                         &insig_buffer.indices,
-                                        &default_material_shader,
+                                        &pt_gui.graphics.default_material_shader,
                                         &uniforms,
-                                        &default_material_draw_params,
+                                        &pt_gui.graphics.default_material_draw_params,
                                     )
                                     .unwrap();
                             }
@@ -1135,7 +1104,13 @@ fn main() {
                             };
 
                             target
-                                .draw((&shield.vertices, &shield.normals), &shield.indices, &shield_shader, &uniforms, &shield_draw_params)
+                                .draw(
+                                    (&shield.vertices, &shield.normals),
+                                    &shield.indices,
+                                    &pt_gui.graphics.shield_shader,
+                                    &uniforms,
+                                    &pt_gui.graphics.shield_draw_params,
+                                )
                                 .unwrap();
 
                             //      DEBUG - Draw BSP node bounding boxes
@@ -1233,7 +1208,13 @@ fn main() {
                         };
 
                         target
-                            .draw(&box_verts, &box_indices, &wireframe_shader, &uniforms, &wireframe_params)
+                            .draw(
+                                &pt_gui.graphics.box_verts,
+                                &pt_gui.graphics.box_indices,
+                                &pt_gui.graphics.wireframe_shader,
+                                &uniforms,
+                                &pt_gui.graphics.wireframe_params,
+                            )
                             .unwrap();
                     }
 
@@ -1267,7 +1248,13 @@ fn main() {
                             };
 
                             target
-                                .draw(&circle_verts, &circle_indices, &wireframe_shader, &uniforms, &wireframe_params)
+                                .draw(
+                                    &pt_gui.graphics.circle_verts,
+                                    &pt_gui.graphics.circle_indices,
+                                    &pt_gui.graphics.wireframe_shader,
+                                    &uniforms,
+                                    &pt_gui.graphics.wireframe_params,
+                                )
                                 .unwrap();
                         }
                     }
@@ -1315,9 +1302,9 @@ fn main() {
                             .draw(
                                 &glium::VertexBuffer::new(&display, &[vert1, vert2]).unwrap(),
                                 glium::index::NoIndices(glium::index::PrimitiveType::LinesList),
-                                &lollipop_stick_shader,
+                                &pt_gui.graphics.lollipop_stick_shader,
                                 &uniforms,
-                                &drag_axis_params,
+                                &pt_gui.graphics.drag_axis_params,
                             )
                             .unwrap();
 
@@ -1329,9 +1316,9 @@ fn main() {
                             .draw(
                                 &glium::VertexBuffer::new(&display, &[vert3, vert4]).unwrap(),
                                 glium::index::NoIndices(glium::index::PrimitiveType::LinesList),
-                                &lollipop_stick_shader,
+                                &pt_gui.graphics.lollipop_stick_shader,
                                 &uniforms,
-                                &drag_axis_params,
+                                &pt_gui.graphics.drag_axis_params,
                             )
                             .unwrap();
                     }
@@ -1346,9 +1333,9 @@ fn main() {
                     if display_lollipops {
                         for lollipop_group in &pt_gui.lollipops {
                             if let TreeValue::Paths(_) = pt_gui.ui_state.tree_view_selection {
-                                lollipop_params.blend = glium::Blend::alpha_blending();
+                                pt_gui.graphics.lollipop_params.blend = glium::Blend::alpha_blending();
                             } else {
-                                lollipop_params.blend = ADDITIVE_BLEND;
+                                pt_gui.graphics.lollipop_params.blend = ADDITIVE_BLEND;
                             }
                             let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * view_mat).into();
 
@@ -1359,20 +1346,20 @@ fn main() {
 
                             target
                                 .draw(
-                                    (&icosphere_verts, lollipop_group.lolly_vertices.per_instance().unwrap()),
-                                    &icosphere_indices,
-                                    &lollipop_shader,
+                                    (&pt_gui.graphics.icosphere_verts, lollipop_group.lolly_vertices.per_instance().unwrap()),
+                                    &pt_gui.graphics.icosphere_indices,
+                                    &pt_gui.graphics.lollipop_shader,
                                     &uniforms,
-                                    &lollipop_params,
+                                    &pt_gui.graphics.lollipop_params,
                                 )
                                 .unwrap();
                             target
                                 .draw(
                                     &lollipop_group.stick_vertices,
                                     lollipop_group.stick_indices,
-                                    &lollipop_stick_shader,
+                                    &pt_gui.graphics.lollipop_stick_shader,
                                     &uniforms,
-                                    &lollipop_stick_params,
+                                    &pt_gui.graphics.lollipop_stick_params,
                                 )
                                 .unwrap();
 
@@ -1392,11 +1379,11 @@ fn main() {
 
                                 target
                                     .draw(
-                                        (&icosphere_verts, lollipop_group.lolly_vertices.per_instance().unwrap()),
-                                        &icosphere_indices,
-                                        &lollipop_shader,
+                                        (&pt_gui.graphics.icosphere_verts, lollipop_group.lolly_vertices.per_instance().unwrap()),
+                                        &pt_gui.graphics.icosphere_indices,
+                                        &pt_gui.graphics.lollipop_shader,
                                         &uniforms,
-                                        &lollipop_rev_depth_params,
+                                        &pt_gui.graphics.lollipop_rev_depth_params,
                                     )
                                     .unwrap();
                             }
@@ -1408,7 +1395,13 @@ fn main() {
                                 lollipop_color: arrowhead.color,
                             };
                             target
-                                .draw(&arrowhead_verts, &arrowhead_indices, &arrowhead_shader, &uniforms, &arrowhead_draw_params)
+                                .draw(
+                                    &pt_gui.graphics.arrowhead_verts,
+                                    &pt_gui.graphics.arrowhead_indices,
+                                    &pt_gui.graphics.arrowhead_shader,
+                                    &uniforms,
+                                    &pt_gui.graphics.arrowhead_draw_params,
+                                )
                                 .unwrap();
                         }
                     }
@@ -1612,7 +1605,7 @@ impl PofToolsGui {
             }
         };
         match self.ui_state.tree_view_selection {
-            TreeValue::Weapons(_) => {
+            TreeValue::Weapons(WeaponTreeValue::Header) => {
                 for (i, bank) in self.model.primary_weps.iter().enumerate() {
                     for (j, point) in bank.iter().enumerate() {
                         proximity_test(point.position, TreeValue::Weapons(WeaponTreeValue::PriBankPoint(i, j)));
@@ -1621,6 +1614,24 @@ impl PofToolsGui {
                 for (i, bank) in self.model.secondary_weps.iter().enumerate() {
                     for (j, point) in bank.iter().enumerate() {
                         proximity_test(point.position, TreeValue::Weapons(WeaponTreeValue::SecBankPoint(i, j)));
+                    }
+                }
+            }
+            TreeValue::Weapons(WeaponTreeValue::SecBank(_))
+            | TreeValue::Weapons(WeaponTreeValue::SecBankPoint(..))
+            | TreeValue::Weapons(WeaponTreeValue::SecHeader) => {
+                for (i, bank) in self.model.secondary_weps.iter().enumerate() {
+                    for (j, point) in bank.iter().enumerate() {
+                        proximity_test(point.position, TreeValue::Weapons(WeaponTreeValue::SecBankPoint(i, j)));
+                    }
+                }
+            }
+            TreeValue::Weapons(WeaponTreeValue::PriBank(_))
+            | TreeValue::Weapons(WeaponTreeValue::PriBankPoint(..))
+            | TreeValue::Weapons(WeaponTreeValue::PriHeader) => {
+                for (i, bank) in self.model.primary_weps.iter().enumerate() {
+                    for (j, point) in bank.iter().enumerate() {
+                        proximity_test(point.position, TreeValue::Weapons(WeaponTreeValue::PriBankPoint(i, j)));
                     }
                 }
             }
@@ -1711,48 +1722,48 @@ impl PofToolsGui {
                             buffer.tint_val = 0.2;
                         }
                     }
+                }
 
-                    let radius = model.sub_objects[obj_id].radius;
-                    let size = 0.05 * radius;
-                    let pos = model.get_total_subobj_offset(obj_id);
+                let radius = model.sub_objects[obj_id].radius;
+                let size = 0.05 * radius;
+                let pos = model.get_total_subobj_offset(obj_id);
 
-                    let mut ball_origin = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_POINT_COLOR);
-                    // Origin lollipop (ball only)
-                    ball_origin.push(pos, Vec3d::ZERO, size);
-                    let ball_origin = ball_origin.finish(display);
-                    self.lollipops = vec![ball_origin];
+                let mut ball_origin = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_POINT_COLOR);
+                // Origin lollipop (ball only)
+                ball_origin.push(pos, Vec3d::ZERO, size);
+                let ball_origin = ball_origin.finish(display);
+                self.lollipops = vec![ball_origin];
 
-                    if let Some((uvec, fvec)) = model.sub_objects[obj_id].uvec_fvec() {
-                        // Set up arrowhead sticks
-                        let stick_length = 2. * radius;
-                        // Blue lollipop (stick only) for uvec
-                        let mut stick_uvec = GlLollipopsBuilder::new(UVEC_COLOR);
-                        stick_uvec.push(pos, uvec * stick_length, 0.);
-                        let stick_uvec = stick_uvec.finish(display);
-                        self.lollipops.push(stick_uvec);
-                        // Green lollipop (stick only) for fvec
-                        let mut stick_fvec = GlLollipopsBuilder::new(FVEC_COLOR);
-                        stick_fvec.push(pos, fvec * stick_length, 0.);
-                        let stick_fvec = stick_fvec.finish(display);
-                        self.lollipops.push(stick_fvec);
-                        // Set up arrowheads
-                        let uvec_pos = pos + uvec * stick_length;
-                        let fvec_pos = pos + fvec * stick_length;
-                        let uvec_matrix = {
-                            let mut m = glm::translation::<f32>(&uvec_pos.into());
-                            m *= uvec.to_rotation_matrix();
-                            m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
-                            m
-                        };
-                        let fvec_matrix = {
-                            let mut m = glm::translation::<f32>(&fvec_pos.into());
-                            m *= fvec.to_rotation_matrix();
-                            m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
-                            m
-                        };
-                        self.arrowheads.push(GlArrowhead { color: UVEC_COLOR, transform: uvec_matrix });
-                        self.arrowheads.push(GlArrowhead { color: FVEC_COLOR, transform: fvec_matrix });
-                    }
+                if let Some((uvec, fvec)) = model.sub_objects[obj_id].uvec_fvec() {
+                    // Set up arrowhead sticks
+                    let stick_length = 2. * radius;
+                    // Blue lollipop (stick only) for uvec
+                    let mut stick_uvec = GlLollipopsBuilder::new(UVEC_COLOR);
+                    stick_uvec.push(pos, uvec * stick_length, 0.);
+                    let stick_uvec = stick_uvec.finish(display);
+                    self.lollipops.push(stick_uvec);
+                    // Green lollipop (stick only) for fvec
+                    let mut stick_fvec = GlLollipopsBuilder::new(FVEC_COLOR);
+                    stick_fvec.push(pos, fvec * stick_length, 0.);
+                    let stick_fvec = stick_fvec.finish(display);
+                    self.lollipops.push(stick_fvec);
+                    // Set up arrowheads
+                    let uvec_pos = pos + uvec * stick_length;
+                    let fvec_pos = pos + fvec * stick_length;
+                    let uvec_matrix = {
+                        let mut m = glm::translation::<f32>(&uvec_pos.into());
+                        m *= uvec.to_rotation_matrix();
+                        m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
+                        m
+                    };
+                    let fvec_matrix = {
+                        let mut m = glm::translation::<f32>(&fvec_pos.into());
+                        m *= fvec.to_rotation_matrix();
+                        m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
+                        m
+                    };
+                    self.arrowheads.push(GlArrowhead { color: UVEC_COLOR, transform: uvec_matrix });
+                    self.arrowheads.push(GlArrowhead { color: FVEC_COLOR, transform: fvec_matrix });
                 }
             }
             TreeValue::Textures(TextureTreeValue::Texture(tex)) => {
@@ -1803,7 +1814,7 @@ impl PofToolsGui {
                 );
             }
             TreeValue::Weapons(weapons_selection) => {
-                let mut secondary = false;
+                let mut only_secondaries_displayed = false;
                 let mut selected_bank = None;
                 let mut selected_point = None;
                 let mut selected_weapon_system = None;
@@ -1813,7 +1824,7 @@ impl PofToolsGui {
                         selected_weapon_system = Some(&model.primary_weps);
                     }
                     WeaponTreeValue::SecBank(bank) => {
-                        secondary = true;
+                        only_secondaries_displayed = true;
                         selected_bank = Some(bank);
                         selected_weapon_system = Some(&model.secondary_weps);
                     }
@@ -1823,7 +1834,7 @@ impl PofToolsGui {
                         selected_weapon_system = Some(&model.primary_weps);
                     }
                     WeaponTreeValue::SecBankPoint(bank, point) => {
-                        secondary = true;
+                        only_secondaries_displayed = true;
                         selected_bank = Some(bank);
                         selected_point = Some(point);
                         selected_weapon_system = Some(&model.secondary_weps);
@@ -1832,6 +1843,7 @@ impl PofToolsGui {
                         selected_weapon_system = Some(&model.primary_weps);
                     }
                     WeaponTreeValue::SecHeader => {
+                        only_secondaries_displayed = true;
                         selected_weapon_system = Some(&model.secondary_weps);
                     }
                     _ => {}
@@ -1853,11 +1865,15 @@ impl PofToolsGui {
                         weapon_bank.iter().enumerate().map(move |(point_idx, weapon_point)| {
                             let position = weapon_point.position;
 
-                            let secondary = bank_idx >= primary_banks || secondary;
-                            let radius = if (secondary
+                            // we're hovering a secondary if the bank is beyond the number of primary banks (because we're displaying everything and they were chained together)
+                            // or we're only displaying secondaries in the first place
+                            let hovered = (bank_idx >= primary_banks
                                 && hover_lollipop == Some(TreeValue::Weapons(WeaponTreeValue::SecBankPoint(bank_idx - primary_banks, point_idx))))
-                                || hover_lollipop == Some(TreeValue::Weapons(WeaponTreeValue::PriBankPoint(bank_idx, point_idx)))
-                            {
+                                || (only_secondaries_displayed
+                                    && hover_lollipop == Some(TreeValue::Weapons(WeaponTreeValue::SecBankPoint(bank_idx, point_idx))))
+                                || hover_lollipop == Some(TreeValue::Weapons(WeaponTreeValue::PriBankPoint(bank_idx, point_idx)));
+
+                            let radius = if hovered {
                                 model.header.max_radius * 0.06
                             } else {
                                 model.header.max_radius * 0.03
@@ -2137,51 +2153,160 @@ const LOLLIPOP_UNSELECTED_PATH_COLOR: [f32; 4] = [0.3, 0.3, 0.3, 0.005];
 const LOLLIPOP_SELECTED_PATH_COLOR: [f32; 4] = [0.15, 0.15, 1.0, 0.05];
 const LOLLIPOP_SELECTED_PATH_POINT_COLOR: [f32; 4] = [1.0, 0.15, 0.15, 0.1];
 
-fn lollipop_params() -> glium::DrawParameters<'static> {
-    glium::DrawParameters {
-        depth: glium::Depth {
-            test: glium::draw_parameters::DepthTest::IfLess,
-            ..Default::default()
-        },
-        blend: ADDITIVE_BLEND,
-        backface_culling: glium::draw_parameters::BackfaceCullingMode::CullingDisabled,
-        ..Default::default()
-    }
-}
+struct Graphics {
+    circle_verts: VertexBuffer<Vertex>,
+    circle_indices: IndexBuffer<u16>,
+    square_verts: VertexBuffer<Vertex>,
+    square_indices: IndexBuffer<u16>,
+    box_verts: VertexBuffer<Vertex>,
+    box_indices: IndexBuffer<u16>,
+    icosphere_verts: VertexBuffer<Vertex>,
+    icosphere_indices: IndexBuffer<u16>,
+    arrowhead_verts: VertexBuffer<Vertex>,
+    arrowhead_indices: IndexBuffer<u16>,
 
-fn lollipop_stick_params() -> glium::DrawParameters<'static> {
-    glium::DrawParameters {
-        depth: glium::Depth {
-            test: glium::draw_parameters::DepthTest::Overwrite,
-            write: false,
-            ..Default::default()
-        },
-        line_width: Some(2.0),
-        backface_culling: glium::draw_parameters::BackfaceCullingMode::CullingDisabled,
-        ..Default::default()
-    }
-}
+    default_material_draw_params: glium::DrawParameters<'static>,
+    arrowhead_draw_params: glium::DrawParameters<'static>,
+    shield_draw_params: glium::DrawParameters<'static>,
+    wireframe_params: glium::DrawParameters<'static>,
+    lollipop_params: glium::DrawParameters<'static>,
+    lollipop_stick_params: glium::DrawParameters<'static>,
+    lollipop_rev_depth_params: glium::DrawParameters<'static>,
+    drag_axis_params: glium::DrawParameters<'static>,
+    orient_billboards_params: glium::DrawParameters<'static>,
+    /// f, b, l, r, u, d
+    orient_billboards: [SrgbTexture2d; 6],
 
-fn lollipop_rev_depth_params() -> glium::DrawParameters<'static> {
-    glium::DrawParameters {
-        depth: glium::Depth {
-            test: glium::draw_parameters::DepthTest::IfMore,
-            ..Default::default()
-        },
-        blend: ADDITIVE_BLEND,
-        ..Default::default()
-    }
+    default_material_shader: glium::Program,
+    textured_material_shader: glium::Program,
+    flat_textured_material_shader: glium::Program,
+    shield_shader: glium::Program,
+    wireframe_shader: glium::Program,
+    lollipop_stick_shader: glium::Program,
+    lollipop_shader: glium::Program,
+    arrowhead_shader: glium::Program,
 }
+impl Graphics {
+    fn init(display: &Display) -> Self {
+        fn load_img(display: &Display, bytes: &[u8]) -> SrgbTexture2d {
+            let image = image::load(Cursor::new(bytes), image::ImageFormat::Png).unwrap().to_rgba8();
+            let image_dimensions = image.dimensions();
+            let image_raw = image.into_raw();
+            SrgbTexture2d::new(display, glium::texture::RawImage2d::from_raw_rgba(image_raw, image_dimensions)).unwrap()
+        }
 
-fn drag_axis_params() -> glium::DrawParameters<'static> {
-    glium::DrawParameters {
-        depth: glium::Depth {
-            test: glium::draw_parameters::DepthTest::IfLess,
-            write: false,
-            ..Default::default()
-        },
-        line_width: Some(2.0),
-        ..Default::default()
+        Graphics {
+            circle_verts: glium::VertexBuffer::new(display, &*primitives::CIRCLE_VERTS).unwrap(),
+            circle_indices: glium::IndexBuffer::new(display, glium::index::PrimitiveType::LineLoop, &primitives::CIRCLE_INDICES).unwrap(),
+            square_verts: glium::VertexBuffer::new(display, &primitives::SQUARE_VERTS).unwrap(),
+            square_indices: glium::IndexBuffer::new(display, glium::index::PrimitiveType::TrianglesList, &primitives::SQUARE_INDICES).unwrap(),
+            box_verts: glium::VertexBuffer::new(display, &primitives::BOX_VERTS).unwrap(),
+            box_indices: glium::IndexBuffer::new(display, glium::index::PrimitiveType::LinesList, &primitives::BOX_INDICES).unwrap(),
+            icosphere_verts: glium::VertexBuffer::new(display, &primitives::SPHERE_VERTS).unwrap(),
+            icosphere_indices: glium::IndexBuffer::new(display, glium::index::PrimitiveType::TrianglesList, &primitives::SPHERE_INDICES).unwrap(),
+            arrowhead_verts: glium::VertexBuffer::new(display, &primitives::ARROWHEAD_VERTS).unwrap(),
+            arrowhead_indices: glium::IndexBuffer::new(display, glium::index::PrimitiveType::TrianglesList, &primitives::ARROWHEAD_INDICES).unwrap(),
+            default_material_draw_params: glium::DrawParameters {
+                depth: glium::Depth {
+                    test: glium::draw_parameters::DepthTest::IfLess,
+                    write: true,
+                    ..Default::default()
+                },
+                line_width: Some(1.0),
+                backface_culling: glium::draw_parameters::BackfaceCullingMode::CullCounterClockwise,
+                ..Default::default()
+            },
+            arrowhead_draw_params: glium::DrawParameters {
+                depth: glium::Depth {
+                    test: glium::draw_parameters::DepthTest::Overwrite,
+                    write: false,
+                    ..Default::default()
+                },
+                line_width: Some(1.0),
+                backface_culling: glium::draw_parameters::BackfaceCullingMode::CullCounterClockwise,
+                ..Default::default()
+            },
+            shield_draw_params: glium::DrawParameters {
+                depth: glium::Depth {
+                    test: glium::draw_parameters::DepthTest::IfLess,
+                    write: true,
+                    ..Default::default()
+                },
+                blend: glium::Blend::alpha_blending(),
+                backface_culling: glium::draw_parameters::BackfaceCullingMode::CullCounterClockwise,
+                ..Default::default()
+            },
+            wireframe_params: glium::DrawParameters {
+                depth: glium::Depth {
+                    test: glium::draw_parameters::DepthTest::Overwrite,
+                    ..Default::default()
+                },
+                line_width: Some(1.0),
+                backface_culling: glium::draw_parameters::BackfaceCullingMode::CullingDisabled,
+                ..Default::default()
+            },
+            lollipop_params: glium::DrawParameters {
+                depth: glium::Depth {
+                    test: glium::draw_parameters::DepthTest::IfLess,
+                    ..Default::default()
+                },
+                blend: ADDITIVE_BLEND,
+                backface_culling: glium::draw_parameters::BackfaceCullingMode::CullingDisabled,
+                ..Default::default()
+            },
+            lollipop_stick_params: glium::DrawParameters {
+                depth: glium::Depth {
+                    test: glium::draw_parameters::DepthTest::Overwrite,
+                    write: false,
+                    ..Default::default()
+                },
+                line_width: Some(2.0),
+                backface_culling: glium::draw_parameters::BackfaceCullingMode::CullingDisabled,
+                ..Default::default()
+            },
+            lollipop_rev_depth_params: glium::DrawParameters {
+                depth: glium::Depth {
+                    test: glium::draw_parameters::DepthTest::IfMore,
+                    ..Default::default()
+                },
+                blend: ADDITIVE_BLEND,
+                ..Default::default()
+            },
+            drag_axis_params: glium::DrawParameters {
+                depth: glium::Depth {
+                    test: glium::draw_parameters::DepthTest::IfLess,
+                    write: false,
+                    ..Default::default()
+                },
+                line_width: Some(2.0),
+                ..Default::default()
+            },
+            orient_billboards_params: glium::DrawParameters {
+                depth: glium::Depth {
+                    test: glium::draw_parameters::DepthTest::IfLess,
+                    write: false,
+                    ..Default::default()
+                },
+                backface_culling: glium::draw_parameters::BackfaceCullingMode::CullCounterClockwise,
+                ..Default::default()
+            },
+            orient_billboards: [
+                load_img(display, include_bytes!("zforward.png")),
+                load_img(display, include_bytes!("zbackward.png")),
+                load_img(display, include_bytes!("xleft.png")),
+                load_img(display, include_bytes!("xright.png")),
+                load_img(display, include_bytes!("yup.png")),
+                load_img(display, include_bytes!("ydown.png")),
+            ],
+            default_material_shader: glium::Program::from_source(display, DEFAULT_VERTEX_SHADER, DEFAULT_MAT_FRAGMENT_SHADER, None).unwrap(),
+            textured_material_shader: glium::Program::from_source(display, DEFAULT_VERTEX_SHADER, TEXTURED_FRAGMENT_SHADER, None).unwrap(),
+            flat_textured_material_shader: glium::Program::from_source(display, NO_NORMS_VERTEX_SHADER, FLAT_TEXTURED_FRAGMENT_SHADER, None).unwrap(),
+            shield_shader: glium::Program::from_source(display, DEFAULT_VERTEX_SHADER, SHIELD_FRAGMENT_SHADER, None).unwrap(),
+            wireframe_shader: glium::Program::from_source(display, NO_NORMS_VERTEX_SHADER, WIRE_FRAGMENT_SHADER, None).unwrap(),
+            lollipop_stick_shader: glium::Program::from_source(display, NO_NORMS_VERTEX_SHADER, LOLLIPOP_STICK_FRAGMENT_SHADER, None).unwrap(),
+            lollipop_shader: glium::Program::from_source(display, LOLLIPOP_VERTEX_SHADER, LOLLIPOP_FRAGMENT_SHADER, None).unwrap(),
+            arrowhead_shader: glium::Program::from_source(display, NO_NORMS_VERTEX_SHADER, LOLLIPOP_FRAGMENT_SHADER, None).unwrap(),
+        }
     }
 }
 
@@ -2229,11 +2354,31 @@ const NO_NORMS_VERTEX_SHADER: &str = r#"
 #version 140
 
 in vec3 position;
+in vec2 uv;
 
 uniform mat4 vert_matrix;
 
+out vec2 v_uv;
+
 void main() {
+    v_uv = uv;
     gl_Position = vert_matrix * vec4(position, 1.0);
+}
+"#;
+
+const FLAT_TEXTURED_FRAGMENT_SHADER: &str = r#"
+#version 140
+
+in vec2 v_uv;
+
+out vec4 color;
+
+uniform sampler2D tex;
+
+void main() {
+    vec4 tex_color = texture(tex, v_uv);
+
+    color = tex_color;
 }
 "#;
 

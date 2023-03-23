@@ -4,8 +4,8 @@ use glium::{
     Display,
 };
 use pof::{
-    Dock, Error, EyePoint, GlowPoint, GlowPointBank, Model, Path, PathPoint, SpecialPoint, SubObject, TextureId, ThrusterBank, ThrusterGlow, Turret,
-    Vec3d, Version, Warning, WeaponHardpoint,
+    properties_get_field, Dock, Error, EyePoint, GlowPoint, GlowPointBank, Model, Path, PathPoint, SpecialPoint, SubObject, TextureId, ThrusterBank,
+    ThrusterGlow, Turret, Vec3d, Version, Warning, WeaponHardpoint,
 };
 use std::{
     collections::HashMap,
@@ -18,7 +18,7 @@ use pof::ObjectId;
 
 use crate::{
     ui_properties_panel::{IndexingButtonsResponse, PropertiesPanel},
-    GlArrowhead, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers, POF_TOOLS_VERSION,
+    GlArrowhead, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers, Graphics, POF_TOOLS_VERSION,
 };
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, PartialOrd, Ord)]
@@ -95,7 +95,7 @@ impl TreeValue {
     }
 
     // returns what, if any, tree_value best corresponds to a given warning
-    fn from_warning(warning: Warning) -> Option<TreeValue> {
+    fn from_warning(warning: Warning, model: &Model) -> Option<TreeValue> {
         match warning {
             Warning::RadiusTooSmall(None) => Some(TreeValue::Header),
             Warning::BBoxTooSmall(None) => Some(TreeValue::Header),
@@ -104,7 +104,7 @@ impl TreeValue {
             Warning::BBoxTooSmall(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
             Warning::InvertedBBox(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
             Warning::SubObjectTranslationInvalidVersion(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
-            Warning::UntexturedPolygons => None,
+            Warning::UntexturedPolygons => Some(TreeValue::Textures(TextureTreeValue::tex(model.untextured_idx))),
             Warning::DockingBayWithoutPath(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(idx))),
             Warning::ThrusterPropertiesInvalidVersion(idx) => Some(TreeValue::Thrusters(ThrusterTreeValue::Bank(idx))),
             Warning::WeaponOffsetInvalidVersion { primary, bank, point } => {
@@ -129,6 +129,7 @@ impl TreeValue {
             Warning::DockingBayPropertiesTooLong(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(idx))),
             Warning::GlowBankPropertiesTooLong(idx) => Some(TreeValue::Glows(GlowTreeValue::Bank(idx))),
             Warning::SpecialPointPropertiesTooLong(idx) => Some(TreeValue::SpecialPoints(SpecialPointTreeValue::Point(idx))),
+            Warning::InvalidDockParentSubmodel(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(idx))),
         }
     }
 
@@ -519,6 +520,7 @@ pub(crate) struct PofToolsGui {
     pub drag_start: Vec3d,
     pub drag_axis: DragAxis,
 
+    pub graphics: Graphics,
     pub buffer_objects: Vec<GlObjectBuffers>, // all the subobjects, conditionally rendered based on the current tree selection
     pub buffer_textures: HashMap<TextureId, SrgbTexture2d>, // map of tex ids to actual textures
     pub buffer_shield: Option<GlBufferedShield>, // the shield, similar to the above
@@ -539,7 +541,7 @@ impl std::ops::DerefMut for PofToolsGui {
     }
 }
 impl PofToolsGui {
-    pub fn new() -> Self {
+    pub fn new(display: &Display) -> Self {
         Self {
             model: Default::default(),
             model_loading_thread: Default::default(),
@@ -564,6 +566,7 @@ impl PofToolsGui {
             drag_start: Vec3d::ZERO,
             drag_axis: DragAxis::YZ,
             actually_dragging: false,
+            graphics: Graphics::init(display),
         }
     }
 
@@ -610,7 +613,7 @@ impl UiState {
                     }
                     _ => (),
                 }
-            } else if let Some(warning_tree_value) = TreeValue::from_warning(*warning) {
+            } else if let Some(warning_tree_value) = TreeValue::from_warning(*warning, model) {
                 if tree_value == warning_tree_value || tree_value.is_ancestor_of(warning_tree_value) {
                     return text.color(WARNING_YELLOW);
                 }
@@ -1171,6 +1174,16 @@ impl PofToolsGui {
                                 Warning::DuplicateDetailLevel(id) => {
                                     format!("⚠ Subobject '{}' belongs to more than one detail level", self.model.sub_objects[id].name)
                                 }
+                                Warning::InvalidDockParentSubmodel(idx) => {
+                                    let dock_name = self.model.docking_bays[idx]
+                                        .get_name()
+                                        .map_or(format!("Docking bay {}", idx), |name| format!("Docking bay '{}'", name));
+                                    format!(
+                                        "⚠ Could not find parent submodel '{}' for {}",
+                                        properties_get_field(&self.model.docking_bays[idx].properties, "$parent_submodel").unwrap(),
+                                        dock_name
+                                    )
+                                }
                                 Warning::PathNameTooLong(_)
                                 | Warning::SubObjectNameTooLong(_)
                                 | Warning::SpecialPointNameTooLong(_)
@@ -1227,7 +1240,7 @@ impl PofToolsGui {
                             let text = RichText::new(str).text_style(TextStyle::Button).color(WARNING_YELLOW);
                             if first_warning {
                                 ui.horizontal(|ui| {
-                                    if let Some(tree_val) = TreeValue::from_warning(warning) {
+                                    if let Some(tree_val) = TreeValue::from_warning(warning, &self.model) {
                                         if ui.selectable_label(false, text).clicked() {
                                             new_tree_val = Some(tree_val);
                                         }
@@ -1253,7 +1266,7 @@ impl PofToolsGui {
                                     });
                                 });
                                 first_warning = false;
-                            } else if let Some(tree_val) = TreeValue::from_warning(warning) {
+                            } else if let Some(tree_val) = TreeValue::from_warning(warning, &self.model) {
                                 if ui.selectable_label(false, text).clicked() {
                                     new_tree_val = Some(tree_val);
                                 }

@@ -1416,36 +1416,30 @@ fn main() {
                                 .and_then(|str| str.parse::<f32>().ok())
                                 .unwrap_or(360.0);
 
-                            let turret_idx = pt_gui
-                                .model
-                                .turrets
-                                .iter()
-                                .enumerate()
-                                .find(|(_, turret)| turret.base_obj == id)
-                                .unwrap()
-                                .0;
-                            let mut turret_mat = pt_gui.model.turret_matrix(turret_idx);
-                            let offset = pt_gui.model.get_total_subobj_offset(id);
-                            turret_mat.append_translation_mut(&offset.into());
-                            let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * view_mat * turret_mat).into();
-                            let uniforms = glium::uniform! {
-                                vert_matrix: vert_matrix,
-                                world_offset: [offset.x, offset.y, offset.z],
-                                scale: pt_gui.model.header.max_radius * 0.4,
-                                fov: val * 0.5 * PI / 180.0,
-                                max_fov: (90.0 - max_fov) * PI / 180.0,
-                                base_fov: base_fov * 0.5 * PI / 180.0,
-                                lollipop_color: [1.0, 0.0, 0.0, 1.0f32],
-                            };
-                            target
-                                .draw(
-                                    &frustum_verts,
-                                    glium::index::NoIndices(glium::index::PrimitiveType::LinesList),
-                                    &fov_shader,
-                                    &uniforms,
-                                    &lollipop_stick_params,
-                                )
-                                .unwrap();
+                            if let Some((turret_idx, _)) = pt_gui.model.turrets.iter().enumerate().find(|(_, turret)| turret.base_obj == id) {
+                                let mut turret_mat = pt_gui.model.turret_matrix(turret_idx);
+                                let offset = pt_gui.model.get_total_subobj_offset(id);
+                                turret_mat.append_translation_mut(&offset.into());
+                                let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * view_mat * turret_mat).into();
+                                let uniforms = glium::uniform! {
+                                    vert_matrix: vert_matrix,
+                                    world_offset: [offset.x, offset.y, offset.z],
+                                    scale: pt_gui.model.header.max_radius * 0.4,
+                                    fov: val * 0.5 * PI / 180.0,
+                                    max_fov: (90.0 - max_fov) * PI / 180.0,
+                                    base_fov: base_fov * 0.5 * PI / 180.0,
+                                    lollipop_color: [1.0, 0.0, 0.0, 1.0f32],
+                                };
+                                target
+                                    .draw(
+                                        &pt_gui.graphics.frustum_verts,
+                                        glium::index::NoIndices(glium::index::PrimitiveType::LinesList),
+                                        &pt_gui.graphics.fov_shader,
+                                        &uniforms,
+                                        &pt_gui.graphics.lollipop_stick_params,
+                                    )
+                                    .unwrap();
+                            }
                         }
                     }
 
@@ -2164,6 +2158,7 @@ struct Graphics {
     icosphere_indices: IndexBuffer<u16>,
     arrowhead_verts: VertexBuffer<Vertex>,
     arrowhead_indices: IndexBuffer<u16>,
+    frustum_verts: VertexBuffer<Vertex>,
 
     default_material_draw_params: glium::DrawParameters<'static>,
     arrowhead_draw_params: glium::DrawParameters<'static>,
@@ -2185,6 +2180,7 @@ struct Graphics {
     lollipop_stick_shader: glium::Program,
     lollipop_shader: glium::Program,
     arrowhead_shader: glium::Program,
+    fov_shader: glium::Program,
 }
 impl Graphics {
     fn init(display: &Display) -> Self {
@@ -2206,6 +2202,7 @@ impl Graphics {
             icosphere_indices: glium::IndexBuffer::new(display, glium::index::PrimitiveType::TrianglesList, &primitives::SPHERE_INDICES).unwrap(),
             arrowhead_verts: glium::VertexBuffer::new(display, &primitives::ARROWHEAD_VERTS).unwrap(),
             arrowhead_indices: glium::IndexBuffer::new(display, glium::index::PrimitiveType::TrianglesList, &primitives::ARROWHEAD_INDICES).unwrap(),
+            frustum_verts: glium::VertexBuffer::new(display, &primitives::FRUSTUM_VERTS).unwrap(),
             default_material_draw_params: glium::DrawParameters {
                 depth: glium::Depth {
                     test: glium::draw_parameters::DepthTest::IfLess,
@@ -2306,6 +2303,7 @@ impl Graphics {
             lollipop_stick_shader: glium::Program::from_source(display, NO_NORMS_VERTEX_SHADER, LOLLIPOP_STICK_FRAGMENT_SHADER, None).unwrap(),
             lollipop_shader: glium::Program::from_source(display, LOLLIPOP_VERTEX_SHADER, LOLLIPOP_FRAGMENT_SHADER, None).unwrap(),
             arrowhead_shader: glium::Program::from_source(display, NO_NORMS_VERTEX_SHADER, LOLLIPOP_FRAGMENT_SHADER, None).unwrap(),
+            fov_shader: glium::Program::from_source(display, FOV_VERTEX_SHADER, LOLLIPOP_STICK_FRAGMENT_SHADER, None).unwrap(),
         }
     }
 }

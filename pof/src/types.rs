@@ -2634,7 +2634,11 @@ impl Model {
             [turret.normal.0.into(), Vec3d::new(0.0, 0.0, 1.0).into()]
         };
 
-        Vec3::orthonormalize(&mut arr);
+        if Vec3::orthonormalize(&mut arr) == 1 {
+            // mustve chosen +z as the fvec...
+            arr = [turret.normal.0.into(), Vec3d::new(0.0, 1.0, 0.0).into()];
+            Vec3::orthonormalize(&mut arr);
+        }
         let [uvec, fvec] = arr;
         let rvec = uvec.cross(&fvec);
         let mat = TMat3::from_columns(&[rvec, uvec, fvec]);

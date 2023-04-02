@@ -1172,9 +1172,11 @@ impl PofToolsGui {
                     }
                     ui.label(text);
                     if ui.add(egui::TextEdit::singleline(&mut self.model.sub_objects[id].name)).changed() {
-                        self.model.recheck_warnings(One(Warning::SubObjectNameTooLong(id)));
-                        self.model.recheck_errors(One(Error::UnnamedSubObject(id)));
-                        self.model.recheck_errors(One(Error::DuplicateSubobjectName(id)));
+                        // self.model.recheck_warnings(One(Warning::SubObjectNameTooLong(id)));
+                        // self.model.recheck_errors(One(Error::UnnamedSubObject(id)));
+                        // self.model.recheck_errors(One(Error::DuplicateSubobjectName(id)));
+                        // FIX
+                        self.model.recheck_errors(All);
                         self.model.recalc_semantic_name_links();
                     }
                 } else {
@@ -2450,8 +2452,10 @@ impl PofToolsGui {
                         .add(egui::TextEdit::multiline(&mut self.model.paths[num].name).desired_rows(1))
                         .changed()
                     {
-                        self.model.recheck_warnings(One(Warning::DuplicatePathName(num)));
-                        self.model.recheck_warnings(One(Warning::PathNameTooLong(num)));
+                        // self.model.recheck_warnings(One(Warning::DuplicatePathName(num)));
+                        // self.model.recheck_warnings(One(Warning::PathNameTooLong(num)));
+                        // FIX
+                        self.model.recheck_warnings(All);
                     };
                 } else {
                     ui.add_enabled(false, egui::TextEdit::multiline(name).desired_rows(1));

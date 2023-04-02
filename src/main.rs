@@ -31,7 +31,7 @@ use simplelog::*;
 use std::{
     collections::HashMap,
     fs::File,
-    io::{Cursor, Read, Write},
+    io::{Cursor, Read},
     path::PathBuf,
     sync::mpsc::TryRecvError,
 };
@@ -722,11 +722,11 @@ fn main() {
 
                     // handle user interactions like rotating the camera
                     let rect = egui.egui_ctx.available_rect(); // the rectangle not covered by egui UI, i.e. the 3d viewport
+                    let input = egui.egui_ctx.input();
+                    let mouse_pos = input.pointer.hover_pos();
+                    let mouse_in_3d_viewport = mouse_pos.map_or(false, |hover_pos| rect.contains(hover_pos));
                     if rect.is_positive() {
-                        let input = egui.egui_ctx.input();
-                        let mouse_pos = input.pointer.hover_pos();
                         let last_click_pos = input.pointer.press_origin();
-                        let in_3d_viewport = mouse_pos.map_or(false, |hover_pos| rect.contains(hover_pos));
                         let clicked_in_3d_viewport = last_click_pos.map_or(false, |hover_pos| rect.contains(hover_pos));
                         if clicked_in_3d_viewport {
                             if !input.modifiers.shift && input.pointer.button_down(egui::PointerButton::Secondary) {
@@ -741,10 +741,11 @@ fn main() {
                                 pt_gui.camera_offset += view_mat.transpose().transform_vector(&glm::vec3(x, y, 0.)).into();
                             }
                         }
-                        if in_3d_viewport {
+                        if mouse_in_3d_viewport {
                             pt_gui.camera_scale *= 1.0 + (input.scroll_delta.y * -0.001)
                         }
                     }
+                    drop(input);
 
                     if !pt_gui.camera_orthographic {
                         view_mat.append_translation_mut(&glm::vec3(0.0, 0.0, pt_gui.camera_scale));
@@ -766,7 +767,11 @@ fn main() {
                         })
                     };
 
-                    pt_gui.hover_lollipop = pt_gui.get_hover_lollipop(mouse_vec);
+                    if mouse_in_3d_viewport {
+                        pt_gui.hover_lollipop = pt_gui.get_hover_lollipop(mouse_vec);
+                    } else {
+                        pt_gui.hover_lollipop = None;
+                    }
 
                     // start the drag/selection if the user clicked on a lollipop
                     if let Some((vec1, vec2)) = mouse_vec {

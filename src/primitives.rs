@@ -57,6 +57,48 @@ pub(crate) const OCTAHEDRON_VERTS: [Vertex; 6] = [
     Vertex { position: (0.0, 0.0, 1.0), uv: (0.0, 0.0) },
 ];
 
+pub(crate) const FRUSTUM_VERTS: [Vertex; 400] = {
+    let mut i: usize = 0;
+    let mut j: usize = 0;
+    let mut vertices = [Vertex { position: (0.0, 0.0, 0.0), uv: (0.0, 0.0) }; 400];
+    const SUBDIVISIONS: usize = 16;
+    while i < SUBDIVISIONS {
+        while j < 5 {
+            let idx = i * 5 * 2 + j * 2;
+            vertices[idx].position = (-1.0 + (i as f32 / 8.0), (j as f32) / 4.0, 1.0);
+            vertices[idx + 1].position = (-1.0 + ((i + 1) as f32 / 8.0), (j as f32) / 4.0, 1.0);
+            j += 1;
+        }
+        i += 1;
+        j = 0;
+    }
+    i = 0;
+    j = 0;
+    while i < SUBDIVISIONS {
+        while j < 5 {
+            let idx = (SUBDIVISIONS * 5 * 2) + i * 5 * 2 + j * 2;
+            vertices[idx].position = (-1.0 + (j as f32) / 2.0, (i as f32 / 16.0), 1.0);
+            vertices[idx + 1].position = (-1.0 + (j as f32) / 2.0, ((i + 1) as f32 / 16.0), 1.0);
+            j += 1;
+        }
+        i += 1;
+        j = 0;
+    }
+    i = 0;
+    j = 0;
+    while i < 5 {
+        while j < 2 {
+            let idx = (SUBDIVISIONS * 5 * 2 * 2) + i * 4 + j * 2;
+            vertices[idx].position = (-1.0 + (i as f32) / 2.0, j as f32, 1.0);
+            vertices[idx + 1].position = (0.0, 0.0, 0.0);
+            j += 1;
+        }
+        i += 1;
+        j = 0;
+    }
+    vertices
+};
+
 pub(crate) const SPHERE_VERTS: [Vertex; 162] = [
     Vertex {
         position: (-0.6708191, -0.2763973, -0.6881907),

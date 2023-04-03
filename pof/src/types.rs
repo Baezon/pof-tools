@@ -245,6 +245,9 @@ impl Vec3d {
     pub fn dot(self, other: &Vec3d) -> f32 {
         (other.x * self.x) + (other.y * self.y) + (other.z * self.z)
     }
+    pub fn cross(self, other: &Vec3d) -> Vec3d {
+        Vec3d::new(self.y * other.z - self.z * other.y, self.z * other.x - self.x * other.z, self.x * other.y - self.y * other.x)
+    }
     pub fn is_null(self) -> bool {
         self.x.abs() <= 0.000001 && self.y.abs() <= 0.000001 && self.z.abs() <= 0.000001
     }
@@ -2622,6 +2625,25 @@ impl Model {
         self.recheck_warnings(Set::All);
         self.recheck_errors(Set::All);
     }
+
+    pub fn turret_matrix(&self, turret_idx: usize) -> TMat4<f32> {
+        let turret = &self.turrets[turret_idx];
+        let mut arr = if let Some((uvec, fvec)) = self.sub_objects[turret.base_obj].uvec_fvec() {
+            [uvec.into(), fvec.into()]
+        } else {
+            [turret.normal.0.into(), Vec3d::new(0.0, 0.0, 1.0).into()]
+        };
+
+        if Vec3::orthonormalize(&mut arr) == 1 {
+            // mustve chosen +z as the fvec...
+            arr = [turret.normal.0.into(), Vec3d::new(0.0, 1.0, 0.0).into()];
+            Vec3::orthonormalize(&mut arr);
+        }
+        let [uvec, fvec] = arr;
+        let rvec = uvec.cross(&fvec);
+        let mat = TMat3::from_columns(&[rvec, uvec, fvec]);
+        mat.to_homogeneous()
+    }
 }
 
 pub enum Set<T> {
@@ -2735,7 +2757,7 @@ fn properties_find_field(properties: &str, field: &str) -> Option<(usize, usize)
         start_idx += field.len();
 
         let mut chars = properties[start_idx..].chars();
-        while chars.next().map_or(false, |c| c == '=' || c == ':' || c.is_whitespace()) {
+        while chars.next().map_or(false, |c| c == '=' || c == ':' || (c.is_whitespace() && c != '\n')) {
             start_idx += 1;
         }
 

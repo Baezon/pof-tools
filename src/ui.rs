@@ -91,7 +91,7 @@ impl TreeValue {
             Error::TooManyVerts(id) | Error::TooManyNorms(id) | Error::UnnamedSubObject(id) => {
                 Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(*id)))
             }
-            Error::DuplicateSubobjectName(id) => None,
+            Error::DuplicateSubobjectName(_) => None,
         }
     }
 
@@ -117,7 +117,7 @@ impl TreeValue {
             }
             Warning::TooFewTurretFirePoints(idx) => Some(TreeValue::Turrets(TurretTreeValue::Turret(*idx))),
             Warning::TooManyTurretFirePoints(idx) => Some(TreeValue::Turrets(TurretTreeValue::Turret(*idx))),
-            Warning::DuplicatePathName(idx) => None,
+            Warning::DuplicatePathName(_) => None,
             Warning::DuplicateDetailLevel(_) => Some(TreeValue::Header),
             Warning::TooManyEyePoints => Some(TreeValue::EyePoints(EyeTreeValue::Header)),
             Warning::TooManyTextures => Some(TreeValue::Textures(TextureTreeValue::Header)),
@@ -1075,22 +1075,23 @@ impl PofToolsGui {
                                 if let Error::DuplicateSubobjectName(duped_name) = error {
                                     // do some special stuff for dupe names, so we can click and scroll through the list
                                     if ui.selectable_label(false, text).clicked() {
-                                        'find_next_error_val: {
-                                            if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = self.tree_view_selection {
-                                                if self.model.sub_objects[id].name == *duped_name {
-                                                    // slicing is ugly on an objvec...
-                                                    for subobj in self.model.sub_objects.0[((id.0 + 1) as usize)..].iter() {
-                                                        if subobj.name == *duped_name {
-                                                            new_tree_val = Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(subobj.obj_id)));
-                                                            break 'find_next_error_val;
-                                                        }
+                                        let mut fallback = true;
+                                        if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = self.tree_view_selection {
+                                            if self.model.sub_objects[id].name == *duped_name {
+                                                // slicing is ugly on an objvec...
+                                                for subobj in self.model.sub_objects.0[((id.0 + 1) as usize)..].iter() {
+                                                    if subobj.name == *duped_name {
+                                                        new_tree_val = Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(subobj.obj_id)));
+                                                        fallback = false;
+                                                        break;
                                                     }
                                                 }
                                             }
+                                        }
 
+                                        if fallback {
                                             // in all other cases go to the first one
                                             let first = self.model.sub_objects.iter().find(|subobj| subobj.name == *duped_name).unwrap();
-
                                             new_tree_val = Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(first.obj_id)));
                                         }
                                     }
@@ -1260,21 +1261,22 @@ impl PofToolsGui {
                                 if let Warning::DuplicatePathName(duped_name) = warning {
                                     // do some special stuff for dupe names, so we can click and scroll through the list
                                     if ui.selectable_label(false, text).clicked() {
-                                        'find_next_warn_val: {
-                                            if let TreeValue::Paths(PathTreeValue::Path(idx)) = self.tree_view_selection {
-                                                if self.model.paths[idx].name == *duped_name {
-                                                    for (i, path) in self.model.paths[((idx + 1) as usize)..].iter().enumerate() {
-                                                        if path.name == *duped_name {
-                                                            new_tree_val = Some(TreeValue::Paths(PathTreeValue::Path(idx + 1 + i)));
-                                                            break 'find_next_warn_val;
-                                                        }
+                                        let mut fallback = true;
+                                        if let TreeValue::Paths(PathTreeValue::Path(idx)) = self.tree_view_selection {
+                                            if self.model.paths[idx].name == *duped_name {
+                                                for (i, path) in self.model.paths[(idx + 1)..].iter().enumerate() {
+                                                    if path.name == *duped_name {
+                                                        new_tree_val = Some(TreeValue::Paths(PathTreeValue::Path(idx + 1 + i)));
+                                                        fallback = false;
+                                                        break;
                                                     }
                                                 }
                                             }
+                                        }
 
+                                        if fallback {
                                             // in all other cases go to the first one
                                             let idx = self.model.paths.iter().position(|path| path.name == *duped_name).unwrap();
-
                                             new_tree_val = Some(TreeValue::Paths(PathTreeValue::Path(idx)));
                                         }
                                     }

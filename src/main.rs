@@ -31,7 +31,7 @@ use simplelog::*;
 use std::{
     collections::HashMap,
     fs::File,
-    io::{Cursor, Read, Write},
+    io::{Cursor, Read},
     path::PathBuf,
     sync::mpsc::TryRecvError,
 };

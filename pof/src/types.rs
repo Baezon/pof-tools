@@ -1814,18 +1814,15 @@ impl Model {
     // rechecks just one or all of the errors on the model
     pub fn recheck_errors(&mut self, error_to_check: Set<Error>) {
         if let Set::One(error) = error_to_check {
-            let failed_check = match error {
-                Error::InvalidTurretGunSubobject(turret) => self.turret_gun_subobj_not_valid(turret),
+            let failed_check = match &error {
+                Error::InvalidTurretGunSubobject(turret) => self.turret_gun_subobj_not_valid(*turret),
                 Error::TooManyDebrisObjects => self.num_debris_objects() > MAX_DEBRIS_OBJECTS,
-                Error::DetailAndDebrisObj(id) => self.header.detail_levels.contains(&id) && self.sub_objects[id].is_debris_model,
-                Error::DetailObjWithParent(id) => self.header.detail_levels.contains(&id) && self.sub_objects[id].parent().is_some(),
-                Error::TooManyVerts(id) => self.sub_objects[id].bsp_data.verts.len() > self.max_verts_norms_per_subobj(),
-                Error::TooManyNorms(id) => self.sub_objects[id].bsp_data.norms.len() > self.max_verts_norms_per_subobj(),
-                Error::DuplicateSubobjectName(id) => self
-                    .sub_objects
-                    .iter()
-                    .any(|subobj| id != subobj.obj_id && self.sub_objects[id].name == subobj.name),
-                Error::UnnamedSubObject(id) => self.sub_objects[id].name.is_empty(),
+                Error::DetailAndDebrisObj(id) => self.header.detail_levels.contains(&id) && self.sub_objects[*id].is_debris_model,
+                Error::DetailObjWithParent(id) => self.header.detail_levels.contains(&id) && self.sub_objects[*id].parent().is_some(),
+                Error::TooManyVerts(id) => self.sub_objects[*id].bsp_data.verts.len() > self.max_verts_norms_per_subobj(),
+                Error::TooManyNorms(id) => self.sub_objects[*id].bsp_data.norms.len() > self.max_verts_norms_per_subobj(),
+                Error::DuplicateSubobjectName(name) => self.sub_objects.iter().filter(|subobj| subobj.name == *name).count() > 1,
+                Error::UnnamedSubObject(id) => self.sub_objects[*id].name.is_empty(),
             };
 
             let existing_warning = self.errors.contains(&error);
@@ -1872,8 +1869,7 @@ impl Model {
             }
 
             for duped_name in self.sub_objects.iter().map(|subobj| &subobj.name).duplicates() {
-                self.errors
-                    .insert(Error::DuplicateSubobjectName(self.get_obj_id_by_name(duped_name).unwrap()));
+                self.errors.insert(Error::DuplicateSubobjectName(duped_name.clone()));
             }
         }
     }
@@ -1896,28 +1892,28 @@ impl Model {
     // rechecks just one or all of the warnings on the model
     pub fn recheck_warnings(&mut self, warning_to_check: Set<Warning>) {
         if let Set::One(warning) = warning_to_check {
-            let failed_check = match warning {
-                Warning::RadiusTooSmall(subobj_opt) => self.radius_test_failed(subobj_opt),
-                Warning::BBoxTooSmall(subobj_opt) => self.bbox_test_failed(subobj_opt),
-                Warning::DockingBayWithoutPath(bay_num) => self.docking_bays.get(bay_num).map_or(false, |bay| bay.path.is_none()),
+            let failed_check = match &warning {
+                Warning::RadiusTooSmall(subobj_opt) => self.radius_test_failed(*subobj_opt),
+                Warning::BBoxTooSmall(subobj_opt) => self.bbox_test_failed(*subobj_opt),
+                Warning::DockingBayWithoutPath(bay_num) => self.docking_bays.get(*bay_num).map_or(false, |bay| bay.path.is_none()),
                 Warning::ThrusterPropertiesInvalidVersion(bank_idx) => {
-                    self.version <= Version::V21_16 && self.thruster_banks.get(bank_idx).map_or(false, |bank| !bank.properties.is_empty())
+                    self.version <= Version::V21_16 && self.thruster_banks.get(*bank_idx).map_or(false, |bank| !bank.properties.is_empty())
                 }
                 Warning::WeaponOffsetInvalidVersion { primary, bank, point } => {
                     (self.version <= Version::V21_17 || self.version == Version::V22_00) && {
-                        if primary {
-                            bank < self.primary_weps.len() && self.primary_weps[bank].get(point).map_or(false, |point| point.offset != 0.0)
+                        if *primary {
+                            *bank < self.primary_weps.len() && self.primary_weps[*bank].get(*point).map_or(false, |point| point.offset != 0.0)
                         } else {
-                            bank < self.secondary_weps.len() && self.secondary_weps[bank].get(point).map_or(false, |point| point.offset != 0.0)
+                            *bank < self.secondary_weps.len() && self.secondary_weps[*bank].get(*point).map_or(false, |point| point.offset != 0.0)
                         }
                     }
                 }
                 Warning::SubObjectTranslationInvalidVersion(id) => {
-                    self.version < Version::V23_01 && self.sub_objects[id].translation_axis != SubsysTranslationAxis::None
+                    self.version < Version::V23_01 && self.sub_objects[*id].translation_axis != SubsysTranslationAxis::None
                 }
                 Warning::InvertedBBox(id_opt) => {
                     if let Some(id) = id_opt {
-                        self.sub_objects[id].bbox.is_inverted()
+                        self.sub_objects[*id].bbox.is_inverted()
                     } else {
                         self.header.bbox.is_inverted()
                     }
@@ -1925,40 +1921,40 @@ impl Model {
                 Warning::UntexturedPolygons => self.untextured_idx.is_some(),
                 Warning::TooManyEyePoints => self.eye_points.len() > MAX_EYES,
                 Warning::TooManyTextures => self.textures.len() > MAX_TEXTURES,
-                Warning::TooFewTurretFirePoints(idx) => self.turrets.get(idx).map_or(false, |turret| turret.fire_points.is_empty()),
-                Warning::TooManyTurretFirePoints(idx) => self.turrets.get(idx).map_or(false, |turret| turret.fire_points.len() > MAX_TURRET_POINTS),
-                Warning::DuplicatePathName(idx) => self
-                    .paths
-                    .get(idx)
-                    .map_or(false, |path1| self.paths.iter().enumerate().any(|(idx2, path2)| idx != idx2 && path1.name == path2.name)),
-                Warning::DuplicateDetailLevel(duped_id) => self.header.detail_levels.iter().filter(|id| duped_id == **id).count() > 1,
+                Warning::TooFewTurretFirePoints(idx) => self.turrets.get(*idx).map_or(false, |turret| turret.fire_points.is_empty()),
+                Warning::TooManyTurretFirePoints(idx) => self
+                    .turrets
+                    .get(*idx)
+                    .map_or(false, |turret| turret.fire_points.len() > MAX_TURRET_POINTS),
+                Warning::DuplicatePathName(name) => self.paths.iter().filter(|path| path.name == *name).count() > 1,
+                Warning::DuplicateDetailLevel(duped_id) => self.header.detail_levels.iter().filter(|id| duped_id == *id).count() > 1,
 
-                Warning::PathNameTooLong(idx) => self.paths.get(idx).map_or(false, |path| path.name.len() > MAX_NAME_LEN),
-                Warning::SubObjectNameTooLong(id) => self.sub_objects[id].name.len() > MAX_NAME_LEN,
+                Warning::PathNameTooLong(idx) => self.paths.get(*idx).map_or(false, |path| path.name.len() > MAX_NAME_LEN),
+                Warning::SubObjectNameTooLong(id) => self.sub_objects[*id].name.len() > MAX_NAME_LEN,
                 Warning::SpecialPointNameTooLong(idx) => self
                     .special_points
-                    .get(idx)
+                    .get(*idx)
                     .map_or(false, |spec_point| spec_point.name.len() > MAX_NAME_LEN),
                 Warning::DockingBayNameTooLong(idx) => self
                     .docking_bays
-                    .get(idx)
+                    .get(*idx)
                     .map_or(false, |dock| properties_get_field(&dock.properties, "$name").unwrap_or_default().len() > MAX_NAME_LEN),
 
-                Warning::GlowBankPropertiesTooLong(idx) => self.glow_banks.get(idx).map_or(false, |bank| bank.properties.len() > MAX_PROPERTIES_LEN),
+                Warning::GlowBankPropertiesTooLong(idx) => self.glow_banks.get(*idx).map_or(false, |bank| bank.properties.len() > MAX_PROPERTIES_LEN),
                 Warning::ThrusterPropertiesTooLong(idx) => self
                     .thruster_banks
-                    .get(idx)
+                    .get(*idx)
                     .map_or(false, |bank| bank.properties.len() > MAX_PROPERTIES_LEN),
-                Warning::SubObjectPropertiesTooLong(id) => self.sub_objects[id].properties.len() > MAX_PROPERTIES_LEN,
+                Warning::SubObjectPropertiesTooLong(id) => self.sub_objects[*id].properties.len() > MAX_PROPERTIES_LEN,
                 Warning::DockingBayPropertiesTooLong(idx) => self
                     .docking_bays
-                    .get(idx)
+                    .get(*idx)
                     .map_or(false, |bank| bank.properties.len() > MAX_PROPERTIES_LEN),
                 Warning::SpecialPointPropertiesTooLong(idx) => self
                     .special_points
-                    .get(idx)
+                    .get(*idx)
                     .map_or(false, |spec_point| spec_point.properties.len() > MAX_PROPERTIES_LEN),
-                Warning::InvalidDockParentSubmodel(idx) => self.docking_bays.get(idx).map_or(false, |dock| {
+                Warning::InvalidDockParentSubmodel(idx) => self.docking_bays.get(*idx).map_or(false, |dock| {
                     properties_get_field(&dock.properties, "$parent_submodel").map_or(false, |name| self.get_obj_id_by_name(name).is_none())
                 }),
             };
@@ -2090,8 +2086,7 @@ impl Model {
             }
 
             for duped_name in self.paths.iter().map(|path| &path.name).duplicates() {
-                self.warnings
-                    .insert(Warning::DuplicatePathName(self.paths.iter().position(|path| path.name == *duped_name).unwrap()));
+                self.warnings.insert(Warning::DuplicatePathName(duped_name.clone()));
             }
 
             for duped_id in self.header.detail_levels.iter().duplicates() {
@@ -2629,7 +2624,7 @@ pub enum Set<T> {
     One(T),
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone)]
 pub enum Error {
     InvalidTurretGunSubobject(usize), // turret index
     TooManyDebrisObjects,
@@ -2638,12 +2633,11 @@ pub enum Error {
     TooManyVerts(ObjectId),
     TooManyNorms(ObjectId),
     UnnamedSubObject(ObjectId),
-    /// for each duplicated name, only contains the *first* path idx with that name
-    DuplicateSubobjectName(ObjectId),
+    DuplicateSubobjectName(String),
     // all turret base/gun objects must be disjoint!
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Debug)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
 pub enum Warning {
     RadiusTooSmall(Option<ObjectId>),
     BBoxTooSmall(Option<ObjectId>),
@@ -2651,16 +2645,11 @@ pub enum Warning {
     UntexturedPolygons,
     DockingBayWithoutPath(usize),
     ThrusterPropertiesInvalidVersion(usize),
-    WeaponOffsetInvalidVersion {
-        primary: bool,
-        bank: usize,
-        point: usize,
-    },
+    WeaponOffsetInvalidVersion { primary: bool, bank: usize, point: usize },
     SubObjectTranslationInvalidVersion(ObjectId),
     TooFewTurretFirePoints(usize),
     TooManyTurretFirePoints(usize),
-    /// for each duplicated name, only contains the *first* path idx with that name
-    DuplicatePathName(usize),
+    DuplicatePathName(String),
     DuplicateDetailLevel(ObjectId),
     TooManyEyePoints,
     TooManyTextures,

@@ -1167,7 +1167,12 @@ impl PofToolsGui {
 
                 if let Some(id) = selected_id {
                     let mut text = RichText::new("Name:");
-                    if self.model.errors.contains(&Error::DuplicateSubobjectName(id)) || self.model.errors.contains(&Error::UnnamedSubObject(id)) {
+                    if self
+                        .model
+                        .errors
+                        .contains(&Error::DuplicateSubobjectName(self.model.sub_objects[id].name.clone()))
+                        || self.model.errors.contains(&Error::UnnamedSubObject(id))
+                    {
                         text = text.color(ERROR_RED);
                     }
                     ui.label(text);

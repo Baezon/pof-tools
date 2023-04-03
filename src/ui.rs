@@ -82,54 +82,55 @@ impl TreeValue {
         }
     }
     // returns what, if any, tree_value best corresponds to a given error
-    fn from_error(error: Error) -> Option<TreeValue> {
+    fn from_error(error: &Error) -> Option<TreeValue> {
         match error {
-            Error::InvalidTurretGunSubobject(idx) => Some(TreeValue::Turrets(TurretTreeValue::Turret(idx))),
+            Error::InvalidTurretGunSubobject(idx) => Some(TreeValue::Turrets(TurretTreeValue::Turret(*idx))),
             Error::TooManyDebrisObjects => None,
-            Error::DetailObjWithParent(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
-            Error::DetailAndDebrisObj(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
-            Error::TooManyVerts(id) | Error::TooManyNorms(id) | Error::UnnamedSubObject(id) | Error::DuplicateSubobjectName(id) => {
-                Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)))
+            Error::DetailObjWithParent(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(*id))),
+            Error::DetailAndDebrisObj(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(*id))),
+            Error::TooManyVerts(id) | Error::TooManyNorms(id) | Error::UnnamedSubObject(id) => {
+                Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(*id)))
             }
+            Error::DuplicateSubobjectName(id) => None,
         }
     }
 
     // returns what, if any, tree_value best corresponds to a given warning
-    fn from_warning(warning: Warning, model: &Model) -> Option<TreeValue> {
+    fn from_warning(warning: &Warning, model: &Model) -> Option<TreeValue> {
         match warning {
             Warning::RadiusTooSmall(None) => Some(TreeValue::Header),
             Warning::BBoxTooSmall(None) => Some(TreeValue::Header),
             Warning::InvertedBBox(None) => Some(TreeValue::Header),
-            Warning::RadiusTooSmall(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
-            Warning::BBoxTooSmall(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
-            Warning::InvertedBBox(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
-            Warning::SubObjectTranslationInvalidVersion(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
+            Warning::RadiusTooSmall(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(*id))),
+            Warning::BBoxTooSmall(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(*id))),
+            Warning::InvertedBBox(Some(id)) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(*id))),
+            Warning::SubObjectTranslationInvalidVersion(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(*id))),
             Warning::UntexturedPolygons => Some(TreeValue::Textures(TextureTreeValue::tex(model.untextured_idx))),
-            Warning::DockingBayWithoutPath(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(idx))),
-            Warning::ThrusterPropertiesInvalidVersion(idx) => Some(TreeValue::Thrusters(ThrusterTreeValue::Bank(idx))),
+            Warning::DockingBayWithoutPath(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(*idx))),
+            Warning::ThrusterPropertiesInvalidVersion(idx) => Some(TreeValue::Thrusters(ThrusterTreeValue::Bank(*idx))),
             Warning::WeaponOffsetInvalidVersion { primary, bank, point } => {
-                if primary {
-                    Some(TreeValue::Weapons(WeaponTreeValue::PriBankPoint(bank, point)))
+                if *primary {
+                    Some(TreeValue::Weapons(WeaponTreeValue::PriBankPoint(*bank, *point)))
                 } else {
-                    Some(TreeValue::Weapons(WeaponTreeValue::SecBankPoint(bank, point)))
+                    Some(TreeValue::Weapons(WeaponTreeValue::SecBankPoint(*bank, *point)))
                 }
             }
-            Warning::TooFewTurretFirePoints(idx) => Some(TreeValue::Turrets(TurretTreeValue::Turret(idx))),
-            Warning::TooManyTurretFirePoints(idx) => Some(TreeValue::Turrets(TurretTreeValue::Turret(idx))),
-            Warning::DuplicatePathName(idx) => Some(TreeValue::Paths(PathTreeValue::Path(idx))),
+            Warning::TooFewTurretFirePoints(idx) => Some(TreeValue::Turrets(TurretTreeValue::Turret(*idx))),
+            Warning::TooManyTurretFirePoints(idx) => Some(TreeValue::Turrets(TurretTreeValue::Turret(*idx))),
+            Warning::DuplicatePathName(idx) => None,
             Warning::DuplicateDetailLevel(_) => Some(TreeValue::Header),
             Warning::TooManyEyePoints => Some(TreeValue::EyePoints(EyeTreeValue::Header)),
             Warning::TooManyTextures => Some(TreeValue::Textures(TextureTreeValue::Header)),
-            Warning::PathNameTooLong(idx) => Some(TreeValue::Paths(PathTreeValue::Path(idx))),
-            Warning::SpecialPointNameTooLong(idx) => Some(TreeValue::SpecialPoints(SpecialPointTreeValue::Point(idx))),
-            Warning::SubObjectNameTooLong(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
-            Warning::DockingBayNameTooLong(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(idx))),
-            Warning::SubObjectPropertiesTooLong(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))),
-            Warning::ThrusterPropertiesTooLong(idx) => Some(TreeValue::Thrusters(ThrusterTreeValue::Bank(idx))),
-            Warning::DockingBayPropertiesTooLong(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(idx))),
-            Warning::GlowBankPropertiesTooLong(idx) => Some(TreeValue::Glows(GlowTreeValue::Bank(idx))),
-            Warning::SpecialPointPropertiesTooLong(idx) => Some(TreeValue::SpecialPoints(SpecialPointTreeValue::Point(idx))),
-            Warning::InvalidDockParentSubmodel(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(idx))),
+            Warning::PathNameTooLong(idx) => Some(TreeValue::Paths(PathTreeValue::Path(*idx))),
+            Warning::SpecialPointNameTooLong(idx) => Some(TreeValue::SpecialPoints(SpecialPointTreeValue::Point(*idx))),
+            Warning::SubObjectNameTooLong(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(*id))),
+            Warning::DockingBayNameTooLong(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(*idx))),
+            Warning::SubObjectPropertiesTooLong(id) => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(*id))),
+            Warning::ThrusterPropertiesTooLong(idx) => Some(TreeValue::Thrusters(ThrusterTreeValue::Bank(*idx))),
+            Warning::DockingBayPropertiesTooLong(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(*idx))),
+            Warning::GlowBankPropertiesTooLong(idx) => Some(TreeValue::Glows(GlowTreeValue::Bank(*idx))),
+            Warning::SpecialPointPropertiesTooLong(idx) => Some(TreeValue::SpecialPoints(SpecialPointTreeValue::Point(*idx))),
+            Warning::InvalidDockParentSubmodel(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(*idx))),
         }
     }
 
@@ -585,17 +586,17 @@ impl UiState {
     fn tree_val_text(&self, model: &Model, tree_value: TreeValue, this_name: &str) -> RichText {
         let text = RichText::new(this_name);
         for error in &model.errors {
-            if let Error::DuplicateSubobjectName(err_id) = *error {
+            if let Error::DuplicateSubobjectName(duped_name) = error {
                 match tree_value {
                     TreeValue::SubObjects(SubObjectTreeValue::Header) => return text.color(ERROR_RED),
                     TreeValue::SubObjects(SubObjectTreeValue::SubObject(obj_id)) => {
-                        if model.sub_objects[obj_id].name == model.sub_objects[err_id].name {
+                        if model.sub_objects[obj_id].name == *duped_name {
                             return text.color(ERROR_RED);
                         }
                     }
                     _ => (),
                 }
-            } else if let Some(error_tree_value) = TreeValue::from_error(*error) {
+            } else if let Some(error_tree_value) = TreeValue::from_error(error) {
                 if tree_value == error_tree_value || tree_value.is_ancestor_of(error_tree_value) {
                     return text.color(ERROR_RED);
                 }
@@ -603,17 +604,17 @@ impl UiState {
         }
 
         for warning in &model.warnings {
-            if let Warning::DuplicatePathName(warn_idx) = *warning {
+            if let Warning::DuplicatePathName(duped_name) = warning {
                 match tree_value {
                     TreeValue::Paths(PathTreeValue::Header) => return text.color(WARNING_YELLOW),
                     TreeValue::Paths(PathTreeValue::Path(path_idx)) => {
-                        if model.paths[path_idx].name == model.paths[warn_idx].name {
+                        if model.paths[path_idx].name == *duped_name {
                             return text.color(WARNING_YELLOW);
                         }
                     }
                     _ => (),
                 }
-            } else if let Some(warning_tree_value) = TreeValue::from_warning(*warning, model) {
+            } else if let Some(warning_tree_value) = TreeValue::from_warning(warning, model) {
                 if tree_value == warning_tree_value || tree_value.is_ancestor_of(warning_tree_value) {
                     return text.color(WARNING_YELLOW);
                 }
@@ -1019,10 +1020,10 @@ impl PofToolsGui {
                     .show(ui, |ui| {
                         let mut new_tree_val = None;
                         let mut first_warning = true;
-                        for &error in &self.model.errors {
+                        for error in &self.model.errors {
                             let str = match error {
                                 Error::InvalidTurretGunSubobject(turret_num) => {
-                                    format!("⊗ {} has an invalid gun object", self.model.sub_objects[self.model.turrets[turret_num].base_obj].name)
+                                    format!("⊗ {} has an invalid gun object", self.model.sub_objects[self.model.turrets[*turret_num].base_obj].name)
                                 }
                                 Error::TooManyDebrisObjects => {
                                     let mut num_debris = 0;
@@ -1036,49 +1037,72 @@ impl PofToolsGui {
                                 Error::DetailObjWithParent(id) => {
                                     format!(
                                         "⊗ Detail {} object ({}) must be at the top of the hierarchy (no object parent)",
-                                        self.model.header.detail_levels.iter().position(|detail_id| *detail_id == id).unwrap(),
-                                        self.model.sub_objects[id].name,
+                                        self.model.header.detail_levels.iter().position(|detail_id| detail_id == id).unwrap(),
+                                        self.model.sub_objects[*id].name,
                                     )
                                 }
                                 Error::DetailAndDebrisObj(id) => {
                                     format!(
                                         "⊗ Detail {} object ({}) cannot also be a debris object",
-                                        self.model.header.detail_levels.iter().position(|detail_id| *detail_id == id).unwrap(),
-                                        self.model.sub_objects[id].name,
+                                        self.model.header.detail_levels.iter().position(|detail_id| detail_id == id).unwrap(),
+                                        self.model.sub_objects[*id].name,
                                     )
                                 }
                                 Error::TooManyVerts(id) => {
                                     format!(
                                         "⊗ Subobject {} has more than the {} vertices supported by the currently selected pof version",
-                                        self.model.sub_objects[id].name,
+                                        self.model.sub_objects[*id].name,
                                         self.model.max_verts_norms_per_subobj(),
                                     )
                                 }
                                 Error::TooManyNorms(id) => {
                                     format!(
                                         "⊗ Subobject {} has more than the {} normals supported by the currently selected pof version",
-                                        self.model.sub_objects[id].name,
+                                        self.model.sub_objects[*id].name,
                                         self.model.max_verts_norms_per_subobj(),
                                     )
                                 }
                                 Error::UnnamedSubObject(id) => {
                                     format!("⊗ Subobject id {:?} requires a name", id)
                                 }
-                                Error::DuplicateSubobjectName(id) => {
-                                    format!("⊗ More than one subobject shares the name '{}'", self.model.sub_objects[id].name)
+                                Error::DuplicateSubobjectName(name) => {
+                                    format!("⊗ More than one subobject shares the name '{}'", name)
                                 }
                             };
 
                             let text = RichText::new(str).text_style(TextStyle::Button).color(ERROR_RED);
-                            if first_warning {
-                                ui.horizontal(|ui| {
-                                    if let Some(tree_val) = TreeValue::from_error(error) {
-                                        if ui.selectable_label(false, text).clicked() {
-                                            new_tree_val = Some(tree_val);
+                            ui.horizontal(|ui| {
+                                if let Error::DuplicateSubobjectName(duped_name) = error {
+                                    // do some special stuff for dupe names, so we can click and scroll through the list
+                                    if ui.selectable_label(false, text).clicked() {
+                                        'find_next_error_val: {
+                                            if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = self.tree_view_selection {
+                                                if self.model.sub_objects[id].name == *duped_name {
+                                                    // slicing is ugly on an objvec...
+                                                    for subobj in self.model.sub_objects.0[((id.0 + 1) as usize)..].iter() {
+                                                        if subobj.name == *duped_name {
+                                                            new_tree_val = Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(subobj.obj_id)));
+                                                            break 'find_next_error_val;
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            // in all other cases go to the first one
+                                            let first = self.model.sub_objects.iter().find(|subobj| subobj.name == *duped_name).unwrap();
+
+                                            new_tree_val = Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(first.obj_id)));
                                         }
-                                    } else {
-                                        ui.label(text);
                                     }
+                                } else if let Some(tree_val) = TreeValue::from_error(error) {
+                                    if ui.selectable_label(false, text).clicked() {
+                                        new_tree_val = Some(tree_val);
+                                    }
+                                } else {
+                                    ui.label(text);
+                                }
+
+                                if first_warning {
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                                         if !self.model.errors.is_empty() {
                                             ui.add(Label::new(
@@ -1096,18 +1120,12 @@ impl PofToolsGui {
                                             ));
                                         }
                                     });
-                                });
-                                first_warning = false;
-                            } else if let Some(tree_val) = TreeValue::from_error(error) {
-                                if ui.selectable_label(false, text).clicked() {
-                                    new_tree_val = Some(tree_val);
+                                    first_warning = false;
                                 }
-                            } else {
-                                ui.label(text);
-                            }
+                            });
                         }
 
-                        for &warning in &self.model.warnings {
+                        for warning in &self.model.warnings {
                             let str = match warning {
                                 Warning::InvertedBBox(id_opt) => {
                                     format!("⚠ {}'s bounding box is inverted", id_opt.map_or("The header", |id| &self.model.sub_objects[id].name))
@@ -1115,7 +1133,7 @@ impl PofToolsGui {
                                 Warning::DockingBayWithoutPath(bay_num) => {
                                     format!(
                                         "⚠ Docking bay {} cannot be used by ships without a path",
-                                        self.model.docking_bays[bay_num].get_name().unwrap_or(&(bay_num + 1).to_string())
+                                        self.model.docking_bays[*bay_num].get_name().unwrap_or(&(bay_num + 1).to_string())
                                     )
                                 }
                                 Warning::ThrusterPropertiesInvalidVersion(idx) => {
@@ -1124,7 +1142,7 @@ impl PofToolsGui {
                                 Warning::WeaponOffsetInvalidVersion { primary, bank, point } => {
                                     format!(
                                         "⚠ {} bank {}, point {}, has an external angle offset, which the currently selected version does not support",
-                                        if primary { "Primary" } else { "Secondary" },
+                                        if *primary { "Primary" } else { "Secondary" },
                                         bank + 1,
                                         point + 1
                                     )
@@ -1132,7 +1150,7 @@ impl PofToolsGui {
                                 Warning::SubObjectTranslationInvalidVersion(id) => {
                                     format!(
                                         "⚠ Subobject {} has a translation axis defined, which the currently selected version does not support",
-                                        self.model.sub_objects[id].name
+                                        self.model.sub_objects[*id].name
                                     )
                                 }
                                 Warning::UntexturedPolygons => {
@@ -1147,12 +1165,12 @@ impl PofToolsGui {
                                     format!("⚠ You cannot have more than {} textures.", pof::MAX_TEXTURES)
                                 }
                                 Warning::TooFewTurretFirePoints(idx) => {
-                                    format!("⚠ {} must have at least 1 fire point.", self.model.sub_objects[self.model.turrets[idx].base_obj].name)
+                                    format!("⚠ {} must have at least 1 fire point.", self.model.sub_objects[self.model.turrets[*idx].base_obj].name)
                                 }
                                 Warning::TooManyTurretFirePoints(idx) => {
                                     format!(
                                         "⚠ {} must have at most {} fire points.",
-                                        self.model.sub_objects[self.model.turrets[idx].base_obj].name,
+                                        self.model.sub_objects[self.model.turrets[*idx].base_obj].name,
                                         pof::MAX_TURRET_POINTS
                                     )
                                 }
@@ -1168,19 +1186,19 @@ impl PofToolsGui {
                                         id_opt.map_or("The header", |id| &self.model.sub_objects[id].name)
                                     )
                                 }
-                                Warning::DuplicatePathName(path_idx) => {
-                                    format!("⚠ More than one path shares the name '{}'", self.model.paths[path_idx].name)
+                                Warning::DuplicatePathName(duped_name) => {
+                                    format!("⚠ More than one path shares the name '{}'", duped_name)
                                 }
                                 Warning::DuplicateDetailLevel(id) => {
-                                    format!("⚠ Subobject '{}' belongs to more than one detail level", self.model.sub_objects[id].name)
+                                    format!("⚠ Subobject '{}' belongs to more than one detail level", self.model.sub_objects[*id].name)
                                 }
                                 Warning::InvalidDockParentSubmodel(idx) => {
-                                    let dock_name = self.model.docking_bays[idx]
+                                    let dock_name = self.model.docking_bays[*idx]
                                         .get_name()
                                         .map_or(format!("Docking bay {}", idx), |name| format!("Docking bay '{}'", name));
                                     format!(
                                         "⚠ Could not find parent submodel '{}' for {}",
-                                        properties_get_field(&self.model.docking_bays[idx].properties, "$parent_submodel").unwrap(),
+                                        properties_get_field(&self.model.docking_bays[*idx].properties, "$parent_submodel").unwrap(),
                                         dock_name
                                     )
                                 }
@@ -1190,16 +1208,16 @@ impl PofToolsGui {
                                 | Warning::DockingBayNameTooLong(_) => {
                                     let field = match warning {
                                         Warning::PathNameTooLong(idx) => {
-                                            format!("Path name '{}'", self.model.paths[idx].name)
+                                            format!("Path name '{}'", self.model.paths[*idx].name)
                                         }
                                         Warning::SubObjectNameTooLong(id) => {
-                                            format!("Subobject name '{}'", self.model.sub_objects[id].name)
+                                            format!("Subobject name '{}'", self.model.sub_objects[*id].name)
                                         }
                                         Warning::SpecialPointNameTooLong(idx) => {
-                                            format!("Special point name '{}'", self.model.special_points[idx].name)
+                                            format!("Special point name '{}'", self.model.special_points[*idx].name)
                                         }
                                         Warning::DockingBayNameTooLong(idx) => {
-                                            format!("Docking bay name '{}'", self.model.special_points[idx].name)
+                                            format!("Docking bay name '{}'", self.model.special_points[*idx].name)
                                         }
                                         _ => unreachable!(),
                                     };
@@ -1215,7 +1233,7 @@ impl PofToolsGui {
                                             format!(
                                                 "Glow bank {} ({}) properties",
                                                 idx,
-                                                pof::properties_get_field(&self.model.glow_banks[idx].properties, "$glow_texture")
+                                                pof::properties_get_field(&self.model.glow_banks[*idx].properties, "$glow_texture")
                                                     .unwrap_or_default()
                                             )
                                         }
@@ -1223,13 +1241,13 @@ impl PofToolsGui {
                                             format!("Thruster bank {} properties", idx + 1)
                                         }
                                         Warning::SubObjectPropertiesTooLong(id) => {
-                                            format!("Subobject {} properties", self.model.sub_objects[id].name)
+                                            format!("Subobject {} properties", self.model.sub_objects[*id].name)
                                         }
                                         Warning::DockingBayPropertiesTooLong(idx) => {
                                             format!("Docking bay {} properties", idx + 1)
                                         }
                                         Warning::SpecialPointPropertiesTooLong(idx) => {
-                                            format!("Special point {} properties", self.model.special_points[idx].name)
+                                            format!("Special point {} properties", self.model.special_points[*idx].name)
                                         }
                                         _ => unreachable!(),
                                     };
@@ -1238,15 +1256,37 @@ impl PofToolsGui {
                             };
 
                             let text = RichText::new(str).text_style(TextStyle::Button).color(WARNING_YELLOW);
-                            if first_warning {
-                                ui.horizontal(|ui| {
-                                    if let Some(tree_val) = TreeValue::from_warning(warning, &self.model) {
-                                        if ui.selectable_label(false, text).clicked() {
-                                            new_tree_val = Some(tree_val);
+                            ui.horizontal(|ui| {
+                                if let Warning::DuplicatePathName(duped_name) = warning {
+                                    // do some special stuff for dupe names, so we can click and scroll through the list
+                                    if ui.selectable_label(false, text).clicked() {
+                                        'find_next_warn_val: {
+                                            if let TreeValue::Paths(PathTreeValue::Path(idx)) = self.tree_view_selection {
+                                                if self.model.paths[idx].name == *duped_name {
+                                                    for (i, path) in self.model.paths[((idx + 1) as usize)..].iter().enumerate() {
+                                                        if path.name == *duped_name {
+                                                            new_tree_val = Some(TreeValue::Paths(PathTreeValue::Path(idx + 1 + i)));
+                                                            break 'find_next_warn_val;
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            // in all other cases go to the first one
+                                            let idx = self.model.paths.iter().position(|path| path.name == *duped_name).unwrap();
+
+                                            new_tree_val = Some(TreeValue::Paths(PathTreeValue::Path(idx)));
                                         }
-                                    } else {
-                                        ui.label(text);
                                     }
+                                } else if let Some(tree_val) = TreeValue::from_warning(warning, &self.model) {
+                                    if ui.selectable_label(false, text).clicked() {
+                                        new_tree_val = Some(tree_val);
+                                    }
+                                } else {
+                                    ui.label(text);
+                                }
+
+                                if first_warning {
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                                         if !self.model.errors.is_empty() {
                                             ui.add(Label::new(
@@ -1264,15 +1304,9 @@ impl PofToolsGui {
                                             ));
                                         }
                                     });
-                                });
-                                first_warning = false;
-                            } else if let Some(tree_val) = TreeValue::from_warning(warning, &self.model) {
-                                if ui.selectable_label(false, text).clicked() {
-                                    new_tree_val = Some(tree_val);
+                                    first_warning = false;
                                 }
-                            } else {
-                                ui.label(text);
-                            }
+                            });
                         }
 
                         if let Some(tree_val) = new_tree_val {

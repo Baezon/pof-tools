@@ -482,6 +482,7 @@ impl PofToolsGui {
         self.camera_offset = Vec3d::ZERO;
         self.camera_scale = self.model.header.max_radius * 1.5;
         self.ui_state.last_selected_subobj = self.model.header.detail_levels.first().copied();
+        self.ui_state.tree_view_selection = TreeValue::Header;
 
         self.load_textures();
 

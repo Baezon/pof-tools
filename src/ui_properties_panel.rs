@@ -1167,14 +1167,22 @@ impl PofToolsGui {
 
                 if let Some(id) = selected_id {
                     let mut text = RichText::new("Name:");
-                    if self.model.errors.contains(&Error::DuplicateSubobjectName(id)) || self.model.errors.contains(&Error::UnnamedSubObject(id)) {
+                    if self
+                        .model
+                        .errors
+                        .contains(&Error::DuplicateSubobjectName(self.model.sub_objects[id].name.clone()))
+                        || self.model.errors.contains(&Error::UnnamedSubObject(id))
+                    {
                         text = text.color(ERROR_RED);
                     }
                     ui.label(text);
+                    let old_name = self.model.sub_objects[id].name.clone();
                     if ui.add(egui::TextEdit::singleline(&mut self.model.sub_objects[id].name)).changed() {
                         self.model.recheck_warnings(One(Warning::SubObjectNameTooLong(id)));
                         self.model.recheck_errors(One(Error::UnnamedSubObject(id)));
-                        self.model.recheck_errors(One(Error::DuplicateSubobjectName(id)));
+                        self.model.recheck_errors(One(Error::DuplicateSubobjectName(old_name)));
+                        self.model
+                            .recheck_errors(One(Error::DuplicateSubobjectName(self.model.sub_objects[id].name.clone())));
                         self.model.recalc_semantic_name_links();
                     }
                 } else {
@@ -2446,11 +2454,14 @@ impl PofToolsGui {
 
                 ui.label("Name:");
                 if let Some(num) = path_num {
+                    let old_name = self.model.paths[num].name.clone();
                     if ui
                         .add(egui::TextEdit::multiline(&mut self.model.paths[num].name).desired_rows(1))
                         .changed()
                     {
-                        self.model.recheck_warnings(One(Warning::DuplicatePathName(num)));
+                        self.model.recheck_warnings(One(Warning::DuplicatePathName(old_name)));
+                        self.model
+                            .recheck_warnings(One(Warning::DuplicatePathName(self.model.paths[num].name.clone())));
                         self.model.recheck_warnings(One(Warning::PathNameTooLong(num)));
                     };
                 } else {

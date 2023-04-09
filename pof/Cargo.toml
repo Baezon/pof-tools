@@ -1,6 +1,6 @@
 [package]
 name = "pof"
-version = "1.4.3"
+version = "1.4.4"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -8,10 +8,10 @@ edition = "2021"
 [dependencies]
 byteorder = "1.2"
 #dae-parser = {path = "dae-parser-0.8.3", features = ["nalgebra"]}
-dae-parser = {version = "0.8", features = ["nalgebra"]}
+dae-parser = {version = "0.10", features = ["nalgebra"]}
 walkdir = "2"
-nalgebra = "0.31"
-nalgebra-glm = "0.17"
+nalgebra = "0.32"
+nalgebra-glm = "0.18"
 # for... gltf
 gltf = "1.0"
 urlencoding = "2.1"

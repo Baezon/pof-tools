@@ -375,7 +375,7 @@ impl UiState {
                     ui.separator();
                     ui.label("Scalar (negative values flip):");
                     let parsed_val = transform_window.value.parse::<f32>();
-                    if parsed_val.is_err() || parsed_val.unwrap().abs() < 1e-6 {
+                    if parsed_val.map_or(true, |val| val.abs() < 1e-6) {
                         ui.visuals_mut().override_text_color = Some(ERROR_RED);
                     }
                     ui.text_edit_singleline(&mut transform_window.value);

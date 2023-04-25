@@ -1458,7 +1458,7 @@ impl<'a> ParseCtx<'a> for DaeContext<'a> {
     }
 }
 
-pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
+pub fn parse_dae(path: std::path::PathBuf) -> Model {
     let document = dae::Document::from_file(&path).unwrap();
     // use std::io::Write;
     // write!(std::fs::File::create("output.log").unwrap(), "{:#?}", document).unwrap();
@@ -1473,7 +1473,7 @@ pub fn parse_dae(path: std::path::PathBuf) -> Box<Model> {
             .insert(material.id.as_ref().unwrap().clone(), TextureId(ctx.material_map.len() as u32));
     });
 
-    let mut model = Box::new(Model::default());
+    let mut model = Model::default();
     model.path_to_file = path.canonicalize().unwrap_or(path);
     model.textures = vec![String::new(); ctx.material_map.len()];
     for (tex, id) in &ctx.material_map {
@@ -1580,13 +1580,13 @@ impl<'a> ParseCtx<'a> for GltfContext {
     }
 }
 
-pub fn parse_gltf(path: std::path::PathBuf) -> Box<Model> {
+pub fn parse_gltf(path: std::path::PathBuf) -> Model {
     let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
     let reader = BufReader::new(File::open(&path).unwrap());
     let gltf::Gltf { document: gltf, blob } = gltf::Gltf::from_reader(reader).unwrap();
     // let buffers = gltf::import::import_buffer_data(&gltf, Some(base), blob).unwrap();
     let buffers = import_buffer_data(&gltf, &base, blob);
-    let mut model = Box::new(Model::default());
+    let mut model = Model::default();
     model.path_to_file = path.canonicalize().unwrap_or(path);
     model.textures = gltf
         .materials()

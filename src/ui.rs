@@ -4,12 +4,13 @@ use glium::{
     Display,
 };
 use pof::{
-    properties_get_field, Dock, Error, EyePoint, GlowPoint, GlowPointBank, Model, Path, PathPoint, SpecialPoint, SubObject, TextureId, ThrusterBank,
+    properties_get_field, Dock, Error, EyePoint, GlowPoint, GlowPointBank, Path, PathPoint, SpecialPoint, SubObject, TextureId, ThrusterBank,
     ThrusterGlow, Turret, Vec3d, Version, Warning, WeaponHardpoint,
 };
 use std::{
     collections::HashMap,
     f32::consts::{FRAC_PI_2, PI},
+    hash::Hash,
     sync::mpsc::Receiver,
 };
 
@@ -18,7 +19,7 @@ use pof::ObjectId;
 
 use crate::{
     ui_properties_panel::{IndexingButtonsResponse, PropertiesPanel},
-    GlArrowhead, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers, Graphics, POF_TOOLS_VERSION,
+    GlArrowhead, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers, Graphics, Model, POF_TOOLS_VERSION,
 };
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, PartialOrd, Ord)]
@@ -498,6 +499,7 @@ pub struct UiState {
 
 pub(crate) struct PofToolsGui {
     pub model: Box<Model>,
+
     pub model_loading_thread: Option<Receiver<Result<Option<Box<Model>>, String>>>,
     #[allow(clippy::type_complexity)]
     pub texture_loading_thread: Option<Receiver<Option<(RawImage2d<'static, u8>, TextureId)>>>,
@@ -544,7 +546,10 @@ impl std::ops::DerefMut for PofToolsGui {
 impl PofToolsGui {
     pub fn new(display: &Display) -> Self {
         Self {
-            model: Default::default(),
+            model: Box::new(Model {
+                pof_model: pof::Model::default(),
+                texture_map: HashMap::new(),
+            }),
             model_loading_thread: Default::default(),
             texture_loading_thread: Default::default(),
             glow_point_sim_start: std::time::Instant::now(),
@@ -722,8 +727,15 @@ pub enum IndexingButtonsAction {
 }
 
 pub enum UndoAction {
-    MoveLollipop { tree_val: TreeValue, delta_vec: Vec3d },
+    MoveLollipop {
+        tree_val: TreeValue,
+        delta_vec: Vec3d,
+    },
     IxBAction(IndexingButtonsAction),
+    ChangeTextures {
+        id_map: HashMap<TextureId, TextureId>,
+        textures: Vec<String>,
+    },
 }
 
 impl undo::Action for UndoAction {
@@ -733,6 +745,11 @@ impl undo::Action for UndoAction {
 
     fn apply(&mut self, target: &mut Model) -> undo::Result<UndoAction> {
         match self {
+            UndoAction::ChangeTextures { id_map, textures } => {
+                std::mem::swap(&mut target.texture_map, id_map);
+                std::mem::swap(&mut target.textures, textures);
+                Ok(())
+            }
             UndoAction::MoveLollipop { tree_val, delta_vec } => {
                 let pos_ref = tree_val.get_position_ref(target);
                 if let Some(pos_ref) = pos_ref {
@@ -893,7 +910,7 @@ impl PofToolsGui {
                         let model = crossbeam::thread::scope(|s| s.spawn(|_| PofToolsGui::load_model(None)).join().unwrap()).unwrap();
 
                         if let Ok(Some(model)) = model {
-                            self.model.global_import(model);
+                            self.model.global_import(Box::new(model.pof_model));
                             self.tree_view_selection = TreeValue::Header;
                             self.ui_state.refresh_properties_panel(&self.model);
                             self.viewport_3d_dirty = true;

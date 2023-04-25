@@ -1,13 +1,17 @@
 #![allow(clippy::unnecessary_lazy_evaluations)]
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use egui::{style::Widgets, text::LayoutJob, CollapsingHeader, Color32, DragValue, Label, Response, RichText, TextEdit, TextFormat, TextStyle, Ui};
 use glium::Display;
+use itertools::Itertools;
 use nalgebra_glm::TMat4;
 use pof::{
-    Dock, Error, EyePoint, GlowPoint, GlowPointBank, Insignia, Model, ObjectId, PathId, PathPoint, Set::*, SpecialPoint, SubsysRotationAxis,
+    Dock, Error, EyePoint, GlowPoint, GlowPointBank, Insignia, ObjectId, PathId, PathPoint, Set::*, SpecialPoint, SubsysRotationAxis,
     SubsysRotationType, SubsysTranslationAxis, SubsysTranslationType, ThrusterGlow, Vec3d, Warning, WeaponHardpoint,
 };
+
+use crate::Model;
 
 use crate::ui::{
     DockingTreeValue, EyeTreeValue, GlowTreeValue, IndexingButtonsAction, InsigniaTreeValue, PathTreeValue, PofToolsGui, SpecialPointTreeValue,
@@ -1182,7 +1186,8 @@ impl PofToolsGui {
                         self.model.recheck_errors(One(Error::UnnamedSubObject(id)));
                         self.model.recheck_errors(One(Error::DuplicateSubobjectName(old_name)));
                         self.model
-                            .recheck_errors(One(Error::DuplicateSubobjectName(self.model.sub_objects[id].name.clone())));
+                            .pof_model
+                            .recheck_errors(One(Error::DuplicateSubobjectName(self.model.pof_model.sub_objects[id].name.clone())));
                         self.model.recalc_semantic_name_links();
                     }
                 } else {
@@ -1641,15 +1646,35 @@ impl PofToolsGui {
                 }
             }
             PropertiesPanel::Texture { texture_name } => {
-                ui.horizontal(|ui| {
-                    ui.heading("Textures");
+                ui.heading("Textures");
 
-                    ui.add_space(ui.available_width() - 70.0);
+                ui.separator();
 
-                    if ui.add_sized([70.0, ui.available_height()], egui::Button::new("🔃 Reload")).clicked() {
-                        reload_textures = true;
+                if ui.button("🗐 Merge Duplicates").clicked() {
+                    use pof::TextureId;
+                    let mut tex_name_map = HashMap::new();
+                    let mut merged_map = HashMap::new();
+                    let mut new_textures = vec![];
+                    for (i, tex) in self.model.textures.iter().enumerate() {
+                        if tex_name_map.contains_key(tex) {
+                            merged_map.insert(TextureId(i as u32), tex_name_map[tex]);
+                        } else {
+                            merged_map.insert(TextureId(i as u32), TextureId(tex_name_map.len() as u32));
+                            tex_name_map.insert(tex, TextureId(tex_name_map.len() as u32));
+                            new_textures.push(tex.clone());
+                        }
                     }
-                });
+
+                    undo_history
+                        .apply(&mut self.model, UndoAction::ChangeTextures { id_map: merged_map, textures: new_textures })
+                        .unwrap();
+                    self.ui_state.properties_panel_dirty = true;
+                }
+
+                if ui.button("🔃 Reload").clicked() {
+                    reload_textures = true;
+                }
+
                 ui.separator();
 
                 let tex = if let TreeValue::Textures(TextureTreeValue::Texture(tex)) = self.ui_state.tree_view_selection {
@@ -1775,27 +1800,27 @@ impl PofToolsGui {
                     }
                     TreeValue::Weapons(WeaponTreeValue::PriHeader) => {
                         ui.heading("Primary Weapons");
-                        (Some((&mut self.model.primary_weps, true)), None, None)
+                        (Some((&mut self.model.pof_model.primary_weps, true)), None, None)
                     }
                     TreeValue::Weapons(WeaponTreeValue::PriBank(bank)) => {
                         ui.heading("Primary Weapons");
-                        (Some((&mut self.model.primary_weps, true)), Some(bank), None)
+                        (Some((&mut self.model.pof_model.primary_weps, true)), Some(bank), None)
                     }
                     TreeValue::Weapons(WeaponTreeValue::PriBankPoint(bank, point)) => {
                         ui.heading("Primary Weapons");
-                        (Some((&mut self.model.primary_weps, true)), Some(bank), Some(point))
+                        (Some((&mut self.model.pof_model.primary_weps, true)), Some(bank), Some(point))
                     }
                     TreeValue::Weapons(WeaponTreeValue::SecHeader) => {
                         ui.heading("Secondary Weapons");
-                        (Some((&mut self.model.secondary_weps, false)), None, None)
+                        (Some((&mut self.model.pof_model.secondary_weps, false)), None, None)
                     }
                     TreeValue::Weapons(WeaponTreeValue::SecBank(bank)) => {
                         ui.heading("Secondary Weapons");
-                        (Some((&mut self.model.secondary_weps, false)), Some(bank), None)
+                        (Some((&mut self.model.pof_model.secondary_weps, false)), Some(bank), None)
                     }
                     TreeValue::Weapons(WeaponTreeValue::SecBankPoint(bank, point)) => {
                         ui.heading("Secondary Weapons");
-                        (Some((&mut self.model.secondary_weps, false)), Some(bank), Some(point))
+                        (Some((&mut self.model.pof_model.secondary_weps, false)), Some(bank), Some(point))
                     }
                     _ => {
                         unreachable!();
@@ -1842,7 +1867,7 @@ impl PofToolsGui {
                 let offset_changed = UiState::model_value_edit(
                     &mut self.ui_state.viewport_3d_dirty,
                     ui,
-                    self.model.warnings.contains(&Warning::WeaponOffsetInvalidVersion {
+                    self.model.pof_model.warnings.contains(&Warning::WeaponOffsetInvalidVersion {
                         primary: weapon_selection.is_primary(),
                         bank: bank_num.unwrap_or_default(),
                         point: point_num.unwrap_or_default(),
@@ -2461,7 +2486,8 @@ impl PofToolsGui {
                     {
                         self.model.recheck_warnings(One(Warning::DuplicatePathName(old_name)));
                         self.model
-                            .recheck_warnings(One(Warning::DuplicatePathName(self.model.paths[num].name.clone())));
+                            .pof_model
+                            .recheck_warnings(One(Warning::DuplicatePathName(self.model.pof_model.paths[num].name.clone())));
                         self.model.recheck_warnings(One(Warning::PathNameTooLong(num)));
                     };
                 } else {

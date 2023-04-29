@@ -866,6 +866,7 @@ impl PofToolsGui {
         let mut reload_textures = false;
         let mut buffer_ids_to_rebuild = vec![];
         let mut rebuild_all_buffers = false;
+        let mut merge_duplicate_textures = false;
 
         macro_rules! select_new_tree_val {
             ($x:expr) => {
@@ -1651,24 +1652,7 @@ impl PofToolsGui {
                 ui.separator();
 
                 if ui.button("🗐 Merge Duplicates").clicked() {
-                    use pof::TextureId;
-                    let mut tex_name_map = HashMap::new();
-                    let mut merged_map = HashMap::new();
-                    let mut new_textures = vec![];
-                    for (i, tex) in self.model.textures.iter().enumerate() {
-                        if tex_name_map.contains_key(tex) {
-                            merged_map.insert(TextureId(i as u32), tex_name_map[tex]);
-                        } else {
-                            merged_map.insert(TextureId(i as u32), TextureId(tex_name_map.len() as u32));
-                            tex_name_map.insert(tex, TextureId(tex_name_map.len() as u32));
-                            new_textures.push(tex.clone());
-                        }
-                    }
-
-                    undo_history
-                        .apply(&mut self.model, UndoAction::ChangeTextures { id_map: merged_map, textures: new_textures })
-                        .unwrap();
-                    self.ui_state.properties_panel_dirty = true;
+                    merge_duplicate_textures = true;
                 }
 
                 if ui.button("🔃 Reload").clicked() {
@@ -2642,11 +2626,34 @@ impl PofToolsGui {
             }
         }
 
+        if merge_duplicate_textures {
+            use pof::TextureId;
+            let mut tex_name_map = HashMap::new();
+            let mut merged_map = HashMap::new();
+            let mut new_textures = vec![];
+            for (i, tex) in self.model.textures.iter().enumerate() {
+                if tex_name_map.contains_key(tex) {
+                    merged_map.insert(TextureId(i as u32), tex_name_map[tex]);
+                } else {
+                    merged_map.insert(TextureId(i as u32), TextureId(tex_name_map.len() as u32));
+                    tex_name_map.insert(tex, TextureId(tex_name_map.len() as u32));
+                    new_textures.push(tex.clone());
+                }
+            }
+
+            undo_history
+                .apply(&mut self.model, UndoAction::ChangeTextures { id_map: merged_map, textures: new_textures })
+                .unwrap();
+
+            self.ui_state.properties_panel_dirty = true;
+        }
+
         if reload_textures {
             self.load_textures();
         }
 
         if self.ui_state.properties_panel_dirty {
+            self.sanitize_ui_state();
             self.ui_state.refresh_properties_panel(&self.model);
             self.ui_state.properties_panel_dirty = false;
         }

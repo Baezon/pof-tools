@@ -807,7 +807,7 @@ impl undo::Action for UndoAction {
 }
 
 impl PofToolsGui {
-    pub fn santizie_ui_state(&mut self) {
+    pub fn sanitize_ui_state(&mut self) {
         let (idx, len) = match self.tree_view_selection {
             TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) => (id.0 as usize, self.model.sub_objects.len()),
             TreeValue::Textures(TextureTreeValue::Texture(id)) => (id.0 as usize, self.model.textures.len()),
@@ -982,12 +982,12 @@ impl PofToolsGui {
 
                 if ui.add_enabled(undo_history.can_undo(), egui::Button::new("⎗")).on_hover_text("Undo").clicked() {
                     undo_history.undo(&mut *self.model);
-                    self.santizie_ui_state();
+                    self.sanitize_ui_state();
                 }
 
                 if ui.add_enabled(undo_history.can_redo(), egui::Button::new("⎘")).on_hover_text("Redo").clicked() {
                     undo_history.redo(&mut *self.model);
-                    self.santizie_ui_state();
+                    self.sanitize_ui_state();
                 }
 
                 ui.separator();

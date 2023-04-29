@@ -726,7 +726,7 @@ fn main() {
                     drop(input);
                     if egui.egui_ctx.memory().focus().is_none() && ctrl && z {
                         undo_history.undo(&mut *pt_gui.model);
-                        pt_gui.santizie_ui_state();
+                        pt_gui.sanitize_ui_state();
                     }
 
                     let model = &pt_gui.model;

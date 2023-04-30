@@ -471,8 +471,6 @@ impl PofToolsGui {
             self.buffer_shield = Some(GlBufferedShield::new(display, shield));
         }
 
-        self.maybe_recalculate_3d_helpers(display);
-
         self.model.recheck_warnings(pof::Set::All);
         self.model.recheck_errors(pof::Set::All);
         self.ui_state.tree_view_selection = Default::default();
@@ -484,6 +482,7 @@ impl PofToolsGui {
         self.ui_state.last_selected_subobj = self.model.header.detail_levels.first().copied();
         self.ui_state.tree_view_selection = TreeValue::Header;
 
+        self.maybe_recalculate_3d_helpers(display);
         self.load_textures();
 
         let filename = self.model.path_to_file.file_name().unwrap_or_default().to_string_lossy();

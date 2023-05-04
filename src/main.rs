@@ -25,15 +25,17 @@ use glium::{
 use glm::Mat4x4;
 use native_dialog::FileDialog;
 use pof::{
-    properties_get_field, BspData, Insignia, Model, NameLink, NormalId, ObjVec, ObjectId, Parser, PolyVertex, Polygon, ShieldData, SubObject,
-    TextureId, Vec3d, VertexId,
+    properties_get_field, BspData, Insignia, NameLink, NormalId, ObjVec, ObjectId, Parser, PolyVertex, Polygon, ShieldData, SubObject, TextureId,
+    Vec3d, VertexId,
 };
 use simplelog::*;
 use std::{
     collections::HashMap,
     f32::consts::PI,
     fs::File,
+    hash::Hash,
     io::{Cursor, Read},
+    ops::{Deref, DerefMut},
     path::PathBuf,
     sync::mpsc::TryRecvError,
 };
@@ -361,6 +363,37 @@ pub struct Normal {
 
 glium::implement_vertex!(Normal, normal);
 
+pub struct Model {
+    pof_model: pof::Model,
+    /// Annoying, but 'merge' textures is best handled as simply filling this map and deferring the actual task
+    /// of merging textures until write
+    texture_map: HashMap<TextureId, TextureId>,
+}
+impl Deref for Model {
+    type Target = pof::Model;
+
+    fn deref(&self) -> &pof::Model {
+        &self.pof_model
+    }
+}
+impl DerefMut for Model {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.pof_model
+    }
+}
+impl Model {
+    pub fn clean_up(&mut self) {
+        // apply changes form the texture map
+        for subobj in self.pof_model.sub_objects.iter_mut() {
+            for (_, poly) in subobj.bsp_data.collision_tree.leaves_mut() {
+                poly.texture = self.texture_map[&poly.texture];
+            }
+        }
+
+        self.pof_model.clean_up();
+    }
+}
+
 impl PofToolsGui {
     fn save_model(model: &Model) -> Option<String> {
         let mut out = None;
@@ -409,16 +442,19 @@ impl PofToolsGui {
                 let ext = path.extension().map(|ext| ext.to_ascii_lowercase());
                 let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
                 info!("Attempting to load {}", filename);
-                match ext.as_ref().and_then(|ext| ext.to_str()) {
-                    Some("dae") => pof::parse_dae(path),
-                    Some("gltf" | "glb") => pof::parse_gltf(path),
-                    Some("pof") => {
-                        let file = File::open(&path).expect("TODO invalid file or smth i dunno");
-                        let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
-                        Box::new(parser.parse(path).expect("TODO invalid pof file or smth i dunno"))
-                    }
-                    _ => todo!(),
-                }
+                Box::new(Model {
+                    pof_model: match ext.as_ref().and_then(|ext| ext.to_str()) {
+                        Some("dae") => pof::parse_dae(path),
+                        Some("gltf" | "glb") => pof::parse_gltf(path),
+                        Some("pof") => {
+                            let file = File::open(&path).expect("TODO invalid file or smth i dunno");
+                            let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
+                            parser.parse(path).expect("TODO invalid pof file or smth i dunno")
+                        }
+                        _ => todo!(),
+                    },
+                    texture_map: HashMap::new(),
+                })
             })
         });
         model.map_err(|panic| *panic.downcast().unwrap())
@@ -433,7 +469,7 @@ impl PofToolsGui {
         std::thread::spawn(move || drop(sender.send(Self::load_model(filepath))));
     }
 
-    fn handle_model_loading_thread(&mut self, display: &Display) {
+    fn handle_model_loading_thread(&mut self, display: &Display) -> bool {
         if let Some(thread) = &self.model_loading_thread {
             let response = thread.try_recv();
             match response {
@@ -442,6 +478,7 @@ impl PofToolsGui {
                     self.finish_loading_model(display);
 
                     self.model_loading_thread = None;
+                    return true;
                 }
                 Err(TryRecvError::Disconnected) => self.model_loading_thread = None,
                 Ok(Ok(None)) => self.model_loading_thread = None,
@@ -450,6 +487,8 @@ impl PofToolsGui {
                 Err(TryRecvError::Empty) => {}
             }
         }
+
+        false
     }
 
     // after the above thread has returned, stuffs the new model in
@@ -473,6 +512,9 @@ impl PofToolsGui {
 
         self.model.recheck_warnings(pof::Set::All);
         self.model.recheck_errors(pof::Set::All);
+        for i in 0..self.model.textures.len() {
+            self.model.texture_map.insert(TextureId(i as u32), TextureId(i as u32));
+        }
         self.ui_state.tree_view_selection = Default::default();
         self.ui_state.refresh_properties_panel(&self.model);
         self.camera_heading = 2.7;
@@ -651,7 +693,9 @@ fn main() {
         let mut catch_redraw = || {
             let redraw = || {
                 // handle whether the thread which handles loading has responded (if it exists)
-                pt_gui.handle_model_loading_thread(&display);
+                if pt_gui.handle_model_loading_thread(&display) {
+                    undo_history.clear();
+                }
 
                 pt_gui.handle_texture_loading_thread(&display);
 
@@ -681,7 +725,7 @@ fn main() {
                     drop(input);
                     if egui.egui_ctx.memory().focus().is_none() && ctrl && z {
                         undo_history.undo(&mut *pt_gui.model);
-                        pt_gui.santizie_ui_state();
+                        pt_gui.sanitize_ui_state();
                     }
 
                     let model = &pt_gui.model;
@@ -1768,7 +1812,7 @@ impl PofToolsGui {
             TreeValue::Textures(TextureTreeValue::Texture(tex)) => {
                 for buffers in &mut self.buffer_objects {
                     for buffer in &mut buffers.buffers {
-                        if buffer.texture_id == Some(tex) {
+                        if buffer.texture_id.map(|id| self.model.texture_map[&id]) == Some(tex) {
                             buffer.tint_val = 0.3;
                         }
                     }

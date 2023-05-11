@@ -950,7 +950,7 @@ fn make_subobj_node(
                     vec![
                         InputS::new(Semantic::Vertex, Url::Fragment(vert_id.clone()), 0, None),
                         InputS::new(Semantic::Normal, Url::Fragment(norm_id.clone()), 1, None),
-                        InputS::new(Semantic::TexCoord, Url::Fragment(uv_id.clone()), 2, None),
+                        InputS::new(Semantic::TexCoord, Url::Fragment(uv_id.clone()), 2, Some(0)),
                     ],
                     vcount.into_boxed_slice(),
                     indices.into_boxed_slice(),

@@ -985,6 +985,20 @@ trait ParseCtx<'a> {
                             }
                         }
                         continue;
+                    } else if name.starts_with('#') && name.contains("trans-type") {
+                        if let Some(idx) = name.find(':') {
+                            if let Ok(val) = name[(idx + 1)..].parse::<i32>() {
+                                subobj.translation_type = val.try_into().unwrap_or_default();
+                            }
+                        }
+                        continue;
+                    } else if name.starts_with('#') && name.contains("trans-axis") {
+                        if let Some(idx) = name.find(':') {
+                            if let Ok(val) = name[(idx + 1)..].parse::<i32>() {
+                                subobj.translation_axis = val.try_into().unwrap_or_default();
+                            }
+                        }
+                        continue;
                     }
                 }
 

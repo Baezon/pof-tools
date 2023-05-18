@@ -995,6 +995,16 @@ fn make_subobj_node(
             .push(DaeNode::new(format!("{}-mov-axis", subobj.name), Some(format!("#{}-mov-axis:{}", subobj.name, subobj.rotation_axis as i32))));
     }
 
+    if subobj.translation_type != Default::default() {
+        node.children
+            .push(DaeNode::new(format!("{}-mov-type", subobj.name), Some(format!("#{}-trans-type:{}", subobj.name, subobj.translation_type as i32))));
+    }
+
+    if subobj.translation_axis != Default::default() {
+        node.children
+            .push(DaeNode::new(format!("{}-mov-axis", subobj.name), Some(format!("#{}-trans-axis:{}", subobj.name, subobj.translation_axis as i32))));
+    }
+
     node.instance_geometry.push(instance);
     node.children.extend(
         subobj

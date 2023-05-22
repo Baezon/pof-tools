@@ -589,7 +589,11 @@ pub const LIGHT_BLUE: Color32 = Color32::from_rgb(0xA0, 0xD8, 0xFF);
 impl UiState {
     /// returns the RichText for a given tree value to be displayed, mostly for the purposes of coloring it specially
     fn tree_val_text(&self, model: &Model, tree_value: TreeValue, this_name: &str) -> RichText {
-        let text = RichText::new(this_name);
+        let text = if this_name.is_empty() {
+            RichText::new("<unnamed>")
+        } else {
+            RichText::new(this_name)
+        };
         for error in &model.errors {
             if let Error::DuplicateSubobjectName(duped_name) = error {
                 match tree_value {
@@ -1482,7 +1486,7 @@ impl PofToolsGui {
                                 ui_state.tree_selectable_item(
                                     &self.model,
                                     ui,
-                                    docking_bay.get_name().unwrap_or(&format!("Bay {}", i + 1)),
+                                    docking_bay.get_name().unwrap_or_default(),
                                     TreeValue::DockingBays(DockingTreeValue::Bay(i)),
                                 );
                             }

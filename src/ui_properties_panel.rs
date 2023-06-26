@@ -622,7 +622,7 @@ impl UiState {
                     self.properties_panel = PropertiesPanel::EyePoint {
                         position_string: format!("{}", model.eye_points[idx].position),
                         normal_string: format!("{}", model.eye_points[idx].normal.0),
-                        attached_subobj_idx: model.eye_points[idx].attached_subobj.0 as usize,
+                        attached_subobj_idx: model.eye_points[idx].attached_subobj.map_or(model.sub_objects.len(), |id| id.0 as usize),
                     }
                 }
                 _ => self.properties_panel = PropertiesPanel::default_eye(),
@@ -2573,10 +2573,17 @@ impl PofToolsGui {
 
                 ui.add_enabled_ui(eye_num.is_some(), |ui| {
                     if let Some(num) = eye_num {
-                        let name_list = self.model.get_subobj_names();
+                        let mut name_list = self.model.get_subobj_names();
+                        if self.model.eye_points[num].attached_subobj.is_none() {
+                            name_list.push("None".to_string());
+                        }
+
                         egui::ComboBox::from_label("Attached submodel")
-                            .show_index(ui, attached_subobj_idx, self.model.sub_objects.len(), |i| name_list[i].to_owned());
-                        self.model.eye_points[num].attached_subobj = ObjectId(*attached_subobj_idx as u32);
+                            .show_index(ui, attached_subobj_idx, name_list.len(), |i| name_list[i].to_owned());
+
+                        if *attached_subobj_idx < self.model.sub_objects.len() {
+                            self.model.eye_points[num].attached_subobj = Some(ObjectId(*attached_subobj_idx as u32));
+                        }
                     } else {
                         egui::ComboBox::from_label("Attached submodel").show_index(ui, attached_subobj_idx, 1, |_| format!(""));
                     }

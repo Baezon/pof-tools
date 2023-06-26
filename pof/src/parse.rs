@@ -253,7 +253,14 @@ impl<R: Read + Seek> Parser<R> {
                 b"EYE " => {
                     eye_points = Some(self.read_list(|this| {
                         Ok(EyePoint {
-                            attached_subobj: ObjectId(this.read_u32()?),
+                            attached_subobj: {
+                                let id = this.read_u32()?;
+                                if id == u32::MAX {
+                                    None
+                                } else {
+                                    Some(ObjectId(id))
+                                }
+                            },
                             position: this.read_vec3d()?,
                             normal: this.read_vec3d()?.try_into().unwrap_or_default(),
                         })
@@ -814,8 +821,13 @@ trait IsNode<'a>: Clone {
 
     fn parse_properties(&self, properties: &mut String) {
         for node in self.children() {
-            if let Some(name) = node.name() {
+            if let Some(mut name) = node.name() {
                 if let Some(idx) = name.find(":") {
+                    if let Some(idx2) = name.find(".") {
+                        if name.find("fvec").is_none() && name.find("uvec").is_none() {
+                            name = &name[0..idx2];
+                        }
+                    }
                     if properties.is_empty() {
                         *properties = format!("{}", &name[(idx + 1)..]);
                     } else {
@@ -1016,6 +1028,7 @@ trait ParseCtx<'a> {
             let up = self.up();
             let offset = Vec3d::from(center).from_coord(up);
 
+            println!("{:?}", node.name());
             let name = match node.name() {
                 Some(name) => name,
                 None => continue,
@@ -1283,7 +1296,7 @@ trait ParseCtx<'a> {
                     for (_, name) in node_children_with_keyword(node, "parent") {
                         if let Some(idx) = name.find(":") {
                             if let Ok(val) = &name[(idx + 1)..].parse() {
-                                new_point.attached_subobj = ObjectId(*val);
+                                new_point.attached_subobj = Some(ObjectId(*val));
                                 break;
                             }
                         }
@@ -1603,7 +1616,13 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Model {
     model.path_to_file = path.canonicalize().unwrap_or(path);
     model.textures = gltf
         .materials()
-        .map(|mat| mat.name().unwrap().strip_suffix("-material").unwrap_or(mat.name().unwrap()).to_string())
+        .map(|mat| {
+            let mut name = mat.name().unwrap().strip_suffix("-material").unwrap_or(mat.name().unwrap());
+            if let Some(idx) = name.find(".") {
+                name = &name[0..idx];
+            }
+            name.to_string()
+        })
         .collect();
 
     GltfContext { buffers }.parse_top_level_nodes(&mut model, gltf.default_scene().expect("Default scene in gltf file not set!").nodes());

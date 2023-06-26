@@ -1625,7 +1625,15 @@ impl PofToolsGui {
                                 ui_state.tree_selectable_item(
                                     &self.model,
                                     ui,
-                                    &format!("{} {}", self.model.sub_objects[eye.attached_subobj].name, i + 1),
+                                    &format!(
+                                        "{} {}",
+                                        if let Some(id) = eye.attached_subobj {
+                                            &self.model.sub_objects[id].name
+                                        } else {
+                                            "(None)"
+                                        },
+                                        i + 1
+                                    ),
                                     TreeValue::EyePoints(EyeTreeValue::EyePoint(i)),
                                 );
                             }

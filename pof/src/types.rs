@@ -602,7 +602,7 @@ mk_struct! {
 
     #[derive(Default, Debug, Clone)]
     pub struct EyePoint {
-        pub attached_subobj: ObjectId,
+        pub attached_subobj: Option<ObjectId>,
         pub position: Vec3d,
         pub normal: NormalVec3,
     }

@@ -744,9 +744,11 @@ fn make_eyes_node<N: Node>(ctx: &mut N::Ctx, eye_points: &[EyePoint], up: UpAxis
         point_node.translate(pos.into());
         point_node.rotate(vec_to_rotation(&point.normal.0, up));
 
-        point_node
-            .children()
-            .push(N::from_name(format!("#e{}-parent", i), format!("#e{}-parent:{}", i, point.attached_subobj.0)).build(ctx));
+        if let Some(id) = point.attached_subobj {
+            point_node
+                .children()
+                .push(N::from_name(format!("#e{}-parent", i), format!("#e{}-parent:{}", i, id.0)).build(ctx));
+        }
 
         node.children().push(point_node.build(ctx));
     }

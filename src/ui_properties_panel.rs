@@ -1302,7 +1302,14 @@ impl PofToolsGui {
                 // Offset edit ================================================================
 
                 ui.horizontal_wrapped(|ui| {
+                    if self.model.header.detail_levels.get(0).map_or(false, |id| selected_id == Some(*id))
+                        && self.model.warnings.contains(&Warning::Detail0NonZeroOffset)
+                    {
+                        ui.visuals_mut().override_text_color = Some(WARNING_YELLOW);
+                    }
                     ui.label("Offset:");
+                    ui.visuals_mut().override_text_color = None;
+
                     let response = ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate"));
 
                     if response.clicked() {
@@ -1330,6 +1337,7 @@ impl PofToolsGui {
                                 self.model.sub_objects[id].offset = parsed_string;
                             }
                             self.ui_state.viewport_3d_dirty = true;
+                            self.model.recheck_warnings(One(Warning::Detail0NonZeroOffset));
                         }
                     }
                     self.ui_state.display_origin |= response.hovered() || response.has_focus();

@@ -460,6 +460,15 @@ impl<R: Read + Seek> Parser<R> {
             sub_objects[id].is_debris_model = true;
         }
 
+        if let Some(points) = eye_points.as_deref_mut() {
+            for (i, eye) in points.iter_mut().enumerate() {
+                if eye.attached_subobj.0 >= sub_objects.len() as u32 {
+                    eye.attached_subobj = header.detail_levels.get(0).map_or(ObjectId(0), |id| *id);
+                    warn!("Invalid eye point {} reset", i);
+                }
+            }
+        }
+
         let mut textures = textures.unwrap_or_default();
         let untextured_idx = post_parse_fill_untextured_slot(&mut sub_objects, &mut textures);
 

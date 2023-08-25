@@ -132,6 +132,7 @@ impl TreeValue {
             Warning::GlowBankPropertiesTooLong(idx) => Some(TreeValue::Glows(GlowTreeValue::Bank(*idx))),
             Warning::SpecialPointPropertiesTooLong(idx) => Some(TreeValue::SpecialPoints(SpecialPointTreeValue::Point(*idx))),
             Warning::InvalidDockParentSubmodel(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(*idx))),
+            Warning::Detail0NonZeroOffset => Some(TreeValue::SubObjects(SubObjectTreeValue::SubObject(model.header.detail_levels[0]))),
         }
     }
 
@@ -1223,6 +1224,13 @@ impl PofToolsGui {
                                         properties_get_field(&self.model.docking_bays[*idx].properties, "$parent_submodel").unwrap(),
                                         dock_name
                                     )
+                                }
+                                Warning::Detail0NonZeroOffset => {
+                                    if let Some(id) = self.model.header.detail_levels.get(0) {
+                                        format!("⚠ Detail0 object '{}' should have a (0, 0, 0) offset.", self.model.sub_objects[*id].name)
+                                    } else {
+                                        unreachable!()
+                                    }
                                 }
                                 Warning::PathNameTooLong(_)
                                 | Warning::SubObjectNameTooLong(_)

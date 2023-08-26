@@ -479,8 +479,8 @@ impl<R: Read + Seek> Parser<R> {
 
         if let Some(points) = eye_points.as_deref_mut() {
             for (i, eye) in points.iter_mut().enumerate() {
-                if eye.attached_subobj.0 >= sub_objects.len() as u32 {
-                    eye.attached_subobj = header.detail_levels.get(0).map_or(ObjectId(0), |id| *id);
+                if eye.attached_subobj.map_or(false, |id| id.0 >= sub_objects.len() as u32) {
+                    eye.attached_subobj = None;
                     warn!("Invalid eye point {} reset", i);
                 }
             }

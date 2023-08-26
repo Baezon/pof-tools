@@ -1227,7 +1227,7 @@ impl PofToolsGui {
                                 }
                                 Warning::Detail0NonZeroOffset => {
                                     let id = self.model.header.detail_levels[0];
-                                    format!("⚠ Detail0 object '{}' should have a (0, 0, 0) offset.", self.model.sub_objects[*id].name)
+                                    format!("⚠ Detail0 object '{}' should have a (0, 0, 0) offset.", self.model.sub_objects[id].name)
                                 }
                                 Warning::PathNameTooLong(_)
                                 | Warning::SubObjectNameTooLong(_)

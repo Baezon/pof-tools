@@ -4,7 +4,6 @@ use std::str::FromStr;
 
 use egui::{style::Widgets, text::LayoutJob, CollapsingHeader, Color32, DragValue, Label, Response, RichText, TextEdit, TextFormat, TextStyle, Ui};
 use glium::Display;
-use itertools::Itertools;
 use nalgebra_glm::TMat4;
 use pof::{
     Dock, Error, EyePoint, GlowPoint, GlowPointBank, Insignia, ObjectId, PathId, PathPoint, Set::*, SpecialPoint, SubsysRotationAxis,

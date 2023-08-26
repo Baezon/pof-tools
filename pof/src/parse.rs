@@ -3,6 +3,7 @@ use byteorder::{ReadBytesExt, LE};
 use core::panic;
 use dae_parser as dae;
 use glm::Mat4x4;
+use log::warn;
 use nalgebra_glm as glm;
 use std::collections::HashMap;
 use std::convert::TryInto;
@@ -456,9 +457,25 @@ impl<R: Read + Seek> Parser<R> {
             }
         }
 
-        for id in debris_objs {
-            sub_objects[id].is_debris_model = true;
-        }
+        debris_objs.retain(|id| {
+            if id.0 < sub_objects.len() as u32 {
+                sub_objects[*id].is_debris_model = true;
+                true
+            } else {
+                warn!("Invalid debris object {} discarded", id.0);
+                false
+            }
+        });
+
+        let mut header = header.expect("No header chunk found???");
+        header.detail_levels.retain(|id| {
+            if id.0 < sub_objects.len() as u32 {
+                true
+            } else {
+                warn!("Invalid detail level object {} discarded", id.0);
+                false
+            }
+        });
 
         if let Some(points) = eye_points.as_deref_mut() {
             for (i, eye) in points.iter_mut().enumerate() {
@@ -474,7 +491,7 @@ impl<R: Read + Seek> Parser<R> {
 
         let mut model = Model {
             version: self.version,
-            header: header.expect("No header chunk found???"),
+            header,
             sub_objects,
             textures,
             paths: paths.unwrap_or_default(),

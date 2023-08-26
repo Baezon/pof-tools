@@ -1829,6 +1829,7 @@ dependencies = [
  "gltf",
  "gltf-json",
  "itertools",
+ "log",
  "nalgebra",
  "nalgebra-glm",
  "urlencoding",

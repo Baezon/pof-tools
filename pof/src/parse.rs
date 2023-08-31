@@ -5,11 +5,45 @@ use dae_parser as dae;
 use glm::Mat4x4;
 use log::warn;
 use nalgebra_glm as glm;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::{self, BufReader, ErrorKind, Read, Seek, SeekFrom};
 use std::path::PathBuf;
+
+impl Model {
+    fn prune_unused_textures(&mut self) {
+        // remove unused textures
+        // tally up used texture ids
+        let mut used_tex_ids = HashSet::new();
+        for subobj in &self.sub_objects {
+            for (_, poly) in subobj.bsp_data.collision_tree.leaves() {
+                used_tex_ids.insert(poly.texture);
+            }
+        }
+
+        // map the old ids to new ids, taking into account we're going to shrink the list
+        let mut tex_map = HashMap::new();
+        for i in 0..self.textures.len() {
+            if used_tex_ids.contains(&TextureId(i as u32)) {
+                tex_map.insert(TextureId(i as u32), TextureId(tex_map.len() as u32));
+            }
+        }
+
+        // apply the mapping
+        for subobj in self.sub_objects.iter_mut() {
+            for (_, poly) in subobj.bsp_data.collision_tree.leaves_mut() {
+                poly.texture = tex_map[&poly.texture];
+            }
+        }
+
+        // and finally remove the unused textures
+        let mut used_tex_ids = used_tex_ids.iter().collect::<Vec<_>>();
+        used_tex_ids.sort();
+        let new_textures = used_tex_ids.iter().map(|id| self.textures[id.0 as usize].clone()).collect();
+        self.textures = new_textures;
+    }
+}
 
 pub struct Parser<R> {
     file: R,
@@ -1525,6 +1559,9 @@ pub fn parse_dae(path: std::path::PathBuf) -> Model {
 
     let scene = &document.scene.as_ref().unwrap().instance_visual_scene.as_ref().unwrap().url;
     ctx.parse_top_level_nodes(&mut model, &ctx.local_maps.get(scene).unwrap().nodes);
+
+    model.prune_unused_textures();
+
     model
 }
 
@@ -1642,7 +1679,14 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Model {
         })
         .collect();
 
-    GltfContext { buffers }.parse_top_level_nodes(&mut model, gltf.default_scene().expect("Default scene in gltf file not set!").nodes());
+    let scene = gltf
+        .default_scene()
+        .unwrap_or(gltf.scenes().next().expect("no scene found in gltf file!"));
+
+    GltfContext { buffers }.parse_top_level_nodes(&mut model, scene.nodes());
+
+    model.prune_unused_textures();
+
     model
 }
 

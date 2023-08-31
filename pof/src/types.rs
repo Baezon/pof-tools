@@ -1960,6 +1960,11 @@ impl Model {
                 Warning::InvalidDockParentSubmodel(idx) => self.docking_bays.get(*idx).map_or(false, |dock| {
                     properties_get_field(&dock.properties, "$parent_submodel").map_or(false, |name| self.get_obj_id_by_name(name).is_none())
                 }),
+                Warning::Detail0NonZeroOffset => self
+                    .header
+                    .detail_levels
+                    .get(0)
+                    .map_or(false, |id| !self.sub_objects[*id].offset.is_null()),
             };
 
             let existing_warning = self.warnings.contains(&warning);
@@ -2090,6 +2095,12 @@ impl Model {
 
             for duped_name in self.paths.iter().map(|path| &path.name).duplicates() {
                 self.warnings.insert(Warning::DuplicatePathName(duped_name.clone()));
+            }
+
+            if let Some(id) = self.header.detail_levels.get(0) {
+                if !self.sub_objects[*id].offset.is_null() {
+                    self.warnings.insert(Warning::Detail0NonZeroOffset);
+                }
             }
 
             for duped_id in self.header.detail_levels.iter().duplicates() {
@@ -2676,6 +2687,7 @@ pub enum Warning {
     TooManyEyePoints,
     TooManyTextures,
     InvalidDockParentSubmodel(usize),
+    Detail0NonZeroOffset,
 
     PathNameTooLong(usize),
     SpecialPointNameTooLong(usize),

@@ -33,7 +33,6 @@ use std::{
     collections::HashMap,
     f32::consts::PI,
     fs::File,
-    hash::Hash,
     io::{Cursor, Read},
     ops::{Deref, DerefMut},
     path::PathBuf,

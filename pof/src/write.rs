@@ -1032,7 +1032,7 @@ impl Model {
                 let mut top_level_node = make_subobj_node(up, &self.sub_objects, subobj, &self.turrets, &mut geometries, &materials);
 
                 for (i, insignia) in self.insignias.iter().enumerate() {
-                    if self.get_detail_level(subobj.obj_id) == Some(insignia.detail_level) {
+                    if self.get_sobj_detail_level(subobj.obj_id) == Some(insignia.detail_level) {
                         top_level_node.children.push(make_insignia_node(insignia, &mut geometries, i, up))
                     }
                 }
@@ -1466,7 +1466,7 @@ impl GltfBuilder {
                 let mut top_level_node = self.make_subobj_node(&model.sub_objects, subobj, &model.turrets, model.textures.len());
 
                 for (i, insignia) in model.insignias.iter().enumerate() {
-                    if model.get_detail_level(subobj.obj_id) == Some(insignia.detail_level) {
+                    if model.get_sobj_detail_level(subobj.obj_id) == Some(insignia.detail_level) {
                         top_level_node.children().push(self.make_insignia_node(insignia, i, up))
                     }
                 }

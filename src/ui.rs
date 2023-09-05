@@ -18,6 +18,7 @@ use eframe::egui::{self, Button, TextStyle, Ui};
 use pof::ObjectId;
 
 use crate::{
+    ui_import::ImportWindow,
     ui_properties_panel::{IndexingButtonsResponse, PropertiesPanel},
     GlArrowhead, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers, Graphics, Model, POF_TOOLS_VERSION,
 };
@@ -491,6 +492,7 @@ pub struct UiState {
     pub properties_panel_dirty: bool,
     pub last_selected_subobj: Option<ObjectId>,
     pub properties_panel: PropertiesPanel,
+    pub import_window: ImportWindow,
     pub display_radius: bool,
     pub display_bbox: bool,
     pub display_origin: bool,
@@ -1023,6 +1025,16 @@ impl PofToolsGui {
                         self.display_mode = DisplayMode::Wireframe;
                     }
                 });
+
+                if ui.button("import").clicked() {
+                    self.ui_state.import_window.open = !self.ui_state.import_window.open;
+                }
+                if self.ui_state.show_import_window(&self.model, ctx) {
+                    self.merge_import_model();
+                    self.import_window.open = false;
+                    self.finish_loading_model(display);
+                    self.model.recalc_semantic_name_links();
+                }
 
                 ui.add_space(ui.available_width() - ui.spacing().interact_size.x / 2.0);
 

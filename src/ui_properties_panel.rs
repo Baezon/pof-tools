@@ -1960,7 +1960,7 @@ impl PofToolsGui {
                 subobj_names_list.extend(self.model.get_subobj_names().into_iter());
 
                 let mut parent_id = if let Some(bay) = bay_num {
-                    pof::properties_get_field(&self.model.docking_bays[bay].properties, "$parent_submodel").map_or(0, |parent_name| {
+                    self.model.docking_bays[bay].get_parent_obj().map_or(0, |parent_name| {
                         subobj_names_list
                             .iter()
                             .position(|name| name.to_lowercase() == parent_name.to_lowercase())

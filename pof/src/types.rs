@@ -776,6 +776,10 @@ impl SpecialPoint {
         self.position = matrix * self.position;
         self.radius *= scalar;
     }
+
+    pub fn is_subsystem(&self) -> bool {
+        properties_get_field(&self.properties, "$special") == Some("subsystem")
+    }
 }
 
 #[derive(Default, Debug, Clone)]
@@ -1269,6 +1273,12 @@ impl Serialize for ThrusterBank {
     }
 }
 
+impl ThrusterBank {
+    pub fn get_engine_subsys(&self) -> Option<&str> {
+        properties_get_field(&self.properties, "$engine_subsystem")
+    }
+}
+
 macro_rules! mk_enumeration {
     ($($(#[$meta:meta])* pub enum $tyname:ident($base:ty) {
         $($(#[$doc:meta])* $name:ident = $n:literal,)*
@@ -1397,7 +1407,7 @@ pub enum NameLink {
 pub struct SubObject {
     pub obj_id: ObjectId,
     pub radius: f32,
-    pub(crate) parent: Option<ObjectId>,
+    pub parent: Option<ObjectId>,
     pub offset: Vec3d,
     pub geo_center: Vec3d,
     pub bbox: BoundingBox,
@@ -1410,7 +1420,7 @@ pub struct SubObject {
     pub bsp_data: BspData,
 
     // the following fields are derived information
-    pub(crate) children: Vec<ObjectId>,
+    pub children: Vec<ObjectId>,
     pub is_debris_model: bool,
 
     // "semantic name links", fields derived specifically from their names
@@ -1477,6 +1487,10 @@ impl SubObject {
 
     pub fn uvec_fvec(&self) -> Option<(Vec3d, Vec3d)> {
         parse_uvec_fvec(&self.properties)
+    }
+
+    pub fn is_subsystem(&self) -> bool {
+        properties_get_field(&self.properties, "$special") == Some("subsystem")
     }
 }
 
@@ -1584,12 +1598,11 @@ impl Dock {
     }
 
     pub fn get_name(&self) -> Option<&str> {
-        for str in self.properties.split('\n') {
-            if let Some(name) = str.strip_prefix("$name=") {
-                return Some(name);
-            }
-        }
-        None
+        properties_get_field(&self.properties, "$name")
+    }
+
+    pub fn get_parent_obj(&self) -> Option<&str> {
+        properties_get_field(&self.properties, "$parent_submodel")
     }
 
     pub fn apply_transform(&mut self, matrix: &TMat4<f32>) {
@@ -1647,7 +1660,7 @@ impl Turret {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Insignia {
     pub detail_level: u32,
     pub vertices: Vec<Vec3d>,
@@ -2210,7 +2223,7 @@ impl Model {
         }
     }
 
-    pub fn get_detail_level(&self, obj_id: ObjectId) -> Option<u32> {
+    pub fn get_sobj_detail_level(&self, obj_id: ObjectId) -> Option<u32> {
         for (i, id) in self.header.detail_levels.iter().enumerate() {
             if self.is_obj_id_ancestor(obj_id, *id) {
                 return Some(i as u32);
@@ -2730,7 +2743,7 @@ pub fn post_parse_fill_untextured_slot(sub_objects: &mut Vec<SubObject>, texture
     }
 }
 
-fn properties_delete_field(properties: &mut String, field: &str) {
+pub fn properties_delete_field(properties: &mut String, field: &str) {
     if let Some(start_idx) = properties.find(field) {
         let mut end_idx = if let Some(idx) = properties[start_idx..].chars().position(|d| d.is_ascii_control()) {
             start_idx + idx

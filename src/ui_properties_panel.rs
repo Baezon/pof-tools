@@ -2636,20 +2636,25 @@ impl PofToolsGui {
         if merge_duplicate_textures {
             use pof::TextureId;
             let mut tex_name_map = HashMap::new();
-            let mut merged_map = HashMap::new();
+            let mut changed_id_map = HashMap::new();
             let mut new_textures = vec![];
             for (i, tex) in self.model.textures.iter().enumerate() {
                 if tex_name_map.contains_key(tex) {
-                    merged_map.insert(TextureId(i as u32), tex_name_map[tex]);
+                    changed_id_map.insert(TextureId(i as u32), tex_name_map[tex]);
                 } else {
-                    merged_map.insert(TextureId(i as u32), TextureId(tex_name_map.len() as u32));
+                    changed_id_map.insert(TextureId(i as u32), TextureId(tex_name_map.len() as u32));
                     tex_name_map.insert(tex, TextureId(tex_name_map.len() as u32));
                     new_textures.push(tex.clone());
                 }
             }
 
+            let mut new_map = self.model.texture_map.clone();
+            for (id1, id2) in changed_id_map {
+                *(new_map.get_mut(&id1).unwrap()) = id2;
+            }
+
             undo_history
-                .apply(&mut self.model, UndoAction::ChangeTextures { id_map: merged_map, textures: new_textures })
+                .apply(&mut self.model, UndoAction::ChangeTextures { id_map: new_map, textures: new_textures })
                 .unwrap();
 
             self.ui_state.properties_panel_dirty = true;

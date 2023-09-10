@@ -750,7 +750,7 @@ impl undo::Action for UndoAction {
     fn apply(&mut self, target: &mut Model) -> undo::Result<UndoAction> {
         match self {
             UndoAction::ChangeTextures { id_map, textures } => {
-                target.texture_map.extend(id_map.iter()); // should always be extended, never shrunk, so anything still using the old ids can use the map
+                std::mem::swap(&mut target.texture_map, id_map);
                 std::mem::swap(&mut target.textures, textures);
                 Ok(())
             }

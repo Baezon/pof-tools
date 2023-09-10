@@ -22,10 +22,11 @@ impl Model {
             }
         }
 
-        // map the old ids to new ids, taking into account we're going to shrink the list
+        // while mapping the old to new ids, consume the existing textures, and re-add them once its clear they're used
         let mut tex_map = HashMap::new();
-        for i in 0..self.textures.len() {
+        for (i, tex) in std::mem::take(&mut self.textures).into_iter().enumerate() {
             if used_tex_ids.contains(&TextureId(i as u32)) {
+                self.textures.push(tex);
                 tex_map.insert(TextureId(i as u32), TextureId(tex_map.len() as u32));
             }
         }
@@ -36,12 +37,6 @@ impl Model {
                 poly.texture = tex_map[&poly.texture];
             }
         }
-
-        // and finally remove the unused textures
-        let mut used_tex_ids = used_tex_ids.iter().collect::<Vec<_>>();
-        used_tex_ids.sort();
-        let new_textures = used_tex_ids.iter().map(|id| self.textures[id.0 as usize].clone()).collect();
-        self.textures = new_textures;
     }
 }
 
@@ -1681,7 +1676,7 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Model {
 
     let scene = gltf
         .default_scene()
-        .unwrap_or(gltf.scenes().next().expect("no scene found in gltf file!"));
+        .unwrap_or_else(|| gltf.scenes().next().expect("no scene found in gltf file!"));
 
     GltfContext { buffers }.parse_top_level_nodes(&mut model, scene.nodes());
 

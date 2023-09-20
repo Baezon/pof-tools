@@ -909,25 +909,21 @@ impl PofToolsGui {
                         ui.close_menu();
                     }
 
-                    if ui.button("Global Import").on_hover_text("Deletes data from the existing model and replaces it with the target model's. \n\
-                                                                Replaces mass, moment of inertia, weapon points, docking points, thrusters, glow points, \
-                                                                special points, turrets (only exact base and gun object name matches are retained), \
-                                                                paths, eye points, and insignia.").clicked() {
-
-                        let model = crossbeam::thread::scope(|s| s.spawn(|_| PofToolsGui::load_model(None)).join().unwrap()).unwrap();
-
-                        if let Ok(Some(model)) = model {
-                            self.model.global_import(Box::new(model.pof_model));
-                            self.tree_view_selection = TreeValue::Header;
-                            self.ui_state.refresh_properties_panel(&self.model);
-                            self.viewport_3d_dirty = true;
-                        }
+                    if ui.button("Import").clicked() {
+                        self.ui_state.import_window.open = !self.ui_state.import_window.open;
                         ui.close_menu();
                     }
                 });
 
-                ui.menu_button("View", |ui|{
-                    if ui.button(if self.camera_orthographic {"Perspective"} else {"Orthographic"}).clicked() {
+                if self.ui_state.show_import_window(&self.model, ctx) {
+                    self.merge_import_model();
+                    self.import_window.open = false;
+                    self.finish_loading_model(display);
+                    self.model.recalc_semantic_name_links();
+                }
+
+                ui.menu_button("View", |ui| {
+                    if ui.button(if self.camera_orthographic { "Perspective" } else { "Orthographic" }).clicked() {
                         self.camera_orthographic = !self.camera_orthographic;
                         ui.close_menu();
                     }
@@ -987,12 +983,20 @@ impl PofToolsGui {
 
                 ui.separator();
 
-                if ui.add_enabled(undo_history.can_undo(), egui::Button::new("⎗")).on_hover_text("Undo").clicked() {
+                if ui
+                    .add_enabled(undo_history.can_undo(), egui::Button::new("⎗"))
+                    .on_hover_text("Undo")
+                    .clicked()
+                {
                     undo_history.undo(&mut *self.model);
                     self.sanitize_ui_state();
                 }
 
-                if ui.add_enabled(undo_history.can_redo(), egui::Button::new("⎘")).on_hover_text("Redo").clicked() {
+                if ui
+                    .add_enabled(undo_history.can_redo(), egui::Button::new("⎘"))
+                    .on_hover_text("Redo")
+                    .clicked()
+                {
                     undo_history.redo(&mut *self.model);
                     self.sanitize_ui_state();
                 }
@@ -1025,16 +1029,6 @@ impl PofToolsGui {
                         self.display_mode = DisplayMode::Wireframe;
                     }
                 });
-
-                if ui.button("import").clicked() {
-                    self.ui_state.import_window.open = !self.ui_state.import_window.open;
-                }
-                if self.ui_state.show_import_window(&self.model, ctx) {
-                    self.merge_import_model();
-                    self.import_window.open = false;
-                    self.finish_loading_model(display);
-                    self.model.recalc_semantic_name_links();
-                }
 
                 ui.add_space(ui.available_width() - ui.spacing().interact_size.x / 2.0);
 

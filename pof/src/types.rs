@@ -2219,6 +2219,7 @@ impl Model {
             } else if sub_obj_parent.is_none() {
                 return false;
             }
+            assert!(sub_obj_parent != self.sub_objects[sub_obj_parent.unwrap()].parent, "cycle detected!! {:?} {:?}", obj_id, sub_obj_parent);
             sub_obj_parent = self.sub_objects[sub_obj_parent.unwrap()].parent;
         }
     }

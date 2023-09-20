@@ -77,6 +77,7 @@ impl UiState {
             .collapsible(false)
             .resizable(true)
             .open(&mut self.import_window.open)
+            .vscroll(true)
             .default_pos([100.0, 100.0]);
 
         let mut ret = false;
@@ -105,7 +106,10 @@ impl UiState {
                 .default_width(250.0)
                 .width_range(80.0..=250.0)
                 .show_inside(ui, |ui| {
-                    ui.label("Here you can import pof data from another pof, either by adding it or matching with");
+                    ui.label(
+                        "Here you can import pof data from another model, either by adding it or matching it against \
+                            existing data and replacing it.",
+                    );
 
                     ui.checkbox(
                         &mut self.import_window.import_options.auto_select_subobj_children,
@@ -132,6 +136,21 @@ impl UiState {
                     ui.add_space(5.0);
 
                     ui.horizontal(|ui| {
+                        let mut layouter = |ui: &egui::Ui, string: &str, wrap_width: f32| {
+                            let mut layout_job = egui::text::LayoutJob::default();
+                            layout_job.halign = egui::Align::RIGHT;
+                            layout_job.append(
+                                "Model file",
+                                0.0,
+                                egui::TextFormat {
+                                    font_id: egui::FontId::new(14.0, egui::FontFamily::Proportional),
+                                    color: Color32::WHITE,
+                                    ..Default::default()
+                                },
+                            );
+                            layout_job.wrap.max_width = wrap_width;
+                            ui.fonts().layout_job(layout_job)
+                        };
                         let response = ui.add(
                             TextEdit::singleline(
                                 &mut self
@@ -140,11 +159,11 @@ impl UiState {
                                     .as_ref()
                                     .map_or(String::new(), |model| model.path_to_file.display().to_string()),
                             )
-                            .desired_width(220.0)
-                            .interactive(false),
+                            .hint_text("Model file...")
+                            .desired_width(220.0), // .interactive(false)
                         );
                         let response = response.interact(egui::Sense::click());
-                        let mut clicked_browse = response.clicked();
+                        let mut clicked_browse = false; //response.clicked();
 
                         if self.import_window.import_model_loading_thread.is_some() {
                             ui.add(egui::widgets::Spinner::new());
@@ -162,12 +181,58 @@ impl UiState {
                     egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
                         let selection = &self.import_window.import_selection;
                         let import_model = &self.import_window.model;
+
+                        if selection.contains(&TreeValue::Header) {
+                            ui.label("Header Geometry Data selected.");
+
+                            if ImportType::Add == self.import_window.import_type {
+                                ui.indent("header warnings", |ui| {
+                                    ui.label(
+                                        RichText::new(format!("Header geometry data cannot be added, it will be match and replaced instead."))
+                                            .color(WARNING_YELLOW),
+                                    );
+                                });
+                            }
+                        }
+
                         if num_subobjects_selected > 0 {
                             ui.label(format!(
                                 "{} SubObject{} selected.",
                                 num_subobjects_selected,
                                 if num_subobjects_selected == 1 { "" } else { "s" }
                             ));
+
+                            let mut warnings = vec![];
+
+                            if ImportType::MatchAndReplace == self.import_window.import_type {
+                                for tree_val in selection.iter().filter(|select| matches!(select, TreeValue::SubObjects(_))) {
+                                    if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = tree_val {
+                                        'find_a_match: {
+                                            for subobj in &model.sub_objects {
+                                                if subobj.name == import_model.as_ref().unwrap().sub_objects[*id].name {
+                                                    break 'find_a_match;
+                                                }
+                                            }
+
+                                            warnings.push(
+                                                RichText::new(format!(
+                                                    "There is no match for subobject '{}' in the recieving model. It will be added instead.",
+                                                    import_model.as_ref().unwrap().sub_objects[*id].name
+                                                ))
+                                                .color(WARNING_YELLOW),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+
+                            if !warnings.is_empty() {
+                                ui.indent("subobject warnings", |ui| {
+                                    for warning in warnings {
+                                        ui.label(warning);
+                                    }
+                                });
+                            }
                         }
 
                         if num_pri_banks_selected > 0 {
@@ -189,49 +254,73 @@ impl UiState {
                         if num_docks_selected > 0 {
                             ui.label(format!("{} Docking bay{} selected.", num_docks_selected, if num_docks_selected == 1 { "" } else { "s" }));
 
-                            ui.indent("dock warnings", |ui| {
-                                for tree_val in selection.iter().filter(|select| matches!(select, TreeValue::DockingBays(_))) {
-                                    if let TreeValue::DockingBays(DockingTreeValue::Bay(idx)) = tree_val {
-                                        let dock = &import_model.as_ref().unwrap().docking_bays[*idx];
+                            let mut warnings = vec![];
 
-                                        if let Some(id) = dock.get_parent_obj()
-                                            .and_then(|submodel_str| import_model.as_ref().unwrap().get_obj_id_by_name(submodel_str))
+                            for tree_val in selection.iter().filter(|select| matches!(select, TreeValue::DockingBays(_))) {
+                                if let TreeValue::DockingBays(DockingTreeValue::Bay(idx)) = tree_val {
+                                    let dock = &import_model.as_ref().unwrap().docking_bays[*idx];
+
+                                    if let Some(id) = dock
+                                        .get_parent_obj()
+                                        .and_then(|submodel_str| import_model.as_ref().unwrap().get_obj_id_by_name(submodel_str))
+                                    {
+                                        if !self
+                                            .import_window
+                                            .import_selection
+                                            .contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)))
                                         {
-                                            if !self
-                                                .import_window
-                                                .import_selection
-                                                .contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)))
-                                            {
-                                                ui.label(
+                                            warnings.push(
+                                                RichText::new(format!(
+                                                    "Docking bay '{}' has a parent object which is not being imported. \
+                                                         The parent object field will be removed.",
+                                                    import_model.as_ref().unwrap().docking_bays[*idx]
+                                                        .get_name()
+                                                        .unwrap_or(&format!("Docking bay {}", idx)),
+                                                ))
+                                                .color(WARNING_YELLOW),
+                                            );
+                                        }
+                                    }
+
+                                    if self.import_window.import_type == ImportType::MatchAndReplace {
+                                        if let Some(name) = dock.get_name() {
+                                            'find_match: {
+                                                for other_dock in &model.docking_bays {
+                                                    if other_dock.get_name() == Some(name) {
+                                                        break 'find_match;
+                                                    }
+                                                }
+
+                                                warnings.push(
                                                     RichText::new(format!(
-                                                        "Docking bay '{}' has a parent object which is not being imported. The parent object field will be removed.",
-                                                        import_model.as_ref().unwrap().docking_bays[*idx]
-                                                            .get_name()
-                                                            .unwrap_or(&format!("Docking bay {}", idx)),
+                                                        "There is no match for docking bay '{}' in the recieving model. \
+                                                             It will be added instead.",
+                                                        name
                                                     ))
                                                     .color(WARNING_YELLOW),
                                                 );
                                             }
-                                        }
-
-                                        if self.import_window.import_type == ImportType::MatchAndReplace {
-                                            if let Some(name) = dock.get_name() {
-                                                'find_match: {
-                                                    for other_dock in &model.docking_bays {
-                                                        if other_dock.get_name() == Some(name) {
-                                                            break 'find_match;
-                                                        }
-                                                    }
-
-                                                    ui.label(RichText::new(format!("There is no match for docking bay '{}' in the recieving model. It will be added instead.", name)).color(WARNING_YELLOW));
-                                                }
-                                            } else {
-                                                ui.label(RichText::new(format!("Docking bay {} needs a name to be properly matched. It will be added instead.", idx)).color(WARNING_YELLOW));
-                                            }
+                                        } else {
+                                            warnings.push(
+                                                RichText::new(format!(
+                                                    "Docking bay {} needs a name to be properly matched. \
+                                                         It will be added instead.",
+                                                    idx
+                                                ))
+                                                .color(WARNING_YELLOW),
+                                            );
                                         }
                                     }
                                 }
-                            });
+                            }
+
+                            if !warnings.is_empty() {
+                                ui.indent("dock warnings", |ui| {
+                                    for warning in warnings {
+                                        ui.label(warning);
+                                    }
+                                });
+                            }
                         }
 
                         if num_thruster_banks_selected > 0 {
@@ -241,37 +330,56 @@ impl UiState {
                                 if num_thruster_banks_selected == 1 { "" } else { "s" }
                             ));
 
+                            let mut warnings = vec![];
 
-                            ui.indent("thruster banks warnings", |ui| {
-                                for tree_val in selection.iter().filter(|select| matches!(select, TreeValue::Thrusters(_))) {
-                                    if let TreeValue::Thrusters(ThrusterTreeValue::Bank(idx)) = tree_val {
+                            for tree_val in selection.iter().filter(|select| matches!(select, TreeValue::Thrusters(_))) {
+                                if let TreeValue::Thrusters(ThrusterTreeValue::Bank(idx)) = tree_val {
+                                    let import_model = &import_model.as_ref().unwrap();
+                                    if let Some(subsys_name) = import_model.thruster_banks[*idx].get_engine_subsys() {
+                                        let mut found_a_match = import_model.get_obj_id_by_name(subsys_name).map_or(false, |id| {
+                                            !self
+                                                .import_window
+                                                .import_selection
+                                                .contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)))
+                                        });
 
-                                        let import_model = &import_model.as_ref().unwrap();
-                                        if let Some(subsys_name) = import_model.thruster_banks[*idx].get_engine_subsys() {
+                                        found_a_match |= import_model
+                                            .special_points
+                                            .iter()
+                                            .filter(|spc_point| spc_point.is_subsystem())
+                                            .any(|spc_point| spc_point.name.strip_prefix('$').unwrap_or(&spc_point.name) == subsys_name);
 
-                                            let mut found_a_match = import_model
-                                                .get_obj_id_by_name(subsys_name)
-                                                .map_or(false, |id| !self
-                                                    .import_window
-                                                    .import_selection
-                                                    .contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(id))));
-
-                                            found_a_match |= import_model
-                                                .special_points
-                                                .iter()
-                                                .filter(|spc_point| spc_point.is_subsystem())
-                                                .any(|spc_point| spc_point.name.strip_prefix('$').unwrap_or(&spc_point.name) == subsys_name);
-
-                                            if !found_a_match {
-                                                // engine subsys was not imported, lose it
-                                                ui.label(RichText::new(format!("There is no matching engine subsystem for thruster bank {} in the recieving model. It will be added instead.", idx + 1)).color(WARNING_YELLOW));
-                                            }
-                                        } else {
-                                            ui.label(RichText::new(format!("Thruster bank {} needs an associated engine subsystem to be properly matched. It will be added instead.", idx + 1)).color(WARNING_YELLOW));
+                                        if !found_a_match {
+                                            // engine subsys was not imported, lose it
+                                            warnings.push(
+                                                RichText::new(format!(
+                                                    "There is no matching engine subsystem for thruster bank {} in the recieving model. \
+                                                        It will be added instead.",
+                                                    idx + 1
+                                                ))
+                                                .color(WARNING_YELLOW),
+                                            );
                                         }
+                                    } else {
+                                        warnings.push(
+                                            RichText::new(format!(
+                                                "Thruster bank {} needs an associated engine subsystem to be properly matched. \
+                                                    It will be added instead.",
+                                                idx + 1
+                                            ))
+                                            .color(WARNING_YELLOW),
+                                        );
                                     }
                                 }
-                            });
+                            }
+
+                            if !warnings.is_empty() {
+                                ui.indent("thruster banks warnings", |ui| {
+                                    for warning in warnings {
+                                        ui.label(warning);
+                                    }
+                                });
+                            }
                         }
 
                         if num_glow_banks_selected > 0 {
@@ -281,25 +389,44 @@ impl UiState {
                                 if num_glow_banks_selected == 1 { "" } else { "s" }
                             ));
 
-                            ui.indent("glow banks warnings", |ui| {
-                                if self.import_window.import_type == ImportType::MatchAndReplace {
-                                    ui.label(RichText::new("Glow banks cannt be match and replaced. Any will be added instead.").color(WARNING_YELLOW));
-                                }
+                            let mut warnings = vec![];
 
-                                for tree_val in selection.iter().filter(|select| matches!(select, TreeValue::Glows(_))) {
-                                    if let TreeValue::Glows(GlowTreeValue::Bank(idx)) = tree_val {
-                                        let glow_bank = &import_model.as_ref().unwrap().glow_banks[*idx];
-                                        if !self.import_window
-                                            .import_selection
-                                            .contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(glow_bank.obj_parent))) {
-                                            let was_already_on_detail0 = import_model.as_ref().unwrap().header.detail_levels.get(0) == Some(&glow_bank.obj_parent);
-                                            if !was_already_on_detail0 {
-                                                ui.label(RichText::new(format!("Glow bank {}'s object parent is not being imported; it will be reset to the recieving model's detail0.", idx + 1)).color(WARNING_YELLOW));
-                                            }
-                                        };
-                                    }
+                            if self.import_window.import_type == ImportType::MatchAndReplace {
+                                warnings
+                                    .push(RichText::new("Glow banks cannt be match and replaced. Any will be added instead.").color(WARNING_YELLOW));
+                            }
+
+                            for tree_val in selection.iter().filter(|select| matches!(select, TreeValue::Glows(_))) {
+                                if let TreeValue::Glows(GlowTreeValue::Bank(idx)) = tree_val {
+                                    let glow_bank = &import_model.as_ref().unwrap().glow_banks[*idx];
+                                    if !self
+                                        .import_window
+                                        .import_selection
+                                        .contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(glow_bank.obj_parent)))
+                                    {
+                                        let was_already_on_detail0 =
+                                            import_model.as_ref().unwrap().header.detail_levels.get(0) == Some(&glow_bank.obj_parent);
+                                        if !was_already_on_detail0 {
+                                            warnings.push(
+                                                RichText::new(format!(
+                                                    "Glow bank {}'s object parent is not being imported; \
+                                                         it will be reset to the recieving model's detail0.",
+                                                    idx + 1
+                                                ))
+                                                .color(WARNING_YELLOW),
+                                            );
+                                        }
+                                    };
                                 }
-                            });
+                            }
+
+                            if !warnings.is_empty() {
+                                ui.indent("glow banks warnings", |ui| {
+                                    for warning in warnings {
+                                        ui.label(warning);
+                                    }
+                                });
+                            }
                         }
 
                         if num_spc_points_selected > 0 {
@@ -309,6 +436,7 @@ impl UiState {
                                 if num_spc_points_selected == 1 { "" } else { "s" }
                             ));
 
+                            let mut warnings = vec![];
 
                             for tree_val in selection.iter().filter(|select| matches!(select, TreeValue::SpecialPoints(_))) {
                                 if let TreeValue::SpecialPoints(SpecialPointTreeValue::Point(idx)) = tree_val {
@@ -322,15 +450,31 @@ impl UiState {
                                                 }
                                             }
 
-                                            ui.label(RichText::new(format!("There is no match for special point '{}' in the recieving model. It will be added instead.", spc_point.name)).color(WARNING_YELLOW));
+                                            warnings.push(
+                                                RichText::new(format!(
+                                                    "There is no match for special point '{}' in the recieving model. It will be added instead.",
+                                                    spc_point.name
+                                                ))
+                                                .color(WARNING_YELLOW),
+                                            );
                                         }
                                     }
                                 }
+                            }
+
+                            if !warnings.is_empty() {
+                                ui.indent("special point warnings", |ui| {
+                                    for warning in warnings {
+                                        ui.label(warning);
+                                    }
+                                });
                             }
                         }
 
                         if num_turrets_selected > 0 {
                             ui.label(format!("{} Turret{} selected.", num_turrets_selected, if num_turrets_selected == 1 { "" } else { "s" }));
+
+                            let mut warnings = vec![];
 
                             for tree_val in selection.iter().filter(|select| matches!(select, TreeValue::Turrets(_))) {
                                 if let TreeValue::Turrets(TurretTreeValue::Turret(idx)) = tree_val {
@@ -339,14 +483,14 @@ impl UiState {
 
                                     match self.import_window.import_type {
                                         ImportType::Add => {
-                                                if !selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(turret.base_obj)))
+                                            if !selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(turret.base_obj)))
                                                 || !selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(turret.gun_obj)))
                                             {
                                                 // parent objects were not imported, see if we can find parents...
                                                 let mut found_match = false;
                                                 for sobj in &model.sub_objects {
-                                                    let singlepart_valid =
-                                                        sobj.name == import_model.sub_objects[turret.gun_obj].name && turret.gun_obj == turret.base_obj;
+                                                    let singlepart_valid = sobj.name == import_model.sub_objects[turret.gun_obj].name
+                                                        && turret.gun_obj == turret.base_obj;
                                                     let multipart_valid = sobj.name == import_model.sub_objects[turret.gun_obj].name
                                                         && sobj.parent().map(|id| &model.sub_objects[id].name)
                                                             == Some(&import_model.sub_objects[turret.base_obj].name);
@@ -358,30 +502,58 @@ impl UiState {
                                                 }
 
                                                 if !found_match {
-                                                    ui.label(RichText::new(format!("There is no match for turret '{}' in the recieving model. It will not be added.", import_model.sub_objects[turret.base_obj].name)).color(ERROR_RED));
+                                                    warnings.push(
+                                                        RichText::new(format!(
+                                                            "There is no match for turret '{}' in the recieving model. It will not be added.",
+                                                            import_model.sub_objects[turret.base_obj].name
+                                                        ))
+                                                        .color(ERROR_RED),
+                                                    );
                                                 }
                                             }
-                                        },
-                                        ImportType::MatchAndReplace => {
-                                            'find_match: {
-                                                for other_turret in &model.turrets {
-                                                    if model.sub_objects[other_turret.gun_obj].name == import_model.sub_objects[turret.gun_obj].name &&
-                                                        model.sub_objects[other_turret.base_obj].name == import_model.sub_objects[turret.base_obj].name {
-                                                        break 'find_match;
-                                                    }
+                                        }
+                                        ImportType::MatchAndReplace => 'find_match: {
+                                            for other_turret in &model.turrets {
+                                                if model.sub_objects[other_turret.base_obj].name == import_model.sub_objects[turret.base_obj].name {
+                                                    break 'find_match;
                                                 }
+                                            }
 
-                                                ui.label(RichText::new(format!("There is no match for turret '{}' in the recieving model. It will not be added.", import_model.sub_objects[turret.base_obj].name)).color(ERROR_RED));
+                                            if !selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(turret.base_obj))) {
+                                                warnings.push(
+                                                    RichText::new(format!(
+                                                        "There is no match for turret '{}' in the recieving model. It will not be added.",
+                                                        import_model.sub_objects[turret.base_obj].name
+                                                    ))
+                                                    .color(ERROR_RED),
+                                                );
+                                            } else {
+                                                warnings.push(
+                                                    RichText::new(format!(
+                                                        "There is no match for turret '{}' in the recieving model. It will be added instead.",
+                                                        import_model.sub_objects[turret.base_obj].name
+                                                    ))
+                                                    .color(WARNING_YELLOW),
+                                                );
                                             }
-                                        },
+                                        }
                                     }
-
                                 }
+                            }
+
+                            if !warnings.is_empty() {
+                                ui.indent("turret warnings", |ui| {
+                                    for warning in warnings {
+                                        ui.label(warning);
+                                    }
+                                });
                             }
                         }
 
                         if num_paths_selected > 0 {
                             ui.label(format!("{} Path{} selected.", num_paths_selected, if num_paths_selected == 1 { "" } else { "s" }));
+
+                            let mut warnings = vec![];
 
                             for tree_val in selection.iter().filter(|select| matches!(select, TreeValue::Paths(_))) {
                                 if let TreeValue::Paths(PathTreeValue::Path(idx)) = tree_val {
@@ -395,18 +567,31 @@ impl UiState {
                                                 }
                                             }
 
-                                            ui.label(RichText::new(format!("There is no match for path '{}' in the recieving model. It will be added instead.", path.name)).color(WARNING_YELLOW));
+                                            warnings.push(
+                                                RichText::new(format!(
+                                                    "There is no match for path '{}' in the recieving model. It will be added instead.",
+                                                    path.name
+                                                ))
+                                                .color(WARNING_YELLOW),
+                                            );
                                         }
                                     }
                                 }
                             }
+
+                            if !warnings.is_empty() {
+                                ui.indent("turret warnings", |ui| {
+                                    for warning in warnings {
+                                        ui.label(warning);
+                                    }
+                                });
+                            }
                         }
-
-
-
 
                         if num_eyes_selected > 0 {
                             ui.label(format!("{} Eye point{} selected.", num_eyes_selected, if num_eyes_selected == 1 { "" } else { "s" }));
+
+                            let mut warnings = vec![];
 
                             for tree_val in selection.iter().filter(|select| matches!(select, TreeValue::EyePoints(_))) {
                                 if let TreeValue::EyePoints(EyeTreeValue::EyePoint(idx)) = tree_val {
@@ -421,19 +606,53 @@ impl UiState {
                                                 }
                                             }
 
-                                            ui.label(RichText::new(format!("There is no match for an eye point in the recieving model. It will be added instead.")).color(WARNING_YELLOW));
+                                            warnings.push(
+                                                RichText::new(format!(
+                                                    "There is no match for an eye point in the recieving model. It will be added instead."
+                                                ))
+                                                .color(WARNING_YELLOW),
+                                            );
                                         }
                                     }
                                 }
                             }
+
+                            if !warnings.is_empty() {
+                                ui.indent("eye warnings", |ui| {
+                                    for warning in warnings {
+                                        ui.label(warning);
+                                    }
+                                });
+                            }
                         }
 
                         if num_insignias_selected > 0 {
-                            ui.label(format!("{} Insignia{} selected.", num_insignias_selected, if num_insignias_selected == 1 { "" } else { "s" }));
+                            ui.label(format!("{} Insignia selected.", num_insignias_selected));
+
+                            if self.import_window.import_type == ImportType::MatchAndReplace
+                                && selection.iter().any(|select| matches!(select, TreeValue::Insignia(_)))
+                            {
+                                ui.indent("insignia warnings", |ui| {
+                                    ui.label(
+                                        RichText::new(format!("Insignia cannot be match and replaced, any selected will be added instead."))
+                                            .color(WARNING_YELLOW),
+                                    );
+                                });
+                            }
                         }
 
                         if self.import_window.import_selection.contains(&TreeValue::Shield) {
                             ui.label(format!("Shield selected."));
+
+                            if self.import_window.import_type == ImportType::Add && selection.iter().any(|select| matches!(select, TreeValue::Shield))
+                            {
+                                ui.indent("shield warnings", |ui| {
+                                    ui.label(
+                                        RichText::new(format!("The shield cannot be added, it will be match and replaced instead."))
+                                            .color(WARNING_YELLOW),
+                                    );
+                                });
+                            }
                         }
                     });
 
@@ -468,6 +687,19 @@ impl UiState {
                                 _ => unreachable!(),
                             }
                         }};
+                    }
+
+                    //Header
+                    let selection_status = if self.import_window.import_selection.contains(&TreeValue::Header) {
+                        SelectionType::Total
+                    } else {
+                        SelectionType::None
+                    };
+                    if selectable_label(ui, selection_status, "Header Geometry Data")
+                        .on_hover_text("Bound box, radius, mass and moment of inertia")
+                        .clicked()
+                    {
+                        toggle(&mut self.import_window.import_selection, TreeValue::Header);
                     }
 
                     // SubObjects
@@ -587,7 +819,6 @@ impl UiState {
                                     }
                                 }
                             });
-                        println!("{:?}", self.import_window.import_selection);
                     }
 
                     macro_rules! header_stuff {
@@ -746,30 +977,31 @@ impl UiState {
                                     |i| TreeValue::SpecialPoints(SpecialPointTreeValue::Point(i.0))
                                 ),
                             )
-                            .body( //body_stuff!(special_points, |point| format!("{}", point.name), |i| TreeValue::SpecialPoints(SpecialPointTreeValue::Point(i)))
-                            |ui| {
-                                for (i, point) in import_model.special_points.iter().enumerate() {
-                                    let tree_val = TreeValue::SpecialPoints(SpecialPointTreeValue::Point(i));
-                                    let selection_status = if self.import_window.import_selection.contains(&tree_val) {
-                                        SelectionType::Total
-                                    } else {
-                                        SelectionType::None
-                                    };
-                                    if selectable_label(ui, selection_status, format!("{}", point.name)).clicked() {
-                                        let selection = &mut self.import_window.import_selection;
-                                        toggle(selection, tree_val);
+                            .body(
+                                //body_stuff!(special_points, |point| format!("{}", point.name), |i| TreeValue::SpecialPoints(SpecialPointTreeValue::Point(i)))
+                                |ui| {
+                                    for (i, point) in import_model.special_points.iter().enumerate() {
+                                        let tree_val = TreeValue::SpecialPoints(SpecialPointTreeValue::Point(i));
+                                        let selection_status = if self.import_window.import_selection.contains(&tree_val) {
+                                            SelectionType::Total
+                                        } else {
+                                            SelectionType::None
+                                        };
+                                        if selectable_label(ui, selection_status, format!("{}", point.name)).clicked() {
+                                            let selection = &mut self.import_window.import_selection;
+                                            toggle(selection, tree_val);
 
-                                        if self.import_window.import_options.auto_select_paths {
-                                            for (i, path) in import_model.paths.iter().enumerate() {
-                                                if path.parent == point.name {
-                                                    set(selection, selection.contains(&tree_val), TreeValue::Paths(PathTreeValue::Path(i)));
+                                            if self.import_window.import_options.auto_select_paths {
+                                                for (i, path) in import_model.paths.iter().enumerate() {
+                                                    if path.parent == point.name {
+                                                        set(selection, selection.contains(&tree_val), TreeValue::Paths(PathTreeValue::Path(i)));
+                                                    }
                                                 }
                                             }
                                         }
                                     }
-                                }
-                            }
-                        );
+                                },
+                            );
                     }
 
                     if !import_model.turrets.is_empty() {
@@ -829,7 +1061,9 @@ impl UiState {
                                     |i| TreeValue::EyePoints(EyeTreeValue::EyePoint(i.0))
                                 ),
                             )
-                            .body(body_stuff!(eye_points, |_point| format!("Eye Point {}", i + 1), |i| TreeValue::EyePoints(EyeTreeValue::EyePoint(i))));
+                            .body(body_stuff!(eye_points, |_point| format!("Eye Point {}", i + 1), |i| TreeValue::EyePoints(
+                                EyeTreeValue::EyePoint(i)
+                            )));
                     }
 
                     if !import_model.insignias.is_empty() {
@@ -845,7 +1079,9 @@ impl UiState {
                                     |i| TreeValue::Insignia(InsigniaTreeValue::Insignia(i.0))
                                 ),
                             )
-                            .body(body_stuff!(insignias, |_insig| format!("Insignia {}", i + 1), |i| TreeValue::Insignia(InsigniaTreeValue::Insignia(i))));
+                            .body(body_stuff!(insignias, |_insig| format!("Insignia {}", i + 1), |i| TreeValue::Insignia(
+                                InsigniaTreeValue::Insignia(i)
+                            )));
                     }
                 } else {
                     ui.weak("No model selected to import");
@@ -888,6 +1124,7 @@ fn selectable_label(ui: &mut Ui, selection: SelectionType, label: impl Into<Widg
     }
     let response = ui.add(button);
     ui.visuals_mut().override_text_color = None;
+
     response
 }
 
@@ -921,6 +1158,7 @@ impl PofToolsGui {
                             replaced_id
                         } else {
                             //uh oh, just add instead?
+                            num_subobjects += 1;
                             ObjectId((num_subobjects - 1) as u32)
                         }
                     }
@@ -933,6 +1171,14 @@ impl PofToolsGui {
         // do the things which require the subobjects still be intact
         for tree_val in &selection {
             match *tree_val {
+                TreeValue::Header => {
+                    let header = std::mem::take(&mut import_model.header);
+
+                    self.model.header.bbox = header.bbox;
+                    self.model.header.max_radius = header.max_radius;
+                    self.model.header.mass = header.mass;
+                    self.model.header.moment_of_inertia = header.moment_of_inertia;
+                }
                 TreeValue::DockingBays(DockingTreeValue::Bay(idx)) => {
                     // requires getting subobjects by name -> still have to be intact
                     let mut dock = std::mem::take(&mut import_model.docking_bays[idx]);
@@ -1076,11 +1322,13 @@ impl PofToolsGui {
                                 for replaced_turret in self.model.pof_model.turrets.iter_mut() {
                                     if self.model.pof_model.sub_objects[replaced_turret.base_obj].name
                                         == import_model.sub_objects[turret.base_obj].name
-                                        && self.model.pof_model.sub_objects[replaced_turret.gun_obj].name
-                                            == import_model.sub_objects[turret.gun_obj].name
                                     {
                                         turret.base_obj = replaced_turret.base_obj;
-                                        turret.gun_obj = replaced_turret.gun_obj;
+                                        turret.gun_obj = if obj_id_map.contains_key(&turret.gun_obj) {
+                                            obj_id_map[&turret.gun_obj] // prefer an imported gun obj, instead of the replace turret's
+                                        } else {
+                                            replaced_turret.gun_obj
+                                        };
                                         *replaced_turret = turret;
                                         break 'replace;
                                     }
@@ -1144,11 +1392,12 @@ impl PofToolsGui {
                 TreeValue::Comments => unreachable!(),     // should this be importable?
                 TreeValue::SubObjects(_) => (),
                 TreeValue::Weapons(_) => (),
-                TreeValue::Header | TreeValue::Textures(_) => unreachable!(),
+                TreeValue::Textures(_) => unreachable!(),
                 _ => (),
             }
         }
 
+        let old_subobj_len = self.model.sub_objects.len();
         for tree_val in &selection {
             match *tree_val {
                 TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) => {
@@ -1173,9 +1422,10 @@ impl PofToolsGui {
                         poly.texture = tex_id_map[&poly.texture];
                     }
 
-                    // map children and filter out any that werent imported
+                    // map children and filter out any that werent imported and added
                     import_model.sub_objects[id].children.retain_mut(|id| {
-                        if obj_id_map.contains_key(id) {
+                        // id >= old_subobj_len means it was added, replaced subobjects will inherit their relations regardless
+                        if obj_id_map.contains_key(id) && id.0 as usize >= old_subobj_len {
                             *id = obj_id_map[id];
                             true
                         } else {
@@ -1185,7 +1435,7 @@ impl PofToolsGui {
 
                     // make da swap (or addition)
                     if obj_id_map[&id].0 as usize >= self.model.sub_objects.len() {
-                        assert!(obj_id_map[&id].0 as usize == self.model.sub_objects.len());
+                        //assert!(obj_id_map[&id].0 as usize == self.model.sub_objects.len());
 
                         if let Some(parent_id) = import_model.sub_objects[id].parent {
                             if !obj_id_map.contains_key(&parent_id) {
@@ -1219,8 +1469,6 @@ impl PofToolsGui {
                 TreeValue::Weapons(WeaponTreeValue::SecBank(idx)) => {
                     self.model.secondary_weps.push(std::mem::take(&mut import_model.secondary_weps[idx]))
                 }
-                TreeValue::DockingBays(_) => (),
-                TreeValue::Thrusters(_) => todo!(),
                 TreeValue::SpecialPoints(SpecialPointTreeValue::Point(idx)) => {
                     let spc_point = std::mem::take(&mut import_model.special_points[idx]);
 

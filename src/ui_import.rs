@@ -151,19 +151,24 @@ impl UiState {
                             layout_job.wrap.max_width = wrap_width;
                             ui.fonts().layout_job(layout_job)
                         };
-                        let response = ui.add(
-                            TextEdit::singleline(
-                                &mut self
-                                    .import_window
-                                    .model
-                                    .as_ref()
-                                    .map_or(String::new(), |model| model.path_to_file.display().to_string()),
-                            )
-                            .hint_text("Model file...")
-                            .desired_width(220.0), // .interactive(false)
-                        );
+
+                        let mut path_string = self
+                            .import_window
+                            .model
+                            .as_ref()
+                            .map_or(String::new(), |model| model.path_to_file.display().to_string());
+                        let path_string = match path_string.char_indices().nth_back(36) {
+                            Some((n, _)) => format!("...{}", &path_string[(n + 3)..]),
+                            None => path_string,
+                        };
+                        let mut pos = ui.next_widget_position();
+                        pos.y -= ui.style().spacing.interact_size.y * 0.5;
+                        let rect = egui::Rect::from_min_size(pos, [ui.available_width(), ui.available_height()].into());
+                        ui.painter().rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
+                        let response = ui.add(TextEdit::singleline(&mut &*path_string).hint_text("Model file...").desired_width(220.0));
+
                         let response = response.interact(egui::Sense::click());
-                        let mut clicked_browse = false; //response.clicked();
+                        let mut clicked_browse = response.clicked();
 
                         if self.import_window.import_model_loading_thread.is_some() {
                             ui.add(egui::widgets::Spinner::new());

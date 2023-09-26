@@ -11,7 +11,7 @@ use crate::{
 };
 
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{hash_map::Entry, BTreeSet, HashMap},
     path::PathBuf,
 };
 
@@ -1409,17 +1409,15 @@ impl PofToolsGui {
                     // translate old texure ids to new one
                     let mut tex_id_map = HashMap::new();
                     for (_, poly) in import_model.pof_model.sub_objects[id].bsp_data.collision_tree.leaves_mut() {
-                        if !tex_id_map.contains_key(&poly.texture) {
-                            'get_a_slot: {
-                                // see if this texture already exists
-                                for (i, tex_name) in self.model.textures.iter().enumerate() {
-                                    if import_model.pof_model.textures[poly.texture.0 as usize] == *tex_name {
-                                        tex_id_map.insert(poly.texture, TextureId(i as u32));
-                                        break 'get_a_slot;
-                                    }
-                                }
+                        if let Entry::Vacant(e) = tex_id_map.entry(poly.texture) {
+                            // see if this texture already exists
+                            if let Some(i) = (self.model.textures.iter())
+                                .position(|tex_name| import_model.pof_model.textures[poly.texture.0 as usize] == *tex_name)
+                            {
+                                e.insert(TextureId(i as u32));
+                            } else {
                                 // still here, gotta add a slot i guess
-                                tex_id_map.insert(poly.texture, TextureId(self.model.textures.len() as u32));
+                                e.insert(TextureId(self.model.textures.len() as u32));
                                 self.model.textures.push(import_model.pof_model.textures[poly.texture.0 as usize].clone());
                             }
                         }
@@ -1427,45 +1425,25 @@ impl PofToolsGui {
                         poly.texture = tex_id_map[&poly.texture];
                     }
 
-                    // map children and filter out any that werent imported and added
-                    import_model.sub_objects[id].children.retain_mut(|id| {
-                        // id >= old_subobj_len means it was added, replaced subobjects will inherit their relations regardless
-                        if obj_id_map.contains_key(id) && id.0 as usize >= old_subobj_len {
-                            *id = obj_id_map[id];
-                            true
-                        } else {
-                            false
-                        }
-                    });
+                    let import_obj = &mut import_model.sub_objects[id];
+                    // id >= old_subobj_len means it was added, replaced subobjects will inherit their relations regardless
+                    import_obj.map_ids(|id| obj_id_map.get(&id).copied(), |id| id.0 as usize >= old_subobj_len);
 
+                    let new_id = import_obj.obj_id;
                     // make da swap (or addition)
-                    if obj_id_map[&id].0 as usize >= self.model.sub_objects.len() {
+                    if new_id.0 as usize >= self.model.sub_objects.len() {
                         //assert!(obj_id_map[&id].0 as usize == self.model.sub_objects.len());
 
-                        if let Some(parent_id) = import_model.sub_objects[id].parent {
-                            if !obj_id_map.contains_key(&parent_id) {
-                                // if youre adding a subobj, you lose parentage if the parent wasn't imported in some way
-                                import_model.sub_objects[id].parent = None;
-                            } else {
-                                import_model.sub_objects[id].parent = Some(obj_id_map[&parent_id]);
-                            }
-                        }
-
-                        import_model.sub_objects[id].obj_id = obj_id_map[&id];
-                        self.model.sub_objects.push(std::mem::take(&mut import_model.sub_objects[id]));
+                        self.model.sub_objects.push(std::mem::take(import_obj));
                         self.model.header.num_subobjects += 1;
                     } else {
-                        // if you're replacing a subobj, you inherit the parent if what you've replaced
-                        import_model.sub_objects[id].parent = self.model.sub_objects[obj_id_map[&id]].parent;
-                        // also inherit children
-                        import_model.sub_objects[id]
-                            .children
-                            .extend(self.model.sub_objects[obj_id_map[&id]].children.iter());
+                        let target_obj = &mut self.model.sub_objects[new_id];
+                        // if you're replacing a subobj, you inherit the parent/children if what you've replaced
+                        import_obj.inherit_parent_and_children_from(target_obj);
                         // also inherit position
-                        import_model.sub_objects[id].offset = self.model.sub_objects[obj_id_map[&id]].offset;
+                        import_obj.offset = target_obj.offset;
 
-                        import_model.sub_objects[id].obj_id = obj_id_map[&id];
-                        self.model.sub_objects[obj_id_map[&id]] = std::mem::take(&mut import_model.sub_objects[id]);
+                        *target_obj = std::mem::take(import_obj);
                     }
                 }
                 TreeValue::Weapons(WeaponTreeValue::PriBank(idx)) => {

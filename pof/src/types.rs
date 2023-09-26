@@ -1407,7 +1407,7 @@ pub enum NameLink {
 pub struct SubObject {
     pub obj_id: ObjectId,
     pub radius: f32,
-    pub parent: Option<ObjectId>,
+    pub(crate) parent: Option<ObjectId>,
     pub offset: Vec3d,
     pub geo_center: Vec3d,
     pub bbox: BoundingBox,
@@ -1420,7 +1420,7 @@ pub struct SubObject {
     pub bsp_data: BspData,
 
     // the following fields are derived information
-    pub children: Vec<ObjectId>,
+    pub(crate) children: Vec<ObjectId>,
     pub is_debris_model: bool,
 
     // "semantic name links", fields derived specifically from their names
@@ -1491,6 +1491,29 @@ impl SubObject {
 
     pub fn is_subsystem(&self) -> bool {
         properties_get_field(&self.properties, "$special") == Some("subsystem")
+    }
+
+    pub fn map_ids(&mut self, map: impl Fn(ObjectId) -> Option<ObjectId>, retain: impl Fn(ObjectId) -> bool) {
+        // map children and filter out any that werent imported and added
+        self.children.retain_mut(|id| match map(*id) {
+            Some(new_id) if retain(*id) => {
+                *id = new_id;
+                true
+            }
+            _ => false,
+        });
+
+        self.obj_id = map(self.obj_id).unwrap();
+
+        if let Some(parent_id) = self.parent {
+            // if youre adding a subobj, you lose parentage if the parent wasn't imported in some way
+            self.parent = map(parent_id);
+        }
+    }
+
+    pub fn inherit_parent_and_children_from(&mut self, other: &Self) {
+        self.parent = other.parent;
+        self.children.extend(other.children.iter());
     }
 }
 

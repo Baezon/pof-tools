@@ -1204,7 +1204,7 @@ impl GltfBuilder {
             &mut self.root.accessors,
             json::Accessor {
                 buffer_view: Some(buffer_view),
-                byte_offset: byte_offset as u32,
+                byte_offset: Some(byte_offset as u32),
                 count: count as u32,
                 component_type: Valid(json::accessor::GenericComponentType(component_type)),
                 extensions: Default::default(),

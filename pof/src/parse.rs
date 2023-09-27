@@ -450,13 +450,6 @@ impl<R: Read + Seek> Parser<R> {
         // now that all the subobjects shouldve have been slotted in, assert that they all exist
         let mut sub_objects = ObjVec(sub_objects.into_iter().map(|subobj_opt| subobj_opt.unwrap()).collect());
 
-        for i in 0..sub_objects.len() {
-            if let Some(parent) = sub_objects.0[i].parent {
-                let id = sub_objects.0[i].obj_id;
-                sub_objects[parent].children.push(id);
-            }
-        }
-
         debris_objs.retain(|id| {
             if id.0 < sub_objects.len() as u32 {
                 sub_objects[*id].is_debris_model = true;
@@ -512,6 +505,8 @@ impl<R: Read + Seek> Parser<R> {
             warnings: Default::default(),
             errors: Default::default(),
         };
+
+        model.recalc_all_children_ids();
         model.recheck_warnings(Set::All);
         model.recheck_errors(Set::All);
         model.recalc_semantic_name_links();

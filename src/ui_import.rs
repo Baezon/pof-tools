@@ -1425,25 +1425,26 @@ impl PofToolsGui {
                         poly.texture = tex_id_map[&poly.texture];
                     }
 
-                    let import_obj = &mut import_model.sub_objects[id];
-                    // id >= old_subobj_len means it was added, replaced subobjects will inherit their relations regardless
-                    import_obj.map_ids(|id| obj_id_map.get(&id).copied(), |id| id.0 as usize >= old_subobj_len);
+                    let import_subobj = &mut import_model.sub_objects[id];
+                    import_subobj.obj_id = obj_id_map[&id];
 
-                    let new_id = import_obj.obj_id;
                     // make da swap (or addition)
-                    if new_id.0 as usize >= self.model.sub_objects.len() {
-                        //assert!(obj_id_map[&id].0 as usize == self.model.sub_objects.len());
+                    if import_subobj.obj_id.0 as usize >= old_subobj_len {
+                        if let Some(parent_id) = import_subobj.parent {
+                            import_subobj.parent = obj_id_map.get(&parent_id).copied();
+                        }
 
-                        self.model.sub_objects.push(std::mem::take(import_obj));
+                        self.model.sub_objects.push(std::mem::take(import_subobj));
                         self.model.header.num_subobjects += 1;
                     } else {
-                        let target_obj = &mut self.model.sub_objects[new_id];
-                        // if you're replacing a subobj, you inherit the parent/children if what you've replaced
-                        import_obj.inherit_parent_and_children_from(target_obj);
-                        // also inherit position
-                        import_obj.offset = target_obj.offset;
+                        let target_subobj = &mut self.model.sub_objects[import_subobj.obj_id];
+                        // if you're replacing a subobj, you inherit the parent of what you've replaced
+                        import_subobj.parent = target_subobj.parent;
 
-                        *target_obj = std::mem::take(import_obj);
+                        // also inherit position
+                        import_subobj.offset = target_subobj.offset;
+
+                        *target_subobj = std::mem::take(import_subobj);
                     }
                 }
                 TreeValue::Weapons(WeaponTreeValue::PriBank(idx)) => {
@@ -1501,5 +1502,8 @@ impl PofToolsGui {
                 _ => (),
             }
         }
+
+        self.model.recalc_semantic_name_links();
+        self.model.recalc_all_children_ids();
     }
 }

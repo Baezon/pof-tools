@@ -1407,7 +1407,7 @@ pub enum NameLink {
 pub struct SubObject {
     pub obj_id: ObjectId,
     pub radius: f32,
-    pub(crate) parent: Option<ObjectId>,
+    pub parent: Option<ObjectId>,
     pub offset: Vec3d,
     pub geo_center: Vec3d,
     pub bbox: BoundingBox,
@@ -1491,29 +1491,6 @@ impl SubObject {
 
     pub fn is_subsystem(&self) -> bool {
         properties_get_field(&self.properties, "$special") == Some("subsystem")
-    }
-
-    pub fn map_ids(&mut self, map: impl Fn(ObjectId) -> Option<ObjectId>, retain: impl Fn(ObjectId) -> bool) {
-        // map children and filter out any that werent imported and added
-        self.children.retain_mut(|id| match map(*id) {
-            Some(new_id) if retain(*id) => {
-                *id = new_id;
-                true
-            }
-            _ => false,
-        });
-
-        self.obj_id = map(self.obj_id).unwrap();
-
-        if let Some(parent_id) = self.parent {
-            // if youre adding a subobj, you lose parentage if the parent wasn't imported in some way
-            self.parent = map(parent_id);
-        }
-    }
-
-    pub fn inherit_parent_and_children_from(&mut self, other: &Self) {
-        self.parent = other.parent;
-        self.children.extend(other.children.iter());
     }
 }
 
@@ -2553,45 +2530,16 @@ impl Model {
         }
     }
 
-    pub fn clean_up(&mut self) {
-        if let Some(shield) = &mut self.shield_data {
-            if shield.collision_tree.is_none() {
-                shield.collision_tree = Some(ShieldData::recalculate_tree(&shield.verts, &shield.polygons));
+    pub fn recalc_all_children_ids(&mut self) {
+        for subobj in self.sub_objects.iter_mut() {
+            subobj.children.clear();
+        }
+
+        for i in 0..self.sub_objects.len() {
+            if let Some(parent) = self.sub_objects.0[i].parent {
+                let id = self.sub_objects.0[i].obj_id;
+                self.sub_objects[parent].children.push(id);
             }
-        }
-    }
-
-    pub fn make_orphan(&mut self, would_be_orphan: ObjectId) {
-        if let Some(parent_id) = self.sub_objects[would_be_orphan].parent {
-            // maintain it's current relative position to the whole model
-            self.sub_objects[would_be_orphan].offset = self.get_total_subobj_offset(would_be_orphan);
-
-            let parent_children = &mut self.sub_objects[parent_id].children;
-            parent_children.remove(parent_children.iter().position(|child_id| *child_id == would_be_orphan).unwrap());
-        }
-        self.sub_objects[would_be_orphan].parent = None;
-    }
-
-    pub fn make_parent(&mut self, new_parent: ObjectId, new_child: ObjectId) -> Option<()> {
-        if !self.is_obj_id_ancestor(new_parent, new_child) {
-            self.sub_objects[new_parent].children.push(new_child);
-            self.sub_objects[new_child].parent = Some(new_parent);
-
-            // maintain it's current relative position to the whole model
-            let offset_from_parents = self.get_total_subobj_offset(new_child) - self.sub_objects[new_child].offset;
-            self.sub_objects[new_child].offset -= offset_from_parents;
-
-            Some(())
-        } else {
-            None
-        }
-    }
-
-    pub fn max_verts_norms_per_subobj(&self) -> usize {
-        if self.version >= Version::V23_00 {
-            u32::MAX as usize
-        } else {
-            u16::MAX as usize
         }
     }
 
@@ -2634,6 +2582,48 @@ impl Model {
                     }
                 }
             }
+        }
+    }
+
+    pub fn clean_up(&mut self) {
+        if let Some(shield) = &mut self.shield_data {
+            if shield.collision_tree.is_none() {
+                shield.collision_tree = Some(ShieldData::recalculate_tree(&shield.verts, &shield.polygons));
+            }
+        }
+    }
+
+    pub fn make_orphan(&mut self, would_be_orphan: ObjectId) {
+        if let Some(parent_id) = self.sub_objects[would_be_orphan].parent {
+            // maintain it's current relative position to the whole model
+            self.sub_objects[would_be_orphan].offset = self.get_total_subobj_offset(would_be_orphan);
+
+            let parent_children = &mut self.sub_objects[parent_id].children;
+            parent_children.remove(parent_children.iter().position(|child_id| *child_id == would_be_orphan).unwrap());
+        }
+        self.sub_objects[would_be_orphan].parent = None;
+    }
+
+    pub fn make_parent(&mut self, new_parent: ObjectId, new_child: ObjectId) -> Option<()> {
+        if !self.is_obj_id_ancestor(new_parent, new_child) {
+            self.sub_objects[new_parent].children.push(new_child);
+            self.sub_objects[new_child].parent = Some(new_parent);
+
+            // maintain it's current relative position to the whole model
+            let offset_from_parents = self.get_total_subobj_offset(new_child) - self.sub_objects[new_child].offset;
+            self.sub_objects[new_child].offset -= offset_from_parents;
+
+            Some(())
+        } else {
+            None
+        }
+    }
+
+    pub fn max_verts_norms_per_subobj(&self) -> usize {
+        if self.version >= Version::V23_00 {
+            u32::MAX as usize
+        } else {
+            u16::MAX as usize
         }
     }
 

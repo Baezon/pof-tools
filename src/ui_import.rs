@@ -15,9 +15,8 @@ use std::{
     path::PathBuf,
 };
 
-#[derive(Default, PartialEq)]
+#[derive(PartialEq)]
 pub enum ImportType {
-    #[default]
     Add,
     //ClearAndAdd,
     MatchAndReplace,
@@ -57,7 +56,7 @@ impl Default for ImportWindow {
     fn default() -> Self {
         Self {
             open: Default::default(),
-            import_type: Default::default(),
+            import_type: ImportType::Add,
             model: Default::default(),
             model_path: PathBuf::new(),
             import_model_loading_thread: Default::default(),
@@ -136,23 +135,7 @@ impl UiState {
                     ui.add_space(5.0);
 
                     ui.horizontal(|ui| {
-                        let mut layouter = |ui: &egui::Ui, string: &str, wrap_width: f32| {
-                            let mut layout_job = egui::text::LayoutJob::default();
-                            layout_job.halign = egui::Align::RIGHT;
-                            layout_job.append(
-                                "Model file",
-                                0.0,
-                                egui::TextFormat {
-                                    font_id: egui::FontId::new(14.0, egui::FontFamily::Proportional),
-                                    color: Color32::WHITE,
-                                    ..Default::default()
-                                },
-                            );
-                            layout_job.wrap.max_width = wrap_width;
-                            ui.fonts().layout_job(layout_job)
-                        };
-
-                        let mut path_string = self
+                        let path_string = self
                             .import_window
                             .model
                             .as_ref()
@@ -212,13 +195,11 @@ impl UiState {
                             if ImportType::MatchAndReplace == self.import_window.import_type {
                                 for tree_val in selection.iter().filter(|select| matches!(select, TreeValue::SubObjects(_))) {
                                     if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = tree_val {
-                                        'find_a_match: {
-                                            for subobj in &model.sub_objects {
-                                                if subobj.name == import_model.as_ref().unwrap().sub_objects[*id].name {
-                                                    break 'find_a_match;
-                                                }
-                                            }
-
+                                        if !model
+                                            .sub_objects
+                                            .iter()
+                                            .any(|subobj| subobj.name == import_model.as_ref().unwrap().sub_objects[*id].name)
+                                        {
                                             warnings.push(
                                                 RichText::new(format!(
                                                     "There is no match for subobject '{}' in the recieving model. It will be added instead.",
@@ -289,13 +270,7 @@ impl UiState {
 
                                     if self.import_window.import_type == ImportType::MatchAndReplace {
                                         if let Some(name) = dock.get_name() {
-                                            'find_match: {
-                                                for other_dock in &model.docking_bays {
-                                                    if other_dock.get_name() == Some(name) {
-                                                        break 'find_match;
-                                                    }
-                                                }
-
+                                            if !model.docking_bays.iter().any(|other_dock| other_dock.get_name() == Some(name)) {
                                                 warnings.push(
                                                     RichText::new(format!(
                                                         "There is no match for docking bay '{}' in the recieving model. \
@@ -448,13 +423,7 @@ impl UiState {
                                     let spc_point = &import_model.as_ref().unwrap().special_points[*idx];
 
                                     if self.import_window.import_type == ImportType::MatchAndReplace {
-                                        'find_match: {
-                                            for other_point in &model.special_points {
-                                                if other_point.name == spc_point.name {
-                                                    break 'find_match;
-                                                }
-                                            }
-
+                                        if !model.special_points.iter().any(|other_point| other_point.name == spc_point.name) {
                                             warnings.push(
                                                 RichText::new(format!(
                                                     "There is no match for special point '{}' in the recieving model. It will be added instead.",
@@ -517,29 +486,27 @@ impl UiState {
                                                 }
                                             }
                                         }
-                                        ImportType::MatchAndReplace => 'find_match: {
-                                            for other_turret in &model.turrets {
-                                                if model.sub_objects[other_turret.base_obj].name == import_model.sub_objects[turret.base_obj].name {
-                                                    break 'find_match;
+                                        ImportType::MatchAndReplace => {
+                                            if model.turrets.iter().any(|other_turret| {
+                                                model.sub_objects[other_turret.base_obj].name == import_model.sub_objects[turret.base_obj].name
+                                            }) {
+                                                if !selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(turret.base_obj))) {
+                                                    warnings.push(
+                                                        RichText::new(format!(
+                                                            "There is no match for turret '{}' in the recieving model. It will not be added.",
+                                                            import_model.sub_objects[turret.base_obj].name
+                                                        ))
+                                                        .color(ERROR_RED),
+                                                    );
+                                                } else {
+                                                    warnings.push(
+                                                        RichText::new(format!(
+                                                            "There is no match for turret '{}' in the recieving model. It will be added instead.",
+                                                            import_model.sub_objects[turret.base_obj].name
+                                                        ))
+                                                        .color(WARNING_YELLOW),
+                                                    );
                                                 }
-                                            }
-
-                                            if !selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(turret.base_obj))) {
-                                                warnings.push(
-                                                    RichText::new(format!(
-                                                        "There is no match for turret '{}' in the recieving model. It will not be added.",
-                                                        import_model.sub_objects[turret.base_obj].name
-                                                    ))
-                                                    .color(ERROR_RED),
-                                                );
-                                            } else {
-                                                warnings.push(
-                                                    RichText::new(format!(
-                                                        "There is no match for turret '{}' in the recieving model. It will be added instead.",
-                                                        import_model.sub_objects[turret.base_obj].name
-                                                    ))
-                                                    .color(WARNING_YELLOW),
-                                                );
                                             }
                                         }
                                     }
@@ -565,13 +532,7 @@ impl UiState {
                                     let path = &import_model.as_ref().unwrap().paths[*idx];
 
                                     if self.import_window.import_type == ImportType::MatchAndReplace {
-                                        'find_match: {
-                                            for other_path in &model.paths {
-                                                if other_path.name == path.name {
-                                                    break 'find_match;
-                                                }
-                                            }
-
+                                        if !model.paths.iter().any(|other_path| other_path.name == path.name) {
                                             warnings.push(
                                                 RichText::new(format!(
                                                     "There is no match for path '{}' in the recieving model. It will be added instead.",
@@ -1202,15 +1163,16 @@ impl PofToolsGui {
                             self.model.docking_bays.push(dock);
                         }
                         ImportType::MatchAndReplace => {
+                            // find and replace
                             if let Some(name) = dock.get_name() {
-                                'replace: {
-                                    for replaced_dock in self.model.docking_bays.iter_mut() {
-                                        if replaced_dock.get_name() == Some(name) {
-                                            *replaced_dock = dock;
-                                            break 'replace;
-                                        }
-                                    }
-
+                                if let Some(replaced_dock) = self
+                                    .model
+                                    .docking_bays
+                                    .iter_mut()
+                                    .find(|replaced_dock| replaced_dock.get_name() == Some(name))
+                                {
+                                    *replaced_dock = dock;
+                                } else {
                                     // fall back, just add it
                                     self.model.docking_bays.push(dock);
                                 }
@@ -1244,15 +1206,16 @@ impl PofToolsGui {
                             self.model.thruster_banks.push(t_bank);
                         }
                         ImportType::MatchAndReplace => {
+                            // find and replace
                             if let Some(subsys_name) = t_bank.get_engine_subsys() {
-                                'replace: {
-                                    for replaced_bank in self.model.thruster_banks.iter_mut() {
-                                        if replaced_bank.get_engine_subsys() == Some(subsys_name) {
-                                            *replaced_bank = t_bank;
-                                            break 'replace;
-                                        }
-                                    }
-
+                                if let Some(replaced_bank) = self
+                                    .model
+                                    .thruster_banks
+                                    .iter_mut()
+                                    .find(|replaced_bank| replaced_bank.get_engine_subsys() == Some(subsys_name))
+                                {
+                                    *replaced_bank = t_bank;
+                                } else {
                                     // fall back, just add it
                                     self.model.thruster_banks.push(t_bank);
                                 }
@@ -1323,33 +1286,27 @@ impl PofToolsGui {
                             self.model.turrets.push(turret);
                         }
                         ImportType::MatchAndReplace => {
-                            'replace: {
-                                for replaced_turret in self.model.pof_model.turrets.iter_mut() {
-                                    if self.model.pof_model.sub_objects[replaced_turret.base_obj].name
-                                        == import_model.sub_objects[turret.base_obj].name
-                                    {
-                                        turret.base_obj = replaced_turret.base_obj;
-                                        turret.gun_obj = if obj_id_map.contains_key(&turret.gun_obj) {
-                                            obj_id_map[&turret.gun_obj] // prefer an imported gun obj, instead of the replace turret's
-                                        } else {
-                                            replaced_turret.gun_obj
-                                        };
-                                        *replaced_turret = turret;
-                                        break 'replace;
-                                    }
-                                }
-
+                            // find and replace
+                            if let Some(replaced_turret) = self.model.pof_model.turrets.iter_mut().find(|replaced_turret| {
+                                self.model.pof_model.sub_objects[replaced_turret.base_obj].name == import_model.sub_objects[turret.base_obj].name
+                            }) {
+                                turret.base_obj = replaced_turret.base_obj;
+                                turret.gun_obj = if obj_id_map.contains_key(&turret.gun_obj) {
+                                    obj_id_map[&turret.gun_obj] // prefer an imported gun obj, instead of the replace turret's
+                                } else {
+                                    replaced_turret.gun_obj
+                                };
+                                *replaced_turret = turret;
+                            } else if selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(turret.base_obj)))
+                                && selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(turret.gun_obj)))
+                            {
                                 // fall back, try to add it
-                                if selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(turret.base_obj)))
-                                    && selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(turret.gun_obj)))
-                                {
-                                    // parent objects were imported too, cool
-                                    turret.base_obj = obj_id_map[&turret.base_obj];
-                                    turret.gun_obj = obj_id_map[&turret.gun_obj];
-                                    self.model.turrets.push(turret);
-                                }
-                                // else just lose it
+                                // parent objects were imported too, cool
+                                turret.base_obj = obj_id_map[&turret.base_obj];
+                                turret.gun_obj = obj_id_map[&turret.gun_obj];
+                                self.model.turrets.push(turret);
                             }
+                            // else just lose it
                         }
                     }
                 }
@@ -1362,16 +1319,14 @@ impl PofToolsGui {
                             self.model.eye_points.push(point);
                         }
                         ImportType::MatchAndReplace => {
-                            'replace: {
-                                let attached_obj = point.attached_subobj.map(|id| &import_model.sub_objects[id].name);
-                                for replaced_point in self.model.pof_model.eye_points.iter_mut() {
-                                    if replaced_point.attached_subobj.map(|id| &self.model.pof_model.sub_objects[id].name) == attached_obj {
-                                        point.attached_subobj = replaced_point.attached_subobj;
-                                        *replaced_point = point;
-                                        break 'replace;
-                                    }
-                                }
-
+                            let attached_obj = point.attached_subobj.map(|id| &import_model.sub_objects[id].name);
+                            // find and replace
+                            if let Some(replaced_point) = self.model.pof_model.eye_points.iter_mut().find(|replaced_point| {
+                                replaced_point.attached_subobj.map(|id| &self.model.pof_model.sub_objects[id].name) == attached_obj
+                            }) {
+                                point.attached_subobj = replaced_point.attached_subobj;
+                                *replaced_point = point;
+                            } else {
                                 // fall back, just add it
                                 self.model.eye_points.push(point);
                             }
@@ -1461,14 +1416,14 @@ impl PofToolsGui {
                             self.model.special_points.push(spc_point);
                         }
                         ImportType::MatchAndReplace => {
-                            'replace: {
-                                for replaced_point in self.model.special_points.iter_mut() {
-                                    if replaced_point.name == spc_point.name {
-                                        *replaced_point = spc_point;
-                                        break 'replace;
-                                    }
-                                }
-
+                            if let Some(replaced_point) = self
+                                .model
+                                .special_points
+                                .iter_mut()
+                                .find(|replaced_point| replaced_point.name == spc_point.name)
+                            {
+                                *replaced_point = spc_point;
+                            } else {
                                 // fall back, just add it
                                 self.model.special_points.push(spc_point);
                             }
@@ -1484,14 +1439,9 @@ impl PofToolsGui {
                             self.model.paths.push(path);
                         }
                         ImportType::MatchAndReplace => {
-                            'replace: {
-                                for replaced_path in self.model.paths.iter_mut() {
-                                    if replaced_path.name == path.name {
-                                        *replaced_path = path;
-                                        break 'replace;
-                                    }
-                                }
-
+                            if let Some(replaced_path) = self.model.paths.iter_mut().find(|replaced_path| replaced_path.name == path.name) {
+                                *replaced_path = path;
+                            } else {
                                 // fall back, just add it
                                 self.model.paths.push(path);
                             }

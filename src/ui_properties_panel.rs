@@ -1134,6 +1134,7 @@ impl PofToolsGui {
                     rebuild_all_buffers = true;
                     self.ui_state.viewport_3d_dirty = true;
                     self.ui_state.properties_panel_dirty = true;
+                    self.model.recheck_warnings(One(Warning::Detail0NonZeroOffset));
                 }
 
                 ui.add_space(10.0);

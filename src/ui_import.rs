@@ -564,14 +564,11 @@ impl UiState {
                                     let point = &import_model.as_ref().unwrap().eye_points[*idx];
 
                                     if self.import_window.import_type == ImportType::MatchAndReplace {
-                                        'find_match: {
-                                            let attached_obj = point.attached_subobj.map(|id| &import_model.as_ref().unwrap().sub_objects[id].name);
-                                            for other_point in &model.eye_points {
-                                                if other_point.attached_subobj.map(|id| &model.pof_model.sub_objects[id].name) == attached_obj {
-                                                    break 'find_match;
-                                                }
-                                            }
+                                        let attached_obj = point.attached_subobj.map(|id| &import_model.as_ref().unwrap().sub_objects[id].name);
 
+                                        if !model.eye_points.iter().any(|other_point| {
+                                            other_point.attached_subobj.map(|id| &model.pof_model.sub_objects[id].name) == attached_obj
+                                        }) {
                                             warnings.push(
                                                 RichText::new(format!(
                                                     "There is no match for an eye point in the recieving model. It will be added instead."

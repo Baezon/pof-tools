@@ -2080,6 +2080,8 @@ impl PofToolsGui {
                 job.append(".", 0.0, TextFormat::default());
                 ui.label(job);
 
+                ui.image(&self.dock_demo_img, self.dock_demo_img.size_vec2());
+
                 if let Some(response) = bay_idx_response {
                     let new_idx = response.get_new_ui_idx(&self.model.docking_bays);
 

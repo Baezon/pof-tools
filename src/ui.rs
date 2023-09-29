@@ -509,7 +509,7 @@ pub(crate) struct PofToolsGui {
     pub ui_state: UiState,
     pub display_mode: DisplayMode,
     pub glow_point_simulation: bool,
-
+    pub dock_demo_img: egui::TextureHandle,
     pub camera_pitch: f32,
     pub camera_heading: f32,
     pub camera_scale: f32,
@@ -545,7 +545,7 @@ impl std::ops::DerefMut for PofToolsGui {
     }
 }
 impl PofToolsGui {
-    pub fn new(display: &Display) -> Self {
+    pub fn new(display: &Display, ctx: &egui::Context) -> Self {
         Self {
             model: Box::new(Model {
                 pof_model: pof::Model::default(),
@@ -557,6 +557,19 @@ impl PofToolsGui {
             ui_state: Default::default(),
             display_mode: DisplayMode::Textured,
             glow_point_simulation: Default::default(),
+            dock_demo_img: {
+                ctx.load_texture(
+                    "my-image",
+                    {
+                        let image = image::load_from_memory(include_bytes!("dockdemo.png")).unwrap();
+                        let size = [image.width() as _, image.height() as _];
+                        let image_buffer = image.to_rgba8();
+                        let pixels = image_buffer.as_flat_samples();
+                        egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_slice())
+                    },
+                    egui::TextureFilter::Linear,
+                )
+            },
             camera_pitch: Default::default(),
             camera_heading: Default::default(),
             camera_scale: Default::default(),
@@ -886,7 +899,7 @@ impl PofToolsGui {
 
                     if ui.button("Open").clicked() {
                         self.start_loading_model(None);
-                        ui.output().cursor_icon = egui::CursorIcon::Wait;
+                        // ui.output().cursor_icon = egui::CursorIcon::Wait;
                         ui.close_menu();
                     }
 

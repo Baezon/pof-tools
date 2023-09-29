@@ -25,8 +25,8 @@ use glium::{
 use glm::Mat4x4;
 use native_dialog::FileDialog;
 use pof::{
-    properties_get_field, BspData, Insignia, NameLink, NormalId, ObjVec, ObjectId, Parser, PolyVertex, Polygon, ShieldData, SubObject, TextureId,
-    Vec3d, VertexId,
+    properties_get_field, BspData, Insignia, NameLink, NormalId, NormalVec3, ObjVec, ObjectId, Parser, PolyVertex, Polygon, ShieldData, SubObject,
+    TextureId, Vec3d, VertexId,
 };
 use simplelog::*;
 use std::{
@@ -661,18 +661,13 @@ fn main() {
 
     let event_loop = glutin::event_loop::EventLoopBuilder::with_user_event().build();
     let display = create_display(&event_loop);
-    let mut pt_gui = PofToolsGui::new(&display);
-
-    // this creates the raw bytes from png, how i make the icon
-    // File::create("zforward.raw")
-    //     .unwrap()
-    //     .write_all(&image::open("zforward.png").unwrap().into_rgba8().to_vec());
 
     let mut args = std::env::args();
     args.next();
     let path = args.next().map(|arg| PathBuf::from(arg.as_str()));
 
     let mut egui = egui_glium::EguiGlium::new(&display, &event_loop);
+    let mut pt_gui = PofToolsGui::new(&display, &egui.egui_ctx);
 
     pt_gui.start_loading_model(path);
 
@@ -1436,6 +1431,8 @@ fn main() {
                                     .unwrap();
                             }
                         }
+
+                        // draw arrowheads
                         for arrowhead in &pt_gui.arrowheads {
                             let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * view_mat * arrowhead.transform).into();
                             let uniforms = glium::uniform! {
@@ -1448,7 +1445,22 @@ fn main() {
                                     &pt_gui.graphics.arrowhead_indices,
                                     &pt_gui.graphics.arrowhead_shader,
                                     &uniforms,
-                                    &pt_gui.graphics.arrowhead_draw_params,
+                                    &pt_gui.graphics.arrowhead_params,
+                                )
+                                .unwrap();
+
+                            // darker, reverse depth, as above
+                            let uniforms = glium::uniform! {
+                                vert_matrix: vert_matrix,
+                                lollipop_color: arrowhead.color.map(|col| col * 0.25 ),
+                            };
+                            target
+                                .draw(
+                                    &pt_gui.graphics.arrowhead_verts,
+                                    &pt_gui.graphics.arrowhead_indices,
+                                    &pt_gui.graphics.arrowhead_shader,
+                                    &uniforms,
+                                    &pt_gui.graphics.arrowhead_rev_depth_params,
                                 )
                                 .unwrap();
                         }
@@ -1943,6 +1955,13 @@ impl PofToolsGui {
                     None
                 };
 
+                let get_matrix = |pos: Vec3d, dir: NormalVec3, scale| {
+                    let mut m = glm::translation::<f32>(&pos.into());
+                    m *= dir.0.to_rotation_matrix();
+                    m *= glm::scaling(&glm::vec3(scale * 0.5, scale * 0.5, scale * 0.5));
+                    m
+                };
+
                 const COLORS: [[f32; 4]; 3] = [LOLLIPOP_UNSELECTED_COLOR, LOLLIPOP_SELECTED_POINT_COLOR, LOLLIPOP_SELECTED_BANK_COLOR];
                 self.lollipops = build_lollipops(
                     &COLORS,
@@ -1953,11 +1972,28 @@ impl PofToolsGui {
                         if hover_lollipop == Some(TreeValue::DockingBays(DockingTreeValue::Bay(bay_idx))) {
                             radius *= 2.
                         };
-                        let fvec = docking_bay.fvec.0 * radius * 3.0;
-                        let uvec = docking_bay.uvec.0 * radius * 3.0;
+                        let fvec = docking_bay.fvec.0 * radius * 2.0;
+                        let uvec = docking_bay.uvec.0 * radius * 2.0;
+                        // while we're here, add the arrowheads to indicate the directions
                         let (selection1, selection2) = if selected_bank == Some(bay_idx) {
+                            self.arrowheads.push(GlArrowhead {
+                                color: LOLLIPOP_SELECTED_BANK_COLOR,
+                                transform: get_matrix(position + fvec, docking_bay.fvec, radius * 1.5),
+                            });
+                            self.arrowheads.push(GlArrowhead {
+                                color: LOLLIPOP_SELECTED_POINT_COLOR,
+                                transform: get_matrix(position + uvec, docking_bay.uvec, radius * 1.5),
+                            });
                             (SELECTED_BANK, SELECTED_POINT)
                         } else {
+                            self.arrowheads.push(GlArrowhead {
+                                color: LOLLIPOP_UNSELECTED_COLOR,
+                                transform: get_matrix(position + fvec, docking_bay.fvec, radius * 1.5),
+                            });
+                            self.arrowheads.push(GlArrowhead {
+                                color: LOLLIPOP_UNSELECTED_COLOR,
+                                transform: get_matrix(position + uvec, docking_bay.uvec, radius * 1.5),
+                            });
                             (UNSELECTED, UNSELECTED)
                         };
 
@@ -2209,7 +2245,8 @@ struct Graphics {
     frustum_verts: VertexBuffer<Vertex>,
 
     default_material_draw_params: glium::DrawParameters<'static>,
-    arrowhead_draw_params: glium::DrawParameters<'static>,
+    arrowhead_params: glium::DrawParameters<'static>,
+    arrowhead_rev_depth_params: glium::DrawParameters<'static>,
     shield_draw_params: glium::DrawParameters<'static>,
     wireframe_params: glium::DrawParameters<'static>,
     lollipop_params: glium::DrawParameters<'static>,
@@ -2261,13 +2298,21 @@ impl Graphics {
                 backface_culling: glium::draw_parameters::BackfaceCullingMode::CullCounterClockwise,
                 ..Default::default()
             },
-            arrowhead_draw_params: glium::DrawParameters {
+            arrowhead_params: glium::DrawParameters {
                 depth: glium::Depth {
-                    test: glium::draw_parameters::DepthTest::Overwrite,
+                    test: glium::draw_parameters::DepthTest::IfLess,
                     write: false,
                     ..Default::default()
                 },
-                line_width: Some(1.0),
+                backface_culling: glium::draw_parameters::BackfaceCullingMode::CullCounterClockwise,
+                ..Default::default()
+            },
+            arrowhead_rev_depth_params: glium::DrawParameters {
+                depth: glium::Depth {
+                    test: glium::draw_parameters::DepthTest::IfMore,
+                    write: false,
+                    ..Default::default()
+                },
                 backface_culling: glium::draw_parameters::BackfaceCullingMode::CullCounterClockwise,
                 ..Default::default()
             },

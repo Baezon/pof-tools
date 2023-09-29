@@ -2365,12 +2365,12 @@ impl Model {
     pub fn apply_subobj_transform(&mut self, id: ObjectId, matrix: &TMat4<f32>, transform_offset: bool) {
         let zero = Vec3d::ZERO.into();
         let translation = matrix.transform_point(&zero) - zero;
-        let matrix = &matrix.append_translation(&(-translation));
+        let no_trans_matrix = &matrix.append_translation(&(-translation));
 
         let subobj = &mut self.sub_objects[id];
         subobj.radius = 0.0;
         for vert in &mut subobj.bsp_data.verts {
-            *vert = matrix * *vert;
+            *vert = no_trans_matrix * *vert;
             if !transform_offset {
                 *vert += translation.into();
             }
@@ -2380,7 +2380,7 @@ impl Model {
         }
 
         // this preserves rotations, but inverts scales, which is the proper transformation for normals
-        let norm_matrix = matrix.try_inverse().unwrap().transpose();
+        let norm_matrix = no_trans_matrix.try_inverse().unwrap().transpose();
 
         for norm in &mut subobj.bsp_data.norms {
             *norm = (&norm_matrix * *norm).normalize();
@@ -2398,7 +2398,7 @@ impl Model {
         let children = subobj.children.clone();
 
         for child_id in children {
-            self.apply_subobj_transform(child_id, matrix, true)
+            self.apply_subobj_transform(child_id, no_trans_matrix, true)
         }
     }
 

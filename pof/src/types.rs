@@ -776,6 +776,10 @@ impl SpecialPoint {
         self.position = matrix * self.position;
         self.radius *= scalar;
     }
+
+    pub fn is_subsystem(&self) -> bool {
+        properties_get_field(&self.properties, "$special") == Some("subsystem")
+    }
 }
 
 #[derive(Default, Debug, Clone)]
@@ -1269,6 +1273,12 @@ impl Serialize for ThrusterBank {
     }
 }
 
+impl ThrusterBank {
+    pub fn get_engine_subsys(&self) -> Option<&str> {
+        properties_get_field(&self.properties, "$engine_subsystem")
+    }
+}
+
 macro_rules! mk_enumeration {
     ($($(#[$meta:meta])* pub enum $tyname:ident($base:ty) {
         $($(#[$doc:meta])* $name:ident = $n:literal,)*
@@ -1397,7 +1407,7 @@ pub enum NameLink {
 pub struct SubObject {
     pub obj_id: ObjectId,
     pub radius: f32,
-    pub(crate) parent: Option<ObjectId>,
+    pub parent: Option<ObjectId>,
     pub offset: Vec3d,
     pub geo_center: Vec3d,
     pub bbox: BoundingBox,
@@ -1477,6 +1487,10 @@ impl SubObject {
 
     pub fn uvec_fvec(&self) -> Option<(Vec3d, Vec3d)> {
         parse_uvec_fvec(&self.properties)
+    }
+
+    pub fn is_subsystem(&self) -> bool {
+        properties_get_field(&self.properties, "$special") == Some("subsystem")
     }
 }
 
@@ -1584,12 +1598,11 @@ impl Dock {
     }
 
     pub fn get_name(&self) -> Option<&str> {
-        for str in self.properties.split('\n') {
-            if let Some(name) = str.strip_prefix("$name=") {
-                return Some(name);
-            }
-        }
-        None
+        properties_get_field(&self.properties, "$name")
+    }
+
+    pub fn get_parent_obj(&self) -> Option<&str> {
+        properties_get_field(&self.properties, "$parent_submodel")
     }
 
     pub fn apply_transform(&mut self, matrix: &TMat4<f32>) {
@@ -1647,7 +1660,7 @@ impl Turret {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Insignia {
     pub detail_level: u32,
     pub vertices: Vec<Vec3d>,
@@ -2206,11 +2219,12 @@ impl Model {
             } else if sub_obj_parent.is_none() {
                 return false;
             }
+            assert!(sub_obj_parent != self.sub_objects[sub_obj_parent.unwrap()].parent, "cycle detected!! {:?} {:?}", obj_id, sub_obj_parent);
             sub_obj_parent = self.sub_objects[sub_obj_parent.unwrap()].parent;
         }
     }
 
-    pub fn get_detail_level(&self, obj_id: ObjectId) -> Option<u32> {
+    pub fn get_sobj_detail_level(&self, obj_id: ObjectId) -> Option<u32> {
         for (i, id) in self.header.detail_levels.iter().enumerate() {
             if self.is_obj_id_ancestor(obj_id, *id) {
                 return Some(i as u32);
@@ -2516,45 +2530,16 @@ impl Model {
         }
     }
 
-    pub fn clean_up(&mut self) {
-        if let Some(shield) = &mut self.shield_data {
-            if shield.collision_tree.is_none() {
-                shield.collision_tree = Some(ShieldData::recalculate_tree(&shield.verts, &shield.polygons));
+    pub fn recalc_all_children_ids(&mut self) {
+        for subobj in self.sub_objects.iter_mut() {
+            subobj.children.clear();
+        }
+
+        for i in 0..self.sub_objects.len() {
+            if let Some(parent) = self.sub_objects.0[i].parent {
+                let id = self.sub_objects.0[i].obj_id;
+                self.sub_objects[parent].children.push(id);
             }
-        }
-    }
-
-    pub fn make_orphan(&mut self, would_be_orphan: ObjectId) {
-        if let Some(parent_id) = self.sub_objects[would_be_orphan].parent {
-            // maintain it's current relative position to the whole model
-            self.sub_objects[would_be_orphan].offset = self.get_total_subobj_offset(would_be_orphan);
-
-            let parent_children = &mut self.sub_objects[parent_id].children;
-            parent_children.remove(parent_children.iter().position(|child_id| *child_id == would_be_orphan).unwrap());
-        }
-        self.sub_objects[would_be_orphan].parent = None;
-    }
-
-    pub fn make_parent(&mut self, new_parent: ObjectId, new_child: ObjectId) -> Option<()> {
-        if !self.is_obj_id_ancestor(new_parent, new_child) {
-            self.sub_objects[new_parent].children.push(new_child);
-            self.sub_objects[new_child].parent = Some(new_parent);
-
-            // maintain it's current relative position to the whole model
-            let offset_from_parents = self.get_total_subobj_offset(new_child) - self.sub_objects[new_child].offset;
-            self.sub_objects[new_child].offset -= offset_from_parents;
-
-            Some(())
-        } else {
-            None
-        }
-    }
-
-    pub fn max_verts_norms_per_subobj(&self) -> usize {
-        if self.version >= Version::V23_00 {
-            u32::MAX as usize
-        } else {
-            u16::MAX as usize
         }
     }
 
@@ -2597,6 +2582,48 @@ impl Model {
                     }
                 }
             }
+        }
+    }
+
+    pub fn clean_up(&mut self) {
+        if let Some(shield) = &mut self.shield_data {
+            if shield.collision_tree.is_none() {
+                shield.collision_tree = Some(ShieldData::recalculate_tree(&shield.verts, &shield.polygons));
+            }
+        }
+    }
+
+    pub fn make_orphan(&mut self, would_be_orphan: ObjectId) {
+        if let Some(parent_id) = self.sub_objects[would_be_orphan].parent {
+            // maintain it's current relative position to the whole model
+            self.sub_objects[would_be_orphan].offset = self.get_total_subobj_offset(would_be_orphan);
+
+            let parent_children = &mut self.sub_objects[parent_id].children;
+            parent_children.remove(parent_children.iter().position(|child_id| *child_id == would_be_orphan).unwrap());
+        }
+        self.sub_objects[would_be_orphan].parent = None;
+    }
+
+    pub fn make_parent(&mut self, new_parent: ObjectId, new_child: ObjectId) -> Option<()> {
+        if !self.is_obj_id_ancestor(new_parent, new_child) {
+            self.sub_objects[new_parent].children.push(new_child);
+            self.sub_objects[new_child].parent = Some(new_parent);
+
+            // maintain it's current relative position to the whole model
+            let offset_from_parents = self.get_total_subobj_offset(new_child) - self.sub_objects[new_child].offset;
+            self.sub_objects[new_child].offset -= offset_from_parents;
+
+            Some(())
+        } else {
+            None
+        }
+    }
+
+    pub fn max_verts_norms_per_subobj(&self) -> usize {
+        if self.version >= Version::V23_00 {
+            u32::MAX as usize
+        } else {
+            u16::MAX as usize
         }
     }
 
@@ -2730,7 +2757,7 @@ pub fn post_parse_fill_untextured_slot(sub_objects: &mut Vec<SubObject>, texture
     }
 }
 
-fn properties_delete_field(properties: &mut String, field: &str) {
+pub fn properties_delete_field(properties: &mut String, field: &str) {
     if let Some(start_idx) = properties.find(field) {
         let mut end_idx = if let Some(idx) = properties[start_idx..].chars().position(|d| d.is_ascii_control()) {
             start_idx + idx

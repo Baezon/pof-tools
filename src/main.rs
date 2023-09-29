@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![allow(clippy::useless_format)]
 #![allow(clippy::explicit_auto_deref)]
+#![allow(clippy::collapsible_if)]
 #[macro_use]
 extern crate log;
 extern crate nalgebra_glm as glm;
@@ -36,12 +37,14 @@ use std::{
     io::{Cursor, Read},
     ops::{Deref, DerefMut},
     path::PathBuf,
+    sync::mpsc::Receiver,
     sync::mpsc::TryRecvError,
 };
 use ui::{PofToolsGui, TreeValue};
 
 mod primitives;
 mod ui;
+mod ui_import;
 mod ui_properties_panel;
 
 fn create_display(event_loop: &glutin::event_loop::EventLoop<()>) -> glium::Display {
@@ -393,6 +396,13 @@ impl Model {
     }
 }
 
+/// * `None`: If the thread is inactive
+/// * `Some(Reciever)`: Otherwise if something is being loaded or the window is open. Reciever results are:
+///     * `Ok(Some(Model))`: If the thread has successfuly loaded and returned a model
+///     * `Ok(None)`: The loading was canceled, probably because they closed the window before choosing anything
+///     * `Err(panic message)`: the loading failed! Probably while parsing the model
+type LoadingThread = Option<Receiver<Result<Option<Box<Model>>, String>>>;
+
 impl PofToolsGui {
     fn save_model(model: &Model) -> Option<String> {
         let mut out = None;
@@ -459,6 +469,25 @@ impl PofToolsGui {
         model.map_err(|panic| *panic.downcast().unwrap())
     }
 
+    /// same as `handle_model_loading_thread` but for the import model
+    fn handle_import_model_loading_thread(&mut self) {
+        if let Some(thread) = &self.import_window.import_model_loading_thread {
+            let response = thread.try_recv();
+            match response {
+                Ok(Ok(Some(data))) => {
+                    self.import_window.model = Some(data);
+                    self.import_window.import_model_loading_thread = None;
+                    self.import_window.import_selection.clear();
+                }
+                Err(TryRecvError::Disconnected) => self.import_window.import_model_loading_thread = None,
+                Ok(Ok(None)) => self.import_window.import_model_loading_thread = None,
+                Ok(Err(_)) => self.import_window.import_model_loading_thread = None,
+
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+    }
+
     /// opens a thread which opens the dialog and starts parsing a model
     fn start_loading_model(&mut self, filepath: Option<PathBuf>) {
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -468,6 +497,7 @@ impl PofToolsGui {
         std::thread::spawn(move || drop(sender.send(Self::load_model(filepath))));
     }
 
+    /// handles talking to the model loading thread, ending it when concluded
     fn handle_model_loading_thread(&mut self, display: &Display) -> bool {
         if let Some(thread) = &self.model_loading_thread {
             let response = thread.try_recv();
@@ -514,6 +544,7 @@ impl PofToolsGui {
         for i in 0..self.model.textures.len() {
             self.model.texture_map.insert(TextureId(i as u32), TextureId(i as u32));
         }
+        self.import_window = Default::default();
         self.ui_state.tree_view_selection = Default::default();
         self.ui_state.refresh_properties_panel(&self.model);
         self.camera_heading = 2.7;
@@ -623,6 +654,16 @@ impl PofToolsGui {
     }
 }
 
+/// same as `start_loading_model` but for the import model
+/// borrow checker stuff makes this easier to do as a free function
+pub fn start_loading_import_model(thread: &mut LoadingThread) {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    *thread = Some(receiver);
+
+    // the model loading thread
+    std::thread::spawn(move || drop(sender.send(PofToolsGui::load_model(None))));
+}
+
 const POF_TOOLS_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() {
@@ -697,6 +738,8 @@ fn main() {
                 }
 
                 pt_gui.handle_texture_loading_thread(&display);
+
+                pt_gui.handle_import_model_loading_thread();
 
                 let repaint_after = egui.run(&display, |ctx| pt_gui.show_ui(ctx, &display, &mut undo_history));
 
@@ -786,7 +829,7 @@ fn main() {
                                 pt_gui.camera_offset += view_mat.transpose().transform_vector(&glm::vec3(x, y, 0.)).into();
                             }
                         }
-                        if mouse_in_3d_viewport {
+                        if mouse_in_3d_viewport && !pt_gui.import_window.open {
                             pt_gui.camera_scale *= 1.0 + (input.scroll_delta.y * -0.001)
                         }
                     }

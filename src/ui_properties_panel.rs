@@ -1393,10 +1393,7 @@ impl PofToolsGui {
 
                 // Transform Mesh button ================================================================
 
-                if ui
-                    .add_enabled(matches!(selected_id, Some(_)), egui::Button::new("Transform Mesh"))
-                    .clicked()
-                {
+                if ui.add_enabled(selected_id.is_some(), egui::Button::new("Transform Mesh")).clicked() {
                     transform_window.open = true;
                 }
                 if let Some(matrix) = UiState::show_transform_window(ctx, transform_window) {
@@ -1958,7 +1955,7 @@ impl PofToolsGui {
                     warning_idx = Some(1);
                 }
 
-                subobj_names_list.extend(self.model.get_subobj_names().into_iter());
+                subobj_names_list.extend(self.model.get_subobj_names());
 
                 let mut parent_id = if let Some(bay) = bay_num {
                     self.model.docking_bays[bay].get_parent_obj().map_or(0, |parent_name| {
@@ -1998,7 +1995,7 @@ impl PofToolsGui {
                     vec![String::new()]
                 };
                 // make da combo box
-                ui.add_enabled_ui(matches!(bay_num, Some(_)), |ui| {
+                ui.add_enabled_ui(bay_num.is_some(), |ui| {
                     if egui::ComboBox::from_label("Path")
                         .show_index(ui, path_num, paths.len(), |i| paths[i].to_owned())
                         .changed()
@@ -2272,8 +2269,8 @@ impl PofToolsGui {
 
                 ui.separator();
 
-                let types_display = vec!["", "Subsystem", "Shield point"];
-                let types = vec!["", "subsystem", "shieldpoint"];
+                let types_display = ["", "Subsystem", "Shield point"];
+                let types = ["", "subsystem", "shieldpoint"];
                 let mut idx = 0;
                 if let Some(point) = point_num {
                     if let Some(type_str) = pof::properties_get_field(&self.model.special_points[point].properties, "$special") {

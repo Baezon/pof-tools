@@ -487,7 +487,7 @@ impl UiState {
                                             }
                                         }
                                         ImportType::MatchAndReplace => {
-                                            if model.turrets.iter().any(|other_turret| {
+                                            if !model.turrets.iter().any(|other_turret| {
                                                 model.sub_objects[other_turret.base_obj].name == import_model.sub_objects[turret.base_obj].name
                                             }) {
                                                 if !selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(turret.base_obj))) {

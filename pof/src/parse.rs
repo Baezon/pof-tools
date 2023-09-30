@@ -1078,7 +1078,7 @@ trait ParseCtx<'a> {
             let up = self.up();
             let offset = Vec3d::from(center).from_coord(up);
 
-            println!("{:?}", node.name());
+            // println!("{:?}", node.name());
             let name = match node.name() {
                 Some(name) => name,
                 None => continue,

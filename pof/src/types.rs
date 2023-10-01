@@ -286,7 +286,7 @@ impl Vec3d {
 
     /// Get a rotation matrix that will rotate a model to face the direction
     /// this vector is pointing.
-    pub fn to_rotation_matrix(&self, orientation: ModelOrientation) -> Mat4 {
+    pub fn to_rotation_matrix(&self) -> Mat4 {
         // https://gamedev.stackexchange.com/a/119017
         // find the planar angle
         let v = self.normalize();
@@ -295,10 +295,7 @@ impl Vec3d {
         let planar_rot = glm::rotation(planar_angle, &glm::vec3(0., 1., 0.));
         // Find upwards angle
         // Use acos instead of asin because the arrowhead model points upwards
-        let up_angle = match orientation {
-            ModelOrientation::Up => v.y.acos(),
-            _ => v.y.asin(),
-        };
+        let up_angle = v.y.acos();
         let up_rot = glm::rotation(up_angle, &glm::vec3(1., 0., 0.));
         planar_rot * up_rot
     }

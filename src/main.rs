@@ -1362,13 +1362,13 @@ impl PofToolsGui {
                             let fvec_pos = pos + fvec * stick_length;
                             let uvec_matrix = {
                                 let mut m = glm::translation::<f32>(&uvec_pos.into());
-                                m *= uvec.to_rotation_matrix(ModelOrientation::Up);
+                                m *= uvec.to_rotation_matrix();
                                 m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
                                 m
                             };
                             let fvec_matrix = {
                                 let mut m = glm::translation::<f32>(&fvec_pos.into());
-                                m *= fvec.to_rotation_matrix(ModelOrientation::Up);
+                                m *= fvec.to_rotation_matrix();
                                 m *= glm::scaling(&glm::vec3(radius * 0.5, radius * 0.5, radius * 0.5));
                                 m
                             };

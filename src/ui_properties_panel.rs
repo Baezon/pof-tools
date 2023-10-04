@@ -1682,7 +1682,11 @@ impl PofToolsGui {
                 }
 
                 ui.add_space(5.0);
-                if TreeValue::Textures(TextureTreeValue::tex(self.model.untextured_idx)) == self.ui_state.tree_view_selection {
+                if self
+                    .model
+                    .untextured_idx
+                    .map_or(false, |idx| TreeValue::Textures(TextureTreeValue::Texture(idx)) == self.ui_state.tree_view_selection)
+                {
                     ui.label("If this is intentional, you may prefer \"invisible\", which FSO will ignore.");
                 }
             }

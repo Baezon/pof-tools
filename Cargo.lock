@@ -1821,7 +1821,7 @@ dependencies = [
 
 [[package]]
 name = "pof"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "base64",
  "byteorder",
@@ -1838,7 +1838,7 @@ dependencies = [
 
 [[package]]
 name = "pof-tools"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "backtrace",
  "chrono",

@@ -388,9 +388,7 @@ impl<R: Read + Seek> Parser<R> {
                     dock_points = Some(self.read_list(|this| {
                         let properties = this.read_string()?;
                         let used_paths = this.read_list(|this| this.read_u32())?; // spec allows for a list of paths but only the first will be used so dont bother
-                        println!("dock paths {:?}, path len {:?}", used_paths, paths);
                         let path = used_paths.first().map(|&x| PathId(x));
-                        println!("dock path {:?}", path);
                         // same thing here, only first 2 are used
                         let mut dockpoints = this.read_list(|this| Ok(DockingPoint { position: this.read_vec3d()?, normal: this.read_vec3d()? }))?;
                         let mut iter = dockpoints.drain(..2);

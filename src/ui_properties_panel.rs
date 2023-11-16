@@ -1121,6 +1121,7 @@ impl PofToolsGui {
                     }
 
                     self.model.recheck_warnings(All);
+                    self.model.recheck_errors(All);
                     // FIX
                 }
 

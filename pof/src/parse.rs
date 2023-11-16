@@ -389,10 +389,7 @@ impl<R: Read + Seek> Parser<R> {
                         let properties = this.read_string()?;
                         let used_paths = this.read_list(|this| this.read_u32())?; // spec allows for a list of paths but only the first will be used so dont bother
                         println!("dock paths {:?}, path len {:?}", used_paths, paths);
-                        let path = used_paths
-                            .first()
-                            .filter(|x| paths.as_ref().map_or(false, |paths| **x < paths.len() as u32))
-                            .map(|&x| PathId(x));
+                        let path = used_paths.first().map(|&x| PathId(x));
                         println!("dock path {:?}", path);
                         // same thing here, only first 2 are used
                         let mut dockpoints = this.read_list(|this| Ok(DockingPoint { position: this.read_vec3d()?, normal: this.read_vec3d()? }))?;
@@ -504,6 +501,17 @@ impl<R: Read + Seek> Parser<R> {
             }
         });
 
+        // sanitize dock paths
+        if let Some(points) = dock_points.as_deref_mut() {
+            for dock in points.iter_mut() {
+                if dock.path.map_or(false, |id| id.0 >= paths.as_ref().map_or(0, |paths| paths.len()) as u32) {
+                    dock.path = None;
+                    warn!("Invalid dock path on {:?} reset", dock.get_name());
+                }
+            }
+        }
+
+        // sanitize eye point subobjs
         if let Some(points) = eye_points.as_deref_mut() {
             for (i, eye) in points.iter_mut().enumerate() {
                 if eye.attached_subobj.map_or(false, |id| id.0 >= sub_objects.len() as u32) {

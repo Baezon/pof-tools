@@ -259,7 +259,7 @@ pub(crate) fn write_bsp_data(buf: &mut Vec<u8>, version: Version, bsp_data: &Bsp
                     let chunk_size_pointer = Fixup::new(buf, base)?;
 
                     poly.normal.write_to(buf)?;
-                    Vec3d::ZERO.write_to(buf)?; // center: unused
+                    verts[poly.verts[0].vertex_id.0 as usize].write_to(buf)?; // center: unused now, but old fso versions needed this to be on the plane at least
                     0f32.write_to(buf)?; // radius: unused
                     (poly.verts.len() as u32).write_to(buf)?;
                     poly.texture.write_to(buf)?;

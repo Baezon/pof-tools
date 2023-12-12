@@ -600,13 +600,6 @@ mk_struct! {
         pub kind: BspLightKind,
     }
 
-    #[derive(Default, Debug, Clone)]
-    pub struct EyePoint {
-        pub attached_subobj: Option<ObjectId>,
-        pub position: Vec3d,
-        pub normal: NormalVec3,
-    }
-
     #[derive(Debug, Clone, Default)]
     pub struct PathPoint {
         pub position: Vec3d,
@@ -614,12 +607,26 @@ mk_struct! {
         pub turrets: Vec<ObjectId>,
     }
 }
+
+#[derive(Default, Debug, Clone)]
+pub struct EyePoint {
+    pub attached_subobj: Option<ObjectId>,
+    pub position: Vec3d,
+    pub normal: NormalVec3,
+}
 impl EyePoint {
     pub fn apply_transform(&mut self, matrix: &TMat4<f32>) {
         self.position = matrix * self.position;
 
         let matrix = mat4_rotation_only(matrix);
         self.normal = (&matrix * self.normal.0).try_into().unwrap();
+    }
+}
+impl Serialize for EyePoint {
+    fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
+        self.attached_subobj.map_or(u32::MAX, |id| id.0).write_to(w)?;
+        self.position.write_to(w)?;
+        self.normal.write_to(w)
     }
 }
 

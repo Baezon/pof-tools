@@ -2637,6 +2637,18 @@ impl PofToolsGui {
                 if UiState::parsable_text_edit(ui, &mut self.model.visual_center, position) {
                     self.viewport_3d_dirty = true;
                 }
+
+                ui.add_space(5.0);
+
+                if ui
+                    .button("Recalculate")
+                    .on_hover_text("Chooses the average position of its surface area")
+                    .clicked()
+                {
+                    let (_, center) = self.model.surface_area_average_pos();
+                    self.model.visual_center = center;
+                    self.ui_state.properties_panel_dirty = true;
+                }
             }
             PropertiesPanel::Comments => {
                 ui.heading("Comments");

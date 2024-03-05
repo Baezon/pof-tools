@@ -1216,7 +1216,8 @@ dependencies = [
 [[package]]
 name = "egui_glium"
 version = "0.26.2"
-source = "git+https://github.com/Baezon/egui_glium?branch=v26_2#87ecbfd7d554462d6c43d06a4c1439bdfbdaa305"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8dd1e855ebea948a312369feb857b88d48aa84b29f1612d34b91a37a771f098"
 dependencies = [
  "ahash",
  "bytemuck",

@@ -1,8 +1,10 @@
 #![allow(clippy::unnecessary_lazy_evaluations)]
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::str::FromStr;
 
 use egui::{style::Widgets, text::LayoutJob, CollapsingHeader, Color32, DragValue, Label, Response, RichText, TextEdit, TextFormat, TextStyle, Ui};
+use glium::glutin::surface::WindowSurface;
 use glium::Display;
 use nalgebra_glm::TMat4;
 use pof::{
@@ -75,7 +77,7 @@ impl<T: Clone> IndexingButtonsResponse<T> {
         }
     }
 
-    pub fn get_new_ui_idx(&self, data_vec: &Vec<T>) -> Option<usize>
+    pub fn get_new_ui_idx(&self, data_vec: &[T]) -> Option<usize>
     where
         T: Default,
     {
@@ -100,6 +102,28 @@ impl<T: Clone> IndexingButtonsResponse<T> {
             IndexingButtonsResponse::Insert(..) => None,
         }
     }
+}
+
+// fn text_edit_single_numeric(ui: &mut Ui, id: impl Hash, string: &mut String) -> Response {
+//     let response = text_edit_single(ui, id, string);
+//     string.retain(|c| c.is_ascii_digit() || c == '.' || c == ',' || c.is_whitespace());
+//     response
+// }
+
+fn text_edit_single(ui: &mut Ui, id: impl Hash, string: &mut String) -> Response {
+    let id = egui::Id::new(id);
+    let text_edit = egui::TextEdit::singleline(string).id(id);
+    let response = ui.add(text_edit);
+    egui::TextEdit::load_state(ui.ctx(), id).unwrap().clear_undoer();
+    response
+}
+
+fn text_edit_multi(ui: &mut Ui, id: impl Hash, string: &mut String, desired_rows: usize) -> Response {
+    let id = egui::Id::new(id);
+    let text_edit = egui::TextEdit::multiline(string).desired_rows(desired_rows).id(id);
+    let response = ui.add(text_edit);
+    egui::TextEdit::load_state(ui.ctx(), id).unwrap().clear_undoer();
+    response
 }
 
 impl UiState {
@@ -214,20 +238,6 @@ impl UiState {
         ret
     }
 
-    // a text edit field attached to a model value that will show up red if it cannot parse
-    fn parsable_text_edit<T: FromStr>(ui: &mut Ui, model_value: &mut T, parsable_string: &mut String) -> bool {
-        if parsable_string.parse::<T>().is_err() {
-            ui.visuals_mut().override_text_color = Some(ERROR_RED);
-        }
-        if ui.text_edit_singleline(parsable_string).changed() {
-            if let Ok(value) = parsable_string.parse() {
-                *model_value = value;
-                return true;
-            }
-        }
-        false
-    }
-
     // a combo box for subobjects
     // selector value is a convenience option to disable the combo box, since most properties panels work on a current selection of Option<something>
     fn subobject_combo_box<T>(
@@ -272,7 +282,7 @@ impl UiState {
     }
 
     fn model_value_edit<T: FromStr>(
-        viewport_3d_dirty: &mut bool, ui: &mut Ui, active_warning: bool, model_value: Option<&mut T>, parsable_string: &mut String,
+        id: impl Hash, viewport_3d_dirty: &mut bool, ui: &mut Ui, active_warning: bool, model_value: Option<&mut T>, parsable_string: &mut String,
     ) -> Response {
         if let Some(value) = model_value {
             if parsable_string.parse::<T>().is_err() {
@@ -280,7 +290,8 @@ impl UiState {
             } else if active_warning {
                 ui.visuals_mut().override_text_color = Some(WARNING_YELLOW);
             }
-            let response = ui.text_edit_singleline(parsable_string);
+
+            let response = text_edit_single(ui, id, parsable_string);
             if response.changed() {
                 if let Ok(parsed_string) = parsable_string.parse() {
                     *value = parsed_string;
@@ -860,7 +871,7 @@ impl PropertiesPanel {
 
 impl PofToolsGui {
     pub(crate) fn do_properties_panel(
-        &mut self, ui: &mut egui::Ui, ctx: &egui::Context, display: &Display, undo_history: &mut undo::History<UndoAction>,
+        &mut self, ui: &mut egui::Ui, ctx: &egui::Context, display: &Display<WindowSurface>, undo_history: &mut undo::History<UndoAction>,
     ) {
         let mut reload_textures = false;
         let mut buffer_ids_to_rebuild = vec![];
@@ -909,6 +920,7 @@ impl PofToolsGui {
                 ui.horizontal(|ui| {
                     ui.label("Min:");
                     let response = UiState::model_value_edit(
+                        "header bbox min",
                         &mut self.ui_state.viewport_3d_dirty,
                         ui,
                         self.model.warnings.contains(&Warning::BBoxTooSmall(None)),
@@ -925,6 +937,7 @@ impl PofToolsGui {
                 ui.horizontal(|ui| {
                     ui.label("Max:");
                     let response = UiState::model_value_edit(
+                        "header bbox max",
                         &mut self.ui_state.viewport_3d_dirty,
                         ui,
                         self.model.warnings.contains(&Warning::BBoxTooSmall(None)),
@@ -962,6 +975,7 @@ impl PofToolsGui {
                 });
 
                 let response = UiState::model_value_edit(
+                    "header radius",
                     &mut self.ui_state.viewport_3d_dirty,
                     ui,
                     self.model.warnings.contains(&Warning::RadiusTooSmall(None)),
@@ -981,7 +995,14 @@ impl PofToolsGui {
                         self.ui_state.properties_panel_dirty = true;
                     }
                 });
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, Some(&mut self.model.header.mass), mass_string);
+                UiState::model_value_edit(
+                    "header mass",
+                    &mut self.ui_state.viewport_3d_dirty,
+                    ui,
+                    false,
+                    Some(&mut self.model.header.mass),
+                    mass_string,
+                );
 
                 ui.horizontal(|ui| {
                     ui.add(egui::Label::new("Moment of Inertia:"));
@@ -991,6 +1012,7 @@ impl PofToolsGui {
                     }
                 });
                 UiState::model_value_edit(
+                    "header moi rvec",
                     &mut self.ui_state.viewport_3d_dirty,
                     ui,
                     false,
@@ -998,6 +1020,7 @@ impl PofToolsGui {
                     moir_string,
                 );
                 UiState::model_value_edit(
+                    "header moi uvec",
                     &mut self.ui_state.viewport_3d_dirty,
                     ui,
                     false,
@@ -1005,6 +1028,7 @@ impl PofToolsGui {
                     moiu_string,
                 );
                 UiState::model_value_edit(
+                    "header moi fvec",
                     &mut self.ui_state.viewport_3d_dirty,
                     ui,
                     false,
@@ -1183,7 +1207,7 @@ impl PofToolsGui {
                     }
                     ui.label(text);
                     let old_name = self.model.sub_objects[id].name.clone();
-                    if ui.add(egui::TextEdit::singleline(&mut self.model.sub_objects[id].name)).changed() {
+                    if text_edit_single(ui, "subobj name", &mut self.model.sub_objects[id].name).changed() {
                         self.model.recheck_warnings(One(Warning::SubObjectNameTooLong(id)));
                         self.model.recheck_errors(One(Error::UnnamedSubObject(id)));
                         self.model.recheck_errors(One(Error::DuplicateSubobjectName(old_name)));
@@ -1253,6 +1277,7 @@ impl PofToolsGui {
                 ui.horizontal(|ui| {
                     ui.label("Min:");
                     let response = UiState::model_value_edit(
+                        "subobj bbox min",
                         &mut self.ui_state.viewport_3d_dirty,
                         ui,
                         false,
@@ -1269,6 +1294,7 @@ impl PofToolsGui {
                 ui.horizontal(|ui| {
                     ui.label("Max:");
                     let response = UiState::model_value_edit(
+                        "subobj bbox max",
                         &mut self.ui_state.viewport_3d_dirty,
                         ui,
                         false,
@@ -1303,7 +1329,7 @@ impl PofToolsGui {
                 // Offset edit ================================================================
 
                 ui.horizontal_wrapped(|ui| {
-                    if self.model.header.detail_levels.get(0).map_or(false, |id| selected_id == Some(*id))
+                    if self.model.header.detail_levels.first().map_or(false, |id| selected_id == Some(*id))
                         && self.model.warnings.contains(&Warning::Detail0NonZeroOffset)
                     {
                         ui.visuals_mut().override_text_color = Some(WARNING_YELLOW);
@@ -1328,7 +1354,8 @@ impl PofToolsGui {
                     if offset_string.parse::<Vec3d>().is_err() {
                         ui.visuals_mut().override_text_color = Some(ERROR_RED);
                     }
-                    let response = ui.text_edit_singleline(offset_string);
+
+                    let response = text_edit_single(ui, "subobj offset", offset_string);
                     if response.changed() {
                         if let Ok(parsed_string) = offset_string.parse() {
                             if self.ui_state.move_only_offset {
@@ -1374,6 +1401,7 @@ impl PofToolsGui {
                 });
 
                 let response = UiState::model_value_edit(
+                    "subobj radius",
                     &mut self.ui_state.viewport_3d_dirty,
                     ui,
                     self.model.warnings.contains(&Warning::RadiusTooSmall(selected_id)),
@@ -1452,10 +1480,7 @@ impl PofToolsGui {
                     if self.model.sub_objects[id].uvec_fvec().is_some() {
                         self.ui_state.display_uvec_fvec = true;
                     }
-                    if ui
-                        .add(egui::TextEdit::multiline(&mut self.model.sub_objects[id].properties).desired_rows(2))
-                        .changed()
-                    {
+                    if text_edit_multi(ui, "subobj props", &mut self.model.sub_objects[id].properties, 2).changed() {
                         self.model.recheck_warnings(One(Warning::SubObjectPropertiesTooLong(id)));
                         self.ui_state.viewport_3d_dirty = true; // There may be changes to the uvec/fvec
                     };
@@ -1674,7 +1699,7 @@ impl PofToolsGui {
                 };
 
                 ui.label("Texture Name:");
-                if UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, tex, texture_name).changed()
+                if UiState::model_value_edit("textures texture name", &mut self.ui_state.viewport_3d_dirty, ui, false, tex, texture_name).changed()
                     && self.model.untextured_idx.is_some()
                     && self.ui_state.tree_view_selection == TreeValue::Textures(TextureTreeValue::Texture(self.model.untextured_idx.unwrap()))
                 {
@@ -1716,7 +1741,7 @@ impl PofToolsGui {
                         if self.model.warnings.contains(&Warning::ThrusterPropertiesInvalidVersion(bank)) {
                             UiState::set_widget_color(ui, WARNING_YELLOW);
                         }
-                        if ui.text_edit_singleline(engine_subsys_string).changed() {
+                        if text_edit_single(ui, "thrusters engine subsys", engine_subsys_string).changed() {
                             pof::properties_update_field(&mut self.model.thruster_banks[bank].properties, "$engine_subsystem", engine_subsys_string);
                             self.model.recheck_warnings(One(Warning::ThrusterPropertiesTooLong(bank)));
                             self.model.recheck_warnings(One(Warning::ThrusterPropertiesInvalidVersion(bank)));
@@ -1760,11 +1785,11 @@ impl PofToolsGui {
                 };
 
                 ui.label("Radius:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, radius, radius_string);
+                UiState::model_value_edit("thrusters radius", &mut self.ui_state.viewport_3d_dirty, ui, false, radius, radius_string);
                 ui.label("Position:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
+                UiState::model_value_edit("thrusters position", &mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
                 ui.label("Normal:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
+                UiState::model_value_edit("thrusters normal", &mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
 
                 if let Some(response) = bank_idx_response {
                     let new_idx = response.get_new_ui_idx(&self.model.thruster_banks);
@@ -1854,11 +1879,12 @@ impl PofToolsGui {
                     };
 
                 ui.label("Position:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
+                UiState::model_value_edit("weapons position", &mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
                 ui.label("Normal:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
+                UiState::model_value_edit("weapons normal", &mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
                 ui.label("Offset:");
                 let offset_changed = UiState::model_value_edit(
+                    "weapons angle offset",
                     &mut self.ui_state.viewport_3d_dirty,
                     ui,
                     self.model.pof_model.warnings.contains(&Warning::WeaponOffsetInvalidVersion {
@@ -1937,7 +1963,7 @@ impl PofToolsGui {
                 ui.horizontal(|ui| {
                     ui.label("Name:");
                     if let Some(bay) = bay_num {
-                        if ui.text_edit_singleline(name_string).changed() {
+                        if text_edit_single(ui, "docking bay name", name_string).changed() {
                             pof::properties_update_field(&mut self.model.docking_bays[bay].properties, "$name", name_string);
                             self.model.recheck_warnings(One(Warning::DockingBayNameTooLong(bay)));
                             self.model.recheck_warnings(One(Warning::DockingBayPropertiesTooLong(bay)));
@@ -2041,11 +2067,11 @@ impl PofToolsGui {
 
                 ui.label("Position:");
                 let pos = bay_num.map(|num| &mut self.model.docking_bays[num].position);
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
+                UiState::model_value_edit("docking bay position", &mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
 
                 ui.label(RichText::new("Forward Vector:").color(Color32::from_rgb(140, 150, 210)));
                 let norm = bay_num.map(|num| &mut self.model.docking_bays[num].fvec);
-                if UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, fvec_string).changed() {
+                if UiState::model_value_edit("docking bay fvec", &mut self.ui_state.viewport_3d_dirty, ui, false, norm, fvec_string).changed() {
                     let bay = &mut self.model.docking_bays[bay_num.unwrap()];
                     bay.uvec = Dock::orthonormalize(&bay.uvec.0.into(), &bay.fvec.0.into());
                     *uvec_ang = bay.get_uvec_angle().to_degrees() % 360.0
@@ -2083,7 +2109,7 @@ impl PofToolsGui {
                 job.append(".", 0.0, TextFormat::default());
                 ui.label(job);
 
-                ui.image(&self.dock_demo_img, self.dock_demo_img.size_vec2());
+                ui.image(&self.dock_demo_img);
 
                 if let Some(response) = bay_idx_response {
                     let new_idx = response.get_new_ui_idx(&self.model.docking_bays);
@@ -2126,7 +2152,7 @@ impl PofToolsGui {
 
                 ui.label("Glow Texture:");
                 if let Some(bank) = bank_num {
-                    if ui.add(egui::TextEdit::singleline(glow_texture_string).desired_rows(1)).changed() {
+                    if text_edit_single(ui, "glows tex name", glow_texture_string).changed() {
                         pof::properties_update_field(&mut self.model.glow_banks[bank].properties, "$glow_texture", glow_texture_string);
                         self.model.recheck_warnings(One(Warning::GlowBankPropertiesTooLong(bank)));
                     }
@@ -2156,12 +2182,12 @@ impl PofToolsGui {
 
                 ui.horizontal(|ui| {
                     ui.label("LOD:");
-                    UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, lod, lod_string);
+                    UiState::model_value_edit("glows lod", &mut self.ui_state.viewport_3d_dirty, ui, false, lod, lod_string);
                 });
 
                 ui.horizontal(|ui| {
                     ui.label("Type:");
-                    UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, glow_type, glow_type_string);
+                    UiState::model_value_edit("glows type", &mut self.ui_state.viewport_3d_dirty, ui, false, glow_type, glow_type_string);
                 });
 
                 ui.separator();
@@ -2172,16 +2198,16 @@ impl PofToolsGui {
                 }
 
                 ui.label("Displacement Time:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, disp_time, disp_time_string);
+                UiState::model_value_edit("glows disp time", &mut self.ui_state.viewport_3d_dirty, ui, false, disp_time, disp_time_string);
 
                 ui.horizontal(|ui| {
                     ui.label("On Time:");
-                    UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, on_time, on_time_string);
+                    UiState::model_value_edit("glows on time", &mut self.ui_state.viewport_3d_dirty, ui, false, on_time, on_time_string);
                 });
 
                 ui.horizontal(|ui| {
                     ui.label("Off Time:");
-                    UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, off_time, off_time_string);
+                    UiState::model_value_edit("glows off time", &mut self.ui_state.viewport_3d_dirty, ui, false, off_time, off_time_string);
                 });
 
                 ui.separator();
@@ -2222,11 +2248,11 @@ impl PofToolsGui {
                 ui.add_space(10.0);
 
                 ui.label("Radius:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, radius, radius_string);
+                UiState::model_value_edit("glows radius", &mut self.ui_state.viewport_3d_dirty, ui, false, radius, radius_string);
                 ui.label("Position:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
+                UiState::model_value_edit("glows position", &mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
                 ui.label("Normal:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
+                UiState::model_value_edit("glows normal", &mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
 
                 if let Some(response) = bank_idx_response {
                     let new_idx = response.get_new_ui_idx(&self.model.glow_banks);
@@ -2264,7 +2290,7 @@ impl PofToolsGui {
                 ui.horizontal(|ui| {
                     ui.label("Name:");
                     if let Some(point) = point_num {
-                        if ui.add(egui::TextEdit::singleline(&mut self.model.special_points[point].name)).changed() {
+                        if text_edit_single(ui, "specpoint name", &mut self.model.special_points[point].name).changed() {
                             self.model.recheck_warnings(One(Warning::SpecialPointNameTooLong(point)));
                         }
                     } else {
@@ -2331,9 +2357,9 @@ impl PofToolsGui {
                     (None, None)
                 };
                 ui.label("Radius:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, radius, radius_string);
+                UiState::model_value_edit("specpoint radius", &mut self.ui_state.viewport_3d_dirty, ui, false, radius, radius_string);
                 ui.label("Position:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
+                UiState::model_value_edit("specpoint position", &mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
 
                 if let Some(response) = spec_point_idx_response {
                     let new_idx = response.get_new_ui_idx(&self.model.special_points);
@@ -2415,7 +2441,7 @@ impl PofToolsGui {
                 };
 
                 ui.label("Normal:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
+                UiState::model_value_edit("turret normal", &mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
 
                 ui.separator();
                 ui.add(Label::new(RichText::new("Turret Fire Points").text_style(TextStyle::Button)));
@@ -2433,7 +2459,7 @@ impl PofToolsGui {
                 };
 
                 ui.label("Position:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
+                UiState::model_value_edit("turret position", &mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
 
                 if let Some(response) = turret_idx_response {
                     let new_idx = response.get_new_ui_idx(&self.model.turrets);
@@ -2513,9 +2539,9 @@ impl PofToolsGui {
                 };
 
                 ui.label("Radius:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, radius, radius_string);
+                UiState::model_value_edit("path radius", &mut self.ui_state.viewport_3d_dirty, ui, false, radius, radius_string);
                 ui.label("Position:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
+                UiState::model_value_edit("path position", &mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
 
                 if let Some(response) = path_idx_response {
                     if let IndexingButtonsResponse::Delete(idx) = response {
@@ -2564,9 +2590,9 @@ impl PofToolsGui {
                 };
 
                 ui.label("Detail Level:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, lod, lod_string);
+                UiState::model_value_edit("insignia lod", &mut self.ui_state.viewport_3d_dirty, ui, false, lod, lod_string);
                 ui.label("Offset:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, offset, offset_string);
+                UiState::model_value_edit("insignia offset", &mut self.ui_state.viewport_3d_dirty, ui, false, offset, offset_string);
             }
             PropertiesPanel::EyePoint { position_string, normal_string, attached_subobj_idx } => {
                 ui.heading("Eye Point");
@@ -2612,9 +2638,9 @@ impl PofToolsGui {
                     (None, None)
                 };
                 ui.label("Position:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
+                UiState::model_value_edit("eye position", &mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
                 ui.label("Normal:");
-                UiState::model_value_edit(&mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
+                UiState::model_value_edit("eye normal", &mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
 
                 if let Some(response) = eye_idx_response {
                     let new_idx = response.get_new_ui_idx(&self.model.eye_points);
@@ -2634,9 +2660,14 @@ impl PofToolsGui {
 
                 ui.label("The visual center is treated as the center for things like the targeting box, or tech room.");
 
-                if UiState::parsable_text_edit(ui, &mut self.model.visual_center, position) {
-                    self.viewport_3d_dirty = true;
-                }
+                UiState::model_value_edit(
+                    "viscenter position",
+                    &mut self.ui_state.viewport_3d_dirty,
+                    ui,
+                    false,
+                    Some(&mut self.model.visual_center),
+                    position,
+                );
             }
             PropertiesPanel::Comments => {
                 ui.heading("Comments");

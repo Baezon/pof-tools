@@ -6,17 +6,19 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-eframe = "0.19.0"
-egui = "0.19.0"
-glium = "0.32"
-egui_glium = "0.19.0"
+winit = "0.29"
+eframe = "0.26.2"
+egui = "0.26.2"
+glium = "0.34"
+# egui_glium = "0.23.0"
+egui_glium = { git = "https://github.com/Baezon/egui_glium", branch = "v26_2", version = "0.26.2" }
 pof = { path = "pof" }
 nalgebra-glm = "0.18.0"
 native-dialog = "0.6.3"
 crossbeam = "0.8.1"
 image = "0.24.1"
 # for logging
-simplelog = "0.11.2"
+simplelog = { version = "0.12.1", default-features = false }
 log = "0.4.14"
 # for panic handling
 backtrace = "0.3.64"

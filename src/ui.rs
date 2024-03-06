@@ -1,11 +1,12 @@
 use egui::{collapsing_header::CollapsingState, Color32, Id, Label, RichText};
 use glium::{
+    glutin::surface::WindowSurface,
     texture::{RawImage2d, SrgbTexture2d},
     Display,
 };
 use pof::{
-    properties_get_field, Dock, Error, EyePoint, GlowPoint, GlowPointBank, Path, PathPoint, SpecialPoint, SubObject, TextureId, ThrusterBank,
-    ThrusterGlow, Turret, Vec3d, Version, Warning, WeaponHardpoint,
+    properties_get_field, Dock, Error, EyePoint, GlowPoint, GlowPointBank, NormalVec3, Path, PathPoint, SpecialPoint, SubObject, TextureId,
+    ThrusterBank, ThrusterGlow, Turret, Vec3d, Version, Warning, WeaponHardpoint,
 };
 use std::{
     collections::HashMap,
@@ -13,6 +14,7 @@ use std::{
     hash::Hash,
     sync::mpsc::Receiver,
 };
+use winit::window::Window;
 
 use eframe::egui::{self, Button, TextStyle, Ui};
 use pof::ObjectId;
@@ -80,6 +82,19 @@ impl TreeValue {
             TreeValue::Paths(PathTreeValue::PathPoint(i, j)) => Some(&mut model.paths[i].points[j].position),
             TreeValue::EyePoints(EyeTreeValue::EyePoint(i)) => Some(&mut model.eye_points[i].position),
             TreeValue::VisualCenter => Some(&mut model.visual_center),
+            _ => None,
+        }
+    }
+    pub fn get_direction_ref<'a>(&self, model: &'a mut Model) -> Option<&'a mut NormalVec3> {
+        match *self {
+            TreeValue::Weapons(WeaponTreeValue::PriBankPoint(i, j)) => Some(&mut model.primary_weps[i][j].normal),
+            TreeValue::Weapons(WeaponTreeValue::SecBankPoint(i, j)) => Some(&mut model.secondary_weps[i][j].normal),
+            TreeValue::DockingBays(DockingTreeValue::Bay(i)) => Some(&mut model.docking_bays[i].fvec),
+            TreeValue::Thrusters(ThrusterTreeValue::BankPoint(i, j)) => Some(&mut model.thruster_banks[i].glows[j].normal),
+            // TreeValue::Glows(GlowTreeValue::BankPoint(i, j)) => Some(&mut model.glow_banks[i].glow_points[j].normal),
+            TreeValue::Turrets(TurretTreeValue::Turret(i)) => Some(&mut model.turrets[i].normal),
+            TreeValue::Turrets(TurretTreeValue::TurretPoint(i, _)) => Some(&mut model.turrets[i].normal),
+            TreeValue::EyePoints(EyeTreeValue::EyePoint(i)) => Some(&mut model.eye_points[i].normal),
             _ => None,
         }
     }
@@ -552,7 +567,7 @@ impl std::ops::DerefMut for PofToolsGui {
     }
 }
 impl PofToolsGui {
-    pub fn new(display: &Display, ctx: &egui::Context) -> Self {
+    pub fn new(display: &Display<WindowSurface>, ctx: &egui::Context) -> Self {
         Self {
             model: Box::new(Model {
                 pof_model: pof::Model::default(),
@@ -577,7 +592,7 @@ impl PofToolsGui {
                         let pixels = image_buffer.as_flat_samples();
                         egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_slice())
                     },
-                    egui::TextureFilter::Linear,
+                    egui::TextureOptions::LINEAR,
                 )
             },
             camera_pitch: Default::default(),
@@ -759,6 +774,10 @@ pub enum UndoAction {
         tree_val: TreeValue,
         delta_vec: Vec3d,
     },
+    RotateLollipop {
+        tree_val: TreeValue,
+        dir_vec: NormalVec3,
+    },
     IxBAction(IndexingButtonsAction),
     ChangeTextures {
         id_map: HashMap<TextureId, TextureId>,
@@ -783,6 +802,15 @@ impl undo::Action for UndoAction {
                 if let Some(pos_ref) = pos_ref {
                     *pos_ref += *delta_vec;
                     *delta_vec = -*delta_vec;
+                    Ok(())
+                } else {
+                    Err("No position ref for tree_val")
+                }
+            }
+            UndoAction::RotateLollipop { tree_val, dir_vec } => {
+                let vec_ref = tree_val.get_direction_ref(target);
+                if let Some(vec) = vec_ref {
+                    *vec = *dir_vec;
                     Ok(())
                 } else {
                     Err("No position ref for tree_val")
@@ -829,6 +857,10 @@ impl undo::Action for UndoAction {
                 *vec1 += *vec2;
                 undo::Merged::Yes
             }
+            (
+                UndoAction::RotateLollipop { tree_val: tree_val1, dir_vec: vec1 },
+                UndoAction::RotateLollipop { tree_val: tree_val2, dir_vec: vec2 },
+            ) if tree_val1 == tree_val2 => undo::Merged::Yes,
             _ => undo::Merged::No,
         }
     }
@@ -900,7 +932,7 @@ impl PofToolsGui {
     // =====================================================
     // The big top-level function for drawing and interacting with all of the UI
     // ====================================================
-    pub fn show_ui(&mut self, ctx: &egui::Context, display: &Display, undo_history: &mut undo::History<UndoAction>) {
+    pub fn show_ui(&mut self, ctx: &egui::Context, window: &Window, display: &Display<WindowSurface>, undo_history: &mut undo::History<UndoAction>) {
         egui::TopBottomPanel::top("menu").default_height(33.0).min_height(33.0).show(ctx, |ui| {
             Ui::add_space(ui, 6.0);
             ui.horizontal(|ui| {
@@ -922,10 +954,7 @@ impl PofToolsGui {
 
                         let new_filename = PofToolsGui::save_model(&self.model);
                         if let Some(filename) = new_filename {
-                            display
-                                .gl_window()
-                                .window()
-                                .set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, filename));
+                            window.set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, filename));
                         }
                         ui.close_menu();
                     }
@@ -939,7 +968,7 @@ impl PofToolsGui {
                 if self.ui_state.show_import_window(&self.model, ctx) {
                     self.merge_import_model();
                     self.import_window.open = false;
-                    self.finish_loading_model(display);
+                    self.finish_loading_model(window, display);
                     self.model.recalc_semantic_name_links();
                 }
 

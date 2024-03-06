@@ -441,7 +441,6 @@ impl Default for NormalVec3 {
         Self(Vec3d { x: 0.0, y: 0.0, z: 1.0 })
     }
 }
-
 impl TryFrom<Vec3d> for NormalVec3 {
     type Error = ();
 
@@ -449,7 +448,6 @@ impl TryFrom<Vec3d> for NormalVec3 {
         Ok(Self(Vec3::from(value).try_normalize(1e-6).ok_or(())?.into()))
     }
 }
-
 impl TryFrom<Vec3> for NormalVec3 {
     type Error = ();
 
@@ -457,11 +455,15 @@ impl TryFrom<Vec3> for NormalVec3 {
         Vec3d::from(value).try_into()
     }
 }
-
 impl FromStr for NormalVec3 {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         s.parse::<Vec3d>()?.try_into()
+    }
+}
+impl Display for NormalVec3 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -817,14 +819,14 @@ impl WeaponHardpoint {
 #[derive(Debug, Clone)]
 pub struct ThrusterGlow {
     pub position: Vec3d,
-    pub normal: Vec3d,
+    pub normal: NormalVec3,
     pub radius: f32,
 }
 impl Default for ThrusterGlow {
     fn default() -> Self {
         Self {
             position: Default::default(),
-            normal: Vec3d { x: 0.0, y: 0.0, z: -1.0 },
+            normal: NormalVec3(Vec3d { x: 0.0, y: 0.0, z: -1.0 }),
             radius: 1.0,
         }
     }
@@ -847,7 +849,7 @@ impl ThrusterGlow {
         self.radius *= scalar;
 
         let matrix = mat4_rotation_only(&matrix);
-        self.normal = (&matrix * self.normal).normalize();
+        self.normal = (&matrix * self.normal.0).try_into().unwrap();
     }
 }
 

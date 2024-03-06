@@ -556,7 +556,7 @@ fn make_thrusters_node<N: Node>(ctx: &mut N::Ctx, thruster_banks: &[ThrusterBank
             let radius = point.radius;
             let pos = point.position.to_coord(up);
             point_node.translate(pos.into());
-            point_node.rotate(vec_to_rotation(&point.normal, up));
+            point_node.rotate(vec_to_rotation(&point.normal.0, up));
             point_node.scale([radius, radius, radius]);
 
             bank_node.children().push(point_node.build(ctx));

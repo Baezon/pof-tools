@@ -17,12 +17,8 @@ use crate::{
     },
 };
 use eframe::egui::PointerButton;
-use egui::{Color32, RichText, TextEdit};
-use glium::{
-    glutin::{self, event::WindowEvent, window::Icon},
-    texture::SrgbTexture2d,
-    BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer,
-};
+use egui::{Color32, RichText, TextEdit, ViewportId};
+use glium::{glutin::surface::WindowSurface, texture::SrgbTexture2d, BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer};
 use glm::Mat4x4;
 use native_dialog::FileDialog;
 use pof::{
@@ -37,31 +33,27 @@ use std::{
     io::{Cursor, Read},
     ops::{Deref, DerefMut},
     path::PathBuf,
-    sync::mpsc::Receiver,
-    sync::mpsc::TryRecvError,
+    sync::mpsc::{Receiver, TryRecvError},
+    time::Duration,
 };
 use ui::{PofToolsGui, TreeValue};
+use winit::window::Window;
 
 mod primitives;
 mod ui;
 mod ui_import;
 mod ui_properties_panel;
 
-fn create_display(event_loop: &glutin::event_loop::EventLoop<()>) -> glium::Display {
-    let window_builder = glutin::window::WindowBuilder::new()
+fn create_window_display(event_loop: &winit::event_loop::EventLoop<()>) -> (winit::window::Window, glium::Display<WindowSurface>) {
+    let window_builder = winit::window::WindowBuilder::new()
         .with_resizable(true)
-        .with_inner_size(glutin::dpi::LogicalSize { width: 800.0f32, height: 600.0f32 })
+        .with_inner_size(winit::dpi::LogicalSize { width: 800.0f32, height: 600.0f32 })
         .with_title(format!("Pof Tools v{}", POF_TOOLS_VERSION))
-        .with_window_icon(Some(Icon::from_rgba(include_bytes!("icon.raw").to_vec(), 32, 32).unwrap()));
+        .with_window_icon(Some(winit::window::Icon::from_rgba(include_bytes!("icon.raw").to_vec(), 32, 32).unwrap()));
 
-    let context_builder = glutin::ContextBuilder::new()
-        .with_depth_buffer(0)
-        .with_srgb(true)
-        .with_stencil_buffer(0)
-        .with_vsync(true)
-        .with_depth_buffer(24);
-
-    glium::Display::new(window_builder, context_builder, event_loop).unwrap()
+    glium::backend::glutin::SimpleWindowBuilder::new()
+        .set_window_builder(window_builder)
+        .build(event_loop)
 }
 
 const ADDITIVE_BLEND: glium::draw_parameters::Blend = glium::draw_parameters::Blend {
@@ -108,7 +100,7 @@ impl GlLollipopsBuilder {
             .push(Vertex { position: (vertex + normal).to_tuple(), uv: (0.0, 0.0) });
     }
 
-    fn finish(&self, display: &Display) -> GlLollipops {
+    fn finish(&self, display: &Display<WindowSurface>) -> GlLollipops {
         GlLollipops {
             color: self.color,
             lolly_vertices: glium::VertexBuffer::new(display, &self.lolly_vertices).unwrap(),
@@ -118,7 +110,9 @@ impl GlLollipopsBuilder {
     }
 }
 
-fn build_lollipops(colors: &[[f32; 4]], display: &Display, iter: impl Iterator<Item = (Vec3d, Vec3d, f32, usize)>) -> Vec<GlLollipops> {
+fn build_lollipops(
+    colors: &[[f32; 4]], display: &Display<WindowSurface>, iter: impl Iterator<Item = (Vec3d, Vec3d, f32, usize)>,
+) -> Vec<GlLollipops> {
     let mut builders: Vec<_> = colors.iter().map(|c| GlLollipopsBuilder::new(*c)).collect();
     for (vertex, normal, radius, selection) in iter {
         builders[selection].push(vertex, normal, radius)
@@ -131,7 +125,7 @@ struct GlBufferedShield {
     indices: IndexBuffer<u32>,
 }
 impl GlBufferedShield {
-    fn new(display: &Display, shield_data: &ShieldData) -> GlBufferedShield {
+    fn new(display: &Display<WindowSurface>, shield_data: &ShieldData) -> GlBufferedShield {
         info!("Building buffer for the shield");
         let mut vertices = vec![];
         let mut normals = vec![];
@@ -174,7 +168,7 @@ struct GlBufferedInsignia {
     indices: IndexBuffer<u32>,
 }
 impl GlBufferedInsignia {
-    fn new(display: &Display, insignia: &Insignia) -> GlBufferedInsignia {
+    fn new(display: &Display<WindowSurface>, insignia: &Insignia) -> GlBufferedInsignia {
         info!("Building buffer for a LOD {} insignia ", insignia.detail_level);
         let mut vertices = vec![];
         let mut normals = vec![];
@@ -292,7 +286,7 @@ impl GlObjectsBuilder {
         }
     }
 
-    fn finish(self, display: &Display, object: &SubObject, texture_id: Option<TextureId>, out: &mut Vec<GlObjectBuffer>) {
+    fn finish(self, display: &Display<WindowSurface>, object: &SubObject, texture_id: Option<TextureId>, out: &mut Vec<GlObjectBuffer>) {
         if !self.indices.is_empty() {
             info!("Built buffer for subobj {}", object.name);
             out.push(GlObjectBuffer {
@@ -326,7 +320,7 @@ struct GlObjectBuffers {
 }
 
 impl GlObjectBuffers {
-    fn new(display: &Display, object: &SubObject, num_textures: usize) -> Self {
+    fn new(display: &Display<WindowSurface>, object: &SubObject, num_textures: usize) -> Self {
         let mut textures = Vec::from_iter(std::iter::repeat_with(GlObjectsBuilder::default).take(num_textures));
 
         let bsp_data = &object.bsp_data;
@@ -498,13 +492,13 @@ impl PofToolsGui {
     }
 
     /// handles talking to the model loading thread, ending it when concluded
-    fn handle_model_loading_thread(&mut self, display: &Display) -> bool {
+    fn handle_model_loading_thread(&mut self, window: &Window, display: &Display<WindowSurface>) -> bool {
         if let Some(thread) = &self.model_loading_thread {
             let response = thread.try_recv();
             match response {
                 Ok(Ok(Some(data))) => {
                     self.model = data;
-                    self.finish_loading_model(display);
+                    self.finish_loading_model(window, display);
 
                     self.model_loading_thread = None;
                     return true;
@@ -521,7 +515,7 @@ impl PofToolsGui {
     }
 
     // after the above thread has returned, stuffs the new model in
-    fn finish_loading_model(&mut self, display: &Display) {
+    fn finish_loading_model(&mut self, window: &Window, display: &Display<WindowSurface>) {
         self.buffer_objects.clear();
         self.buffer_shield = None;
         self.buffer_insignias.clear();
@@ -558,15 +552,12 @@ impl PofToolsGui {
         self.load_textures();
 
         let filename = self.model.path_to_file.file_name().unwrap_or_default().to_string_lossy();
-        display
-            .gl_window()
-            .window()
-            .set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, filename));
+        window.set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, filename));
 
         info!("Loaded {}", filename);
     }
 
-    fn handle_texture_loading_thread(&mut self, display: &Display) {
+    fn handle_texture_loading_thread(&mut self, display: &Display<WindowSurface>) {
         if let Some(thread) = &self.texture_loading_thread {
             let response = thread.try_recv();
             match response {
@@ -626,7 +617,7 @@ impl PofToolsGui {
         });
     }
 
-    pub fn rebuild_subobj_buffers(&mut self, display: &Display, ids: Vec<ObjectId>) {
+    pub fn rebuild_subobj_buffers(&mut self, display: &Display<WindowSurface>, ids: Vec<ObjectId>) {
         for buf in &mut self.buffer_objects {
             if ids.contains(&buf.obj_id) {
                 *buf = GlObjectBuffers::new(display, &self.model.sub_objects[buf.obj_id], self.model.textures.len());
@@ -634,18 +625,18 @@ impl PofToolsGui {
         }
     }
 
-    pub fn rebuild_all_subobj_buffers(&mut self, display: &Display) {
+    pub fn rebuild_all_subobj_buffers(&mut self, display: &Display<WindowSurface>) {
         let ids = (0..self.model.sub_objects.len()).map(|idx| ObjectId(idx as u32)).collect();
         self.rebuild_subobj_buffers(display, ids);
     }
 
-    pub fn rebuild_all_insignia_buffers(&mut self, display: &Display) {
+    pub fn rebuild_all_insignia_buffers(&mut self, display: &Display<WindowSurface>) {
         for (i, buffer) in self.buffer_insignias.iter_mut().enumerate() {
             *buffer = GlBufferedInsignia::new(display, &self.model.insignias[i]);
         }
     }
 
-    pub fn rebuild_shield_buffer(&mut self, display: &Display) {
+    pub fn rebuild_shield_buffer(&mut self, display: &Display<WindowSurface>) {
         if let Some(shield) = &self.model.shield_data {
             self.buffer_shield = Some(GlBufferedShield::new(display, shield));
         } else {
@@ -700,15 +691,15 @@ fn main() {
     }
     info!("Pof Tools {} - {}", POF_TOOLS_VERSION, chrono::Local::now());
 
-    let event_loop = glutin::event_loop::EventLoopBuilder::with_user_event().build();
-    let display = create_display(&event_loop);
+    let event_loop = eframe::EventLoopBuilder::with_user_event().build().unwrap();
+    let (window, display) = create_window_display(&event_loop);
 
     let mut args = std::env::args();
     args.next();
     let path = args.next().map(|arg| PathBuf::from(arg.as_str()));
 
-    let mut egui = egui_glium::EguiGlium::new(&display, &event_loop);
-    let mut pt_gui = PofToolsGui::new(&display, &egui.egui_ctx);
+    let mut egui = egui_glium::EguiGlium::new(ViewportId::ROOT, &display, &window, &event_loop);
+    let mut pt_gui = PofToolsGui::new(&display, egui.egui_ctx());
 
     pt_gui.start_loading_model(path);
 
@@ -724,11 +715,11 @@ fn main() {
     let mut errored = None;
     info!("Beginning event loop...");
 
-    event_loop.run(move |event, _, control_flow| {
+    let result = event_loop.run(move |event, target| {
         let mut catch_redraw = || {
             let redraw = || {
                 // handle whether the thread which handles loading has responded (if it exists)
-                if pt_gui.handle_model_loading_thread(&display) {
+                if pt_gui.handle_model_loading_thread(&window, &display) {
                     undo_history.clear();
                 }
 
@@ -736,18 +727,10 @@ fn main() {
 
                 pt_gui.handle_import_model_loading_thread();
 
-                let repaint_after = egui.run(&display, |ctx| pt_gui.show_ui(ctx, &display, &mut undo_history));
+                egui.run(&window, |ctx| pt_gui.show_ui(ctx, &window, &display, &mut undo_history));
 
-                *control_flow = match repaint_after {
-                    time if time.is_zero() => {
-                        display.gl_window().window().request_redraw();
-                        glutin::event_loop::ControlFlow::Poll
-                    }
-                    time => match std::time::Instant::now().checked_add(time) {
-                        Some(next_frame_time) => glutin::event_loop::ControlFlow::WaitUntil(next_frame_time),
-                        None => glutin::event_loop::ControlFlow::Wait,
-                    },
-                };
+                let next_frame_time = std::time::Instant::now().checked_add(Duration::from_millis(1000 / 60)).unwrap();
+                target.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_frame_time));
 
                 {
                     use glium::Surface as _;
@@ -756,11 +739,7 @@ fn main() {
                     target.clear_color_and_depth((0.0, 0.0, 0.0, 1.0), 1.0);
 
                     // undo/redo
-                    let input = egui.egui_ctx.input();
-                    let ctrl = input.modifiers.ctrl;
-                    let z = input.key_pressed(egui::Key::Z);
-                    drop(input);
-                    if egui.egui_ctx.memory().focus().is_none() && ctrl && z {
+                    if egui.egui_ctx().memory(|m| m.focus().is_none()) && egui.egui_ctx().input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Z)) {
                         undo_history.undo(&mut *pt_gui.model);
                         pt_gui.sanitize_ui_state();
                     }
@@ -804,31 +783,33 @@ fn main() {
                     let rot_only_view_mat = view_mat;
 
                     // handle user interactions like rotating the camera
-                    let rect = egui.egui_ctx.available_rect(); // the rectangle not covered by egui UI, i.e. the 3d viewport
-                    let input = egui.egui_ctx.input();
-                    let mouse_pos = input.pointer.hover_pos();
-                    let mouse_in_3d_viewport = mouse_pos.map_or(false, |hover_pos| rect.contains(hover_pos));
-                    if rect.is_positive() {
-                        let last_click_pos = input.pointer.press_origin();
-                        let clicked_in_3d_viewport = last_click_pos.map_or(false, |hover_pos| rect.contains(hover_pos));
-                        if clicked_in_3d_viewport {
-                            if !input.modifiers.shift && input.pointer.button_down(egui::PointerButton::Secondary) {
-                                pt_gui.camera_heading += input.pointer.delta().x * -0.01;
-                                pt_gui.camera_pitch += input.pointer.delta().y * -0.01;
-                            } else if input.pointer.button_down(egui::PointerButton::Middle)
-                                || input.modifiers.shift && input.pointer.button_down(egui::PointerButton::Secondary)
-                            {
-                                let x = input.pointer.delta().x * -0.003 * pt_gui.camera_scale; // for some reason x gets inverted
-                                let y = input.pointer.delta().y * 0.003 * pt_gui.camera_scale;
+                    let rect = egui.egui_ctx().available_rect(); // the rectangle not covered by egui UI, i.e. the 3d viewport
+                    let mut mouse_in_3d_viewport = false;
+                    egui.egui_ctx().input(|input| {
+                        let mouse_pos = input.pointer.hover_pos();
+                        mouse_in_3d_viewport = mouse_pos.map_or(false, |hover_pos| rect.contains(hover_pos));
+                        if rect.is_positive() {
+                            let last_click_pos = input.pointer.press_origin();
+                            let clicked_in_3d_viewport = last_click_pos.map_or(false, |hover_pos| rect.contains(hover_pos));
+                            if clicked_in_3d_viewport {
+                                if !input.modifiers.shift && input.pointer.button_down(egui::PointerButton::Secondary) {
+                                    pt_gui.camera_heading += input.pointer.delta().x * -0.01;
+                                    pt_gui.camera_pitch += input.pointer.delta().y * -0.01;
+                                } else if input.pointer.button_down(egui::PointerButton::Middle)
+                                    || input.modifiers.shift && input.pointer.button_down(egui::PointerButton::Secondary)
+                                {
+                                    let x = input.pointer.delta().x * -0.003 * pt_gui.camera_scale; // for some reason x gets inverted
+                                    let y = input.pointer.delta().y * 0.003 * pt_gui.camera_scale;
 
-                                pt_gui.camera_offset += view_mat.transpose().transform_vector(&glm::vec3(x, y, 0.)).into();
+                                    pt_gui.camera_offset += view_mat.transpose().transform_vector(&glm::vec3(x, y, 0.)).into();
+                                }
+                            }
+                            if mouse_in_3d_viewport && !pt_gui.import_window.open {
+                                pt_gui.camera_scale *= 1.0 + (input.raw_scroll_delta.y * -0.001)
                             }
                         }
-                        if mouse_in_3d_viewport && !pt_gui.import_window.open {
-                            pt_gui.camera_scale *= 1.0 + (input.scroll_delta.y * -0.001)
-                        }
-                    }
-                    drop(input);
+                    });
+                    let model = &pt_gui.model;
 
                     if !pt_gui.camera_orthographic {
                         view_mat.append_translation_mut(&glm::vec3(0.0, 0.0, pt_gui.camera_scale));
@@ -837,10 +818,11 @@ fn main() {
                     view_mat.prepend_translation_mut(&glm::vec3(-pt_gui.camera_offset.x, -pt_gui.camera_offset.y, -pt_gui.camera_offset.z));
                     view_mat.prepend_translation_mut(&glm::vec3(-model.visual_center.x, -model.visual_center.y, -model.visual_center.z));
 
-                    let mouse_pos =
-                        egui.egui_ctx.input().pointer.hover_pos().map(|pos| {
+                    let mouse_pos = egui.egui_ctx().input(|i| {
+                        i.pointer.hover_pos().map(|pos| {
                             ((pos.x / target.get_dimensions().0 as f32) * 2.0 - 1.0, (pos.y / target.get_dimensions().1 as f32) * 2.0 - 1.0)
-                        });
+                        })
+                    });
                     let mouse_vec = {
                         mouse_pos.map(|pos| {
                             let matrix = (perspective_matrix * view_mat).try_inverse().unwrap();
@@ -858,50 +840,51 @@ fn main() {
 
                     // start the drag/selection if the user clicked on a lollipop
                     if let Some((vec1, vec2)) = mouse_vec {
-                        if egui.egui_ctx.input().pointer.button_clicked(PointerButton::Primary) {
-                            if let Some(lollipop) = pt_gui.hover_lollipop {
-                                pt_gui.drag_lollipop = Some(lollipop);
-                                let vec = (vec1 - vec2).normalize();
-                                pt_gui.drag_axis = {
-                                    let modifiers = egui.egui_ctx.input().modifiers;
-                                    match (modifiers.shift, modifiers.ctrl, modifiers.alt) {
-                                        (true, _, _) => DragAxis::YZ,
-                                        (_, true, _) => DragAxis::XZ,
-                                        (_, _, true) => DragAxis::XY,
-                                        _ => match (vec.x, vec.y, vec.z) {
-                                            _ if vec.x.abs() > vec.y.abs() && vec.x.abs() > vec.z.abs() => DragAxis::YZ,
-                                            _ if vec.y.abs() > vec.x.abs() && vec.y.abs() > vec.z.abs() => DragAxis::XZ,
-                                            _ if vec.z.abs() > vec.x.abs() && vec.z.abs() > vec.y.abs() => DragAxis::XY,
-                                            _ => DragAxis::YZ,
-                                        },
+                        egui.egui_ctx().input(|input| {
+                            if input.pointer.button_clicked(PointerButton::Primary) {
+                                if let Some(lollipop) = pt_gui.hover_lollipop {
+                                    pt_gui.drag_lollipop = Some(lollipop);
+                                    let vec = (vec1 - vec2).normalize();
+                                    pt_gui.drag_axis = {
+                                        let modifiers = input.modifiers;
+                                        match (modifiers.shift, modifiers.ctrl, modifiers.alt) {
+                                            (true, _, _) => DragAxis::YZ,
+                                            (_, true, _) => DragAxis::XZ,
+                                            (_, _, true) => DragAxis::XY,
+                                            _ => match (vec.x, vec.y, vec.z) {
+                                                _ if vec.x.abs() > vec.y.abs() && vec.x.abs() > vec.z.abs() => DragAxis::YZ,
+                                                _ if vec.y.abs() > vec.x.abs() && vec.y.abs() > vec.z.abs() => DragAxis::XZ,
+                                                _ if vec.z.abs() > vec.x.abs() && vec.z.abs() > vec.y.abs() => DragAxis::XY,
+                                                _ => DragAxis::YZ,
+                                            },
+                                        }
+                                    };
+                                    pt_gui.drag_start = *lollipop.get_position_ref(&mut pt_gui.model).unwrap();
+                                    if let TreeValue::Turrets(TurretTreeValue::TurretPoint(i, _)) = lollipop {
+                                        pt_gui.drag_start += pt_gui.model.get_total_subobj_offset(pt_gui.model.turrets[i].gun_obj);
                                     }
-                                };
-                                pt_gui.drag_start = *lollipop.get_position_ref(&mut pt_gui.model).unwrap();
-                                if let TreeValue::Turrets(TurretTreeValue::TurretPoint(i, _)) = lollipop {
-                                    pt_gui.drag_start += pt_gui.model.get_total_subobj_offset(pt_gui.model.turrets[i].gun_obj);
-                                }
 
-                                pt_gui.select_new_tree_val(lollipop);
-                                pt_gui.ui_state.properties_panel_dirty = true;
+                                    pt_gui.select_new_tree_val(lollipop);
+                                    pt_gui.ui_state.properties_panel_dirty = true;
+                                }
                             }
-                        }
+                        });
                     }
 
                     // continue the drag if the user is still dragging the lollipop
                     if let Some(drag_lollipop) = pt_gui.drag_lollipop {
+                        let press_origin = egui.egui_ctx().input(|input| input.pointer.press_origin());
+                        let hover_pos = egui.egui_ctx().input(|input| input.pointer.hover_pos());
+                        let availble_rect = egui.egui_ctx().available_rect();
+
                         // only drag if they've sufficiently moved the mouse
                         if !pt_gui.actually_dragging
-                            && egui.egui_ctx.input().pointer.press_origin().map_or(false, |origin| {
-                                egui.egui_ctx
-                                    .input()
-                                    .pointer
-                                    .hover_pos()
-                                    .map_or(false, |current_pos| current_pos.distance(origin) > 4.)
-                            })
+                            && press_origin.map_or(false, |origin| hover_pos.map_or(false, |current_pos| current_pos.distance(origin) > 4.))
                         {
                             pt_gui.actually_dragging = true;
                         }
 
+                        let primary_down = egui.egui_ctx().input(|input| input.pointer.primary_down());
                         if pt_gui.actually_dragging {
                             // take into account turret offset
                             let mut maybe_turret_offset = Vec3d::ZERO;
@@ -909,9 +892,9 @@ fn main() {
                                 maybe_turret_offset = pt_gui.model.get_total_subobj_offset(pt_gui.model.turrets[i].gun_obj);
                             }
 
+                            let modifiers = egui.egui_ctx().input(|input| input.modifiers);
                             if let Some(vec) = drag_lollipop.get_position_ref(&mut pt_gui.model) {
                                 // if the user pressed a hotkey, reset drag_start and use a new axis
-                                let modifiers = egui.egui_ctx.input().modifiers;
                                 pt_gui.drag_axis = match (modifiers.shift, modifiers.ctrl, modifiers.alt) {
                                     (true, _, _) if pt_gui.drag_axis != DragAxis::YZ => {
                                         pt_gui.drag_start = *vec + maybe_turret_offset;
@@ -935,13 +918,9 @@ fn main() {
                                         DragAxis::XZ => ((*vec + maybe_turret_offset).y - mouse_vec.0.y) / (mouse_vec.1.y - mouse_vec.0.y),
                                         DragAxis::XY => ((*vec + maybe_turret_offset).z - mouse_vec.0.z) / (mouse_vec.1.z - mouse_vec.0.z),
                                     };
-                                    let hover_pos = egui.egui_ctx.input().pointer.hover_pos();
-                                    let in_3d_viewport = hover_pos.map_or(false, |hover_pos| egui.egui_ctx.available_rect().contains(hover_pos));
-                                    if mouse_pos.is_none()
-                                        || !(-1.0..=1.0).contains(&t)
-                                        || !egui.egui_ctx.input().pointer.primary_down()
-                                        || !in_3d_viewport
-                                    {
+                                    let in_3d_viewport = hover_pos.map_or(false, |hover_pos| availble_rect.contains(hover_pos));
+
+                                    if mouse_pos.is_none() || !(-1.0..=1.0).contains(&t) || !primary_down || !in_3d_viewport {
                                         pt_gui.drag_lollipop = None;
                                         pt_gui.actually_dragging = false;
                                         None
@@ -963,7 +942,7 @@ fn main() {
                         }
 
                         // for when the user releases without dragging
-                        if !egui.egui_ctx.input().pointer.primary_down() {
+                        if !primary_down {
                             pt_gui.drag_lollipop = None;
                             pt_gui.actually_dragging = false;
                         }
@@ -1567,13 +1546,13 @@ fn main() {
 
             // if there was an error, do this mini event loop and display the error message
             if let Some((error_string, backtrace)) = &errored {
-                let repaint_after = egui.run(&display, |ctx| {
+                egui.run(&window, |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.heading(RichText::new("Error! Please report this!").color(Color32::RED));
                                 if ui.button("Copy").clicked() {
-                                    ui.output().copied_text = format!("{}\n\n{:?}", error_string, backtrace);
+                                    ui.output_mut(|o| o.copied_text = format!("{}\n\n{:?}", error_string, backtrace));
                                 }
                             });
                             ui.add_sized(ui.available_size(), TextEdit::multiline(&mut &*format!("{}\n\n{:?}", error_string, backtrace)));
@@ -1582,16 +1561,9 @@ fn main() {
                 });
 
                 // Needs testing
-                *control_flow = match repaint_after {
-                    time if time.is_zero() => {
-                        display.gl_window().window().request_redraw();
-                        glutin::event_loop::ControlFlow::Poll
-                    }
-                    time => match std::time::Instant::now().checked_add(time) {
-                        Some(next_frame_time) => glutin::event_loop::ControlFlow::WaitUntil(next_frame_time),
-                        None => glutin::event_loop::ControlFlow::Wait,
-                    },
-                };
+                let next_frame_time = std::time::Instant::now().checked_add(Duration::from_millis(1000 / 60)).unwrap();
+                target.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_frame_time));
+
                 let mut target = display.draw();
                 use glium::Surface as _;
                 target.clear_color_and_depth((0.0, 0.0, 0.0, 1.0), 1.0);
@@ -1602,38 +1574,19 @@ fn main() {
             }
         };
 
-        match event {
-            // Platform-dependent event handlers to workaround a winit bug
-            // See: https://github.com/rust-windowing/winit/issues/987
-            // See: https://github.com/rust-windowing/winit/issues/1619
-            glutin::event::Event::RedrawEventsCleared if cfg!(windows) => catch_redraw(),
-            glutin::event::Event::RedrawRequested(_) if !cfg!(windows) => catch_redraw(),
-            glutin::event::Event::DeviceEvent { .. } => {
-                // match event {
-                //     glutin::event::DeviceEvent::Added => todo!(),
-                //     glutin::event::DeviceEvent::Removed => todo!(),
-                //     glutin::event::DeviceEvent::MouseMotion { delta } => todo!(),
-                //     glutin::event::DeviceEvent::MouseWheel { delta } => todo!(),
-                //     glutin::event::DeviceEvent::Motion { axis, value } => todo!(),
-                //     glutin::event::DeviceEvent::Button { button, state } => todo!(),
-                //     glutin::event::DeviceEvent::Key(_) => todo!(),
-                //     glutin::event::DeviceEvent::Text { codepoint } => todo!(),
-                // }
+        if let winit::event::Event::WindowEvent { event, .. } = event {
+            match event {
+                winit::event::WindowEvent::RedrawRequested => catch_redraw(),
+                winit::event::WindowEvent::CloseRequested => target.exit(),
+                _ => {}
             }
 
-            glutin::event::Event::WindowEvent { event, .. } => {
-                if let WindowEvent::CloseRequested = event {
-                    *control_flow = glium::glutin::event_loop::ControlFlow::Exit;
-                }
-
-                egui.on_event(&event);
-
-                display.gl_window().window().request_redraw(); // TODO: ask egui if the events warrants a repaint instead
+            if egui.on_event(&window, &event).repaint {
+                window.request_redraw(); // TODO: ask egui if the events warrants a repaint instead
             }
-
-            _ => (),
-        };
+        }
     });
+    result.unwrap();
 }
 
 // based on the current selection which submodels should be displayed
@@ -1782,7 +1735,7 @@ impl PofToolsGui {
         result
     }
 
-    fn maybe_recalculate_3d_helpers(&mut self, display: &Display) {
+    fn maybe_recalculate_3d_helpers(&mut self, display: &Display<WindowSurface>) {
         if self.buffer_objects.is_empty() {
             return;
         }
@@ -1891,7 +1844,7 @@ impl PofToolsGui {
                     model.thruster_banks.iter().enumerate().flat_map(|(bank_idx, thruster_bank)| {
                         thruster_bank.glows.iter().enumerate().map(move |(point_idx, thruster_point)| {
                             let position = thruster_point.position;
-                            let normal = thruster_point.normal * thruster_point.radius * 2.0;
+                            let normal = thruster_point.normal.0 * thruster_point.radius * 2.0;
                             let mut radius = thruster_point.radius;
                             if hover_lollipop == Some(TreeValue::Thrusters(ThrusterTreeValue::BankPoint(bank_idx, point_idx))) {
                                 radius = radius * 1.1 + 0.4
@@ -2311,8 +2264,8 @@ struct Graphics {
     fov_shader: glium::Program,
 }
 impl Graphics {
-    fn init(display: &Display) -> Self {
-        fn load_img(display: &Display, bytes: &[u8]) -> SrgbTexture2d {
+    fn init(display: &Display<WindowSurface>) -> Self {
+        fn load_img(display: &Display<WindowSurface>, bytes: &[u8]) -> SrgbTexture2d {
             let image = image::load(Cursor::new(bytes), image::ImageFormat::Png).unwrap().to_rgba8();
             let image_dimensions = image.dimensions();
             let image_raw = image.into_raw();

@@ -385,7 +385,7 @@ impl UiState {
                                         .contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(glow_bank.obj_parent)))
                                     {
                                         let was_already_on_detail0 =
-                                            import_model.as_ref().unwrap().header.detail_levels.get(0) == Some(&glow_bank.obj_parent);
+                                            import_model.as_ref().unwrap().header.detail_levels.first() == Some(&glow_bank.obj_parent);
                                         if !was_already_on_detail0 {
                                             warnings.push(
                                                 RichText::new(format!(
@@ -1232,8 +1232,8 @@ impl PofToolsGui {
                             .model
                             .header
                             .detail_levels
-                            .get(0)
-                            .or_else(|| self.model.sub_objects.get(0).map(|sobj| &sobj.obj_id))
+                            .first()
+                            .or_else(|| self.model.sub_objects.first().map(|sobj| &sobj.obj_id))
                         {
                             g_bank.obj_parent = *id;
                         } else {

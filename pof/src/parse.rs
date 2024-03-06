@@ -344,7 +344,7 @@ impl<R: Read + Seek> Parser<R> {
                             glows: this.read_list_n(num_glows as usize, |this| {
                                 Ok(ThrusterGlow {
                                     position: this.read_vec3d()?,
-                                    normal: this.read_vec3d()?,
+                                    normal: this.read_vec3d()?.try_into().unwrap_or_default(),
                                     // TODO document this at https://wiki.hard-light.net/index.php/POF_data_structure
                                     radius: if this.version > Version::V20_04 { this.read_f32()? } else { 1.0 },
                                 })
@@ -1180,7 +1180,7 @@ trait ParseCtx<'a> {
 
                             let (pos, norm, rad) = node.parse_point(&transform, up);
                             new_point.position = pos;
-                            new_point.normal = norm;
+                            new_point.normal = norm.try_into().unwrap_or_default();
                             new_point.radius = rad;
 
                             new_bank.glows.push(new_point);

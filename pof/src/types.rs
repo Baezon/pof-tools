@@ -1501,6 +1501,24 @@ impl SubObject {
     pub fn is_subsystem(&self) -> bool {
         properties_get_field(&self.properties, "$special") == Some("subsystem")
     }
+
+    /// returns the surface area of the subobject, and the average surface area position
+    pub fn surface_area_average_pos(&self) -> (f32, Vec3d) {
+        let mut surface_area = 0.0;
+        let mut weighted_sum = Vec3d::ZERO;
+        for (_, poly) in self.bsp_data.collision_tree.leaves() {
+            let v1 = self.bsp_data.verts[poly.verts[0].vertex_id.0 as usize];
+            let v2 = self.bsp_data.verts[poly.verts[1].vertex_id.0 as usize];
+            let v3 = self.bsp_data.verts[poly.verts[2].vertex_id.0 as usize];
+
+            let v12 = v2 - v1;
+            let v13 = v3 - v1;
+            let this_area = v12.cross(&v13).magnitude();
+            weighted_sum += Vec3d::average([v1, v2, v3].into_iter()) * this_area;
+            surface_area += this_area;
+        }
+        (surface_area, weighted_sum / surface_area)
+    }
 }
 
 fn parse_uvec_fvec(props: &str) -> Option<(Vec3d, Vec3d)> {
@@ -2537,6 +2555,25 @@ impl Model {
             new_moi = new_moi.try_inverse().unwrap();
             self.header.moment_of_inertia = new_moi.cast::<f32>().into();
         }
+    }
+
+    /// returns the surface area of detail0 and its children, and the average surface area position
+    pub fn surface_area_average_pos(&self) -> (f32, Vec3d) {
+        let mut surface_area = 0.0;
+        let mut weighted_avg = Vec3d::ZERO;
+        let detail0 = if let Some(id) = self.header.detail_levels.first() {
+            id
+        } else {
+            return (0.0, Vec3d::ZERO);
+        };
+
+        self.do_for_recursive_subobj_children(*detail0, &mut |subobj| {
+            let (this_area, this_avg) = subobj.surface_area_average_pos();
+            weighted_avg += this_avg * this_area;
+            surface_area += this_area;
+        });
+
+        (surface_area, weighted_avg / surface_area)
     }
 
     pub fn recalc_all_children_ids(&mut self) {

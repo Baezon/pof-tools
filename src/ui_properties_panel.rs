@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::str::FromStr;
 
+use egui::Align2;
 use egui::{style::Widgets, text::LayoutJob, CollapsingHeader, Color32, DragValue, Label, Response, RichText, TextEdit, TextFormat, TextStyle, Ui};
 use glium::glutin::surface::WindowSurface;
 use glium::Display;
@@ -104,11 +105,28 @@ impl<T: Clone> IndexingButtonsResponse<T> {
     }
 }
 
-// fn text_edit_single_numeric(ui: &mut Ui, id: impl Hash, string: &mut String) -> Response {
-//     let response = text_edit_single(ui, id, string);
-//     string.retain(|c| c.is_ascii_digit() || c == '.' || c == ',' || c.is_whitespace());
-//     response
-// }
+pub fn visibility_button(ui: &mut Ui, toggled: bool) -> Response {
+    let res = ui.selectable_label(toggled, RichText::new("    ").text_style(TextStyle::Button));
+
+    let painter = ui.painter_at(res.rect);
+    let mut pos = res.rect.center();
+    pos.x += 0.25;
+    painter.text(
+        pos,
+        Align2::CENTER_CENTER,
+        "👁",
+        egui::TextStyle::Heading.resolve(ui.style()),
+        if res.hovered() || toggled {
+            ui.visuals().strong_text_color()
+        } else {
+            ui.visuals().text_color()
+        },
+    );
+
+    ui.add_space(-3.0);
+
+    res
+}
 
 fn text_edit_single(ui: &mut Ui, id: impl Hash, string: &mut String) -> Response {
     let id = egui::Id::new(id);
@@ -906,15 +924,11 @@ impl PofToolsGui {
                 let mut bbox_changed = false;
                 let mut display_bbox = false;
                 ui.horizontal(|ui| {
-                    ui.label("Bounding Box:");
-                    let response = ui.button("Recalculate");
-
-                    if response.clicked() {
-                        self.model.recalc_bbox();
-                        self.ui_state.properties_panel_dirty = true;
-                        bbox_changed = true;
+                    if visibility_button(ui, self.always_show_bbox).clicked() {
+                        self.always_show_bbox = !self.always_show_bbox;
                     }
-                    display_bbox = response.hovered() || response.has_focus() || display_bbox;
+
+                    ui.label("Bounding Box:");
                 });
 
                 ui.horizontal(|ui| {
@@ -931,7 +945,7 @@ impl PofToolsGui {
                     if response.changed() {
                         bbox_changed = true;
                     }
-                    display_bbox = response.hovered() || response.has_focus() || display_bbox;
+                    display_bbox |= response.hovered() || response.has_focus();
                 });
 
                 ui.horizontal(|ui| {
@@ -948,8 +962,18 @@ impl PofToolsGui {
                     if response.changed() {
                         bbox_changed = true;
                     }
-                    self.ui_state.display_bbox = response.hovered() || response.has_focus() || display_bbox;
+                    display_bbox |= response.hovered() || response.has_focus();
                 });
+
+                let response = ui.button("Recalculate");
+                if response.clicked() {
+                    self.model.recalc_bbox();
+                    self.ui_state.properties_panel_dirty = true;
+                    bbox_changed = true;
+                }
+                display_bbox |= response.hovered() || response.has_focus();
+
+                self.ui_state.display_bbox = self.always_show_bbox || display_bbox;
 
                 let bbox = &self.model.header.bbox;
                 ui.horizontal_wrapped(|ui| {
@@ -963,15 +987,11 @@ impl PofToolsGui {
                 let mut radius_changed = false;
                 let mut display_radius = false;
                 ui.horizontal(|ui| {
-                    ui.add(egui::Label::new("Radius:"));
-                    let response = ui.button("Recalculate");
-
-                    if response.clicked() {
-                        self.model.recalc_radius();
-                        radius_changed = true;
-                        self.ui_state.properties_panel_dirty = true;
+                    if visibility_button(ui, self.always_show_radius).clicked() {
+                        self.always_show_radius = !self.always_show_radius;
                     }
-                    display_radius = response.hovered() || response.has_focus() || display_radius;
+
+                    ui.label("Radius:");
                 });
 
                 let response = UiState::model_value_edit(
@@ -982,11 +1002,22 @@ impl PofToolsGui {
                     Some(&mut self.model.header.max_radius),
                     radius_string,
                 );
-
                 if response.changed() {
                     radius_changed = true;
                 }
-                self.ui_state.display_radius = response.hovered() || response.has_focus() || display_radius;
+                display_radius |= response.hovered() || response.has_focus();
+
+                let response = ui.button("Recalculate");
+                if response.clicked() {
+                    self.model.recalc_radius();
+                    radius_changed = true;
+                    self.ui_state.properties_panel_dirty = true;
+                }
+                display_radius |= response.hovered() || response.has_focus();
+
+                self.ui_state.display_radius = self.always_show_radius || display_radius;
+
+                ui.separator();
 
                 ui.horizontal(|ui| {
                     ui.add(egui::Label::new("Mass:"));
@@ -1256,22 +1287,18 @@ impl PofToolsGui {
                     UiState::reset_widget_color(ui);
                 });
 
-                ui.add_space(5.0);
+                ui.separator();
 
                 // Bounding Box edit ================================================================
 
                 let mut bbox_changed = false;
                 let mut display_bbox = false;
                 ui.horizontal(|ui| {
-                    ui.label("Bounding Box:");
-                    let response = ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate"));
-
-                    if response.clicked() {
-                        self.model.sub_objects[selected_id.unwrap()].recalc_bbox();
-                        self.ui_state.properties_panel_dirty = true;
-                        bbox_changed = true;
+                    if visibility_button(ui, self.always_show_bbox).clicked() {
+                        self.always_show_bbox = !self.always_show_bbox;
                     }
-                    display_bbox = response.hovered() || response.has_focus() || display_bbox;
+
+                    ui.label("Bounding Box:");
                 });
 
                 ui.horizontal(|ui| {
@@ -1288,7 +1315,7 @@ impl PofToolsGui {
                     if response.changed() {
                         bbox_changed = true;
                     }
-                    display_bbox = response.hovered() || response.has_focus() || display_bbox;
+                    display_bbox |= response.hovered() || response.has_focus();
                 });
 
                 ui.horizontal(|ui| {
@@ -1308,7 +1335,15 @@ impl PofToolsGui {
                     display_bbox = response.hovered() || response.has_focus() || display_bbox;
                 });
 
-                self.ui_state.display_bbox = display_bbox;
+                let response = ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate"));
+                if response.clicked() {
+                    self.model.sub_objects[selected_id.unwrap()].recalc_bbox();
+                    self.ui_state.properties_panel_dirty = true;
+                    bbox_changed = true;
+                }
+                display_bbox |= response.hovered() || response.has_focus();
+
+                self.ui_state.display_bbox = self.always_show_bbox || display_bbox;
 
                 if bbox_changed {
                     self.model.recheck_warnings(One(Warning::BBoxTooSmall(selected_id)));
@@ -1328,7 +1363,12 @@ impl PofToolsGui {
 
                 // Offset edit ================================================================
 
+                let mut display_origin = false;
                 ui.horizontal_wrapped(|ui| {
+                    if visibility_button(ui, self.always_show_offset).clicked() {
+                        self.always_show_offset = !self.always_show_offset;
+                    }
+
                     if self.model.header.detail_levels.first().map_or(false, |id| selected_id == Some(*id))
                         && self.model.warnings.contains(&Warning::Detail0NonZeroOffset)
                     {
@@ -1336,18 +1376,6 @@ impl PofToolsGui {
                     }
                     ui.label("Offset:");
                     ui.visuals_mut().override_text_color = None;
-
-                    let response = ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate"));
-
-                    if response.clicked() {
-                        self.model.recalc_subobj_offset(selected_id.unwrap());
-                        self.model.recheck_warnings(One(Warning::RadiusTooSmall(selected_id)));
-
-                        self.ui_state.viewport_3d_dirty = true;
-                        buffer_ids_to_rebuild.push(selected_id.unwrap());
-                        self.ui_state.properties_panel_dirty = true;
-                    }
-                    self.ui_state.display_origin |= response.hovered() || response.has_focus();
                 });
 
                 if let Some(id) = selected_id {
@@ -1368,36 +1396,44 @@ impl PofToolsGui {
                             self.model.recheck_warnings(One(Warning::Detail0NonZeroOffset));
                         }
                     }
-                    self.ui_state.display_origin |= response.hovered() || response.has_focus();
+                    display_origin |= response.hovered() || response.has_focus();
                     ui.visuals_mut().override_text_color = None;
                 } else {
                     ui.add_enabled(false, TextEdit::singleline(offset_string));
                 }
+
+                let response = ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate"));
+                if response.clicked() {
+                    self.model.recalc_subobj_offset(selected_id.unwrap());
+                    self.model.recheck_warnings(One(Warning::RadiusTooSmall(selected_id)));
+
+                    self.ui_state.viewport_3d_dirty = true;
+                    buffer_ids_to_rebuild.push(selected_id.unwrap());
+                    self.ui_state.properties_panel_dirty = true;
+                }
+                display_origin |= response.hovered() || response.has_focus();
 
                 let response = ui
                     .add_enabled(selected_id.is_some(), egui::Checkbox::new(&mut self.ui_state.move_only_offset, "Modify Offset Only"))
                     .on_hover_text(
                         "Changes will affect only the offset/center of this subobject, all other geometry remains in place.\nThe radius will be recalculated.",
                     );
+                display_origin |= response.hovered() || response.has_focus();
 
-                self.ui_state.display_origin |= response.hovered() || response.has_focus();
+                self.ui_state.display_origin = display_origin || self.always_show_offset;
 
-                ui.add_space(5.0);
+                ui.separator();
 
                 // Radius edit ================================================================
 
                 let mut radius_changed = false;
                 let mut display_radius = false;
                 ui.horizontal(|ui| {
-                    ui.label("Radius:");
-                    let response = ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate"));
-
-                    if response.clicked() {
-                        self.model.sub_objects[selected_id.unwrap()].recalc_radius();
-                        self.ui_state.properties_panel_dirty = true;
-                        radius_changed = true;
+                    if visibility_button(ui, self.always_show_radius).clicked() {
+                        self.always_show_radius = !self.always_show_radius;
                     }
-                    display_radius = response.hovered() || response.has_focus() || display_radius;
+
+                    ui.label("Radius:");
                 });
 
                 let response = UiState::model_value_edit(
@@ -1408,11 +1444,20 @@ impl PofToolsGui {
                     selected_id.map(|id| &mut self.model.sub_objects[id].radius),
                     radius_string,
                 );
-
                 if response.changed() {
                     radius_changed = true;
                 }
-                self.ui_state.display_radius = response.hovered() || response.has_focus() || display_radius;
+                display_radius |= response.hovered() || response.has_focus();
+
+                let response = ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate"));
+                if response.clicked() {
+                    self.model.sub_objects[selected_id.unwrap()].recalc_radius();
+                    self.ui_state.properties_panel_dirty = true;
+                    radius_changed = true;
+                }
+                display_radius |= response.hovered() || response.has_focus();
+
+                self.ui_state.display_radius = self.always_show_radius || display_radius;
 
                 if radius_changed {
                     self.model.recheck_warnings(One(Warning::RadiusTooSmall(selected_id)));

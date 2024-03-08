@@ -526,7 +526,12 @@ pub(crate) struct PofToolsGui {
     pub ui_state: UiState,
     pub display_mode: DisplayMode,
     pub glow_point_simulation: bool,
+    pub always_show_bbox: bool,
+    pub always_show_radius: bool,
+    pub always_show_offset: bool,
+
     pub dock_demo_img: egui::TextureHandle,
+
     pub camera_pitch: f32,
     pub camera_heading: f32,
     pub camera_scale: f32,
@@ -573,6 +578,9 @@ impl PofToolsGui {
             glow_point_sim_start: std::time::Instant::now(),
             ui_state: Default::default(),
             display_mode: DisplayMode::Textured,
+            always_show_bbox: false,
+            always_show_offset: false,
+            always_show_radius: false,
             glow_point_simulation: Default::default(),
             dock_demo_img: {
                 ctx.load_texture(

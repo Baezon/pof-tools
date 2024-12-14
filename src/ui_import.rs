@@ -700,6 +700,21 @@ impl UiState {
                         if object.children().next().is_none() {
                             if selectable_label(ui, selection_status, &object.name).clicked() {
                                 toggle(selection, tree_val);
+
+                                if options.auto_select_turrets {
+                                    for (i, turret) in import_model.turrets.iter().enumerate() {
+                                        if turret.base_obj == object.obj_id {
+                                            set(selection, selection.contains(&tree_val), TreeValue::Turrets(TurretTreeValue::Turret(i)));
+                                        }
+                                    }
+                                }
+                                if options.auto_select_paths {
+                                    for (i, path) in import_model.paths.iter().enumerate() {
+                                        if path.parent.to_lowercase() == object.name.to_lowercase() {
+                                            set(selection, selection.contains(&tree_val), TreeValue::Paths(PathTreeValue::Path(i)));
+                                        }
+                                    }
+                                }
                             }
                         } else {
                             let state = CollapsingState::load_with_default_open(ui.ctx(), Id::new(format!("import {}", tree_val)), false);
@@ -707,11 +722,7 @@ impl UiState {
                             state
                                 .show_header(ui, |ui| {
                                     if selectable_label(ui, selection_status, &object.name).clicked() {
-                                        if selection.contains(&tree_val) {
-                                            selection.remove(&tree_val);
-                                        } else {
-                                            selection.insert(tree_val);
-                                        }
+                                        toggle(selection, tree_val);
 
                                         if options.auto_select_subobj_children {
                                             // a bit confusing, but do_for_recursive_subobj_children will also run on the subobject you call it on

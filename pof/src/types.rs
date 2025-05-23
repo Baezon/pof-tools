@@ -2482,6 +2482,15 @@ impl Model {
                 }
             }
         }
+        // Also include shield mesh in radius calculation, but only if a shield exists
+        if let Some(shield) = &self.shield_data {
+            for vert in &shield.verts {
+                let mag = vert.magnitude();
+                if mag > self.header.max_radius {
+                    self.header.max_radius = mag;
+                }
+            }
+        }
     }
 
     pub fn recalc_bbox(&mut self) {

@@ -18,7 +18,7 @@ native-dialog = "0.6.3"
 crossbeam = "0.8.1"
 image = "0.24.1"
 # for logging
-simplelog = { version = "0.12.1", default-features = false }
+simplelog = { version = "0.12.2", default-features = false }
 log = "0.4.14"
 # for panic handling
 backtrace = "0.3.64"

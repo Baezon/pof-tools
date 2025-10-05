@@ -968,8 +968,8 @@ fn push_subobj(
         ..Default::default()
     };
 
-    new_subobj.recalc_bbox();
-    new_subobj.recalc_radius();
+    new_subobj.bbox = new_subobj.recalc_bbox();
+    new_subobj.radius = new_subobj.recalc_radius();
 
     sub_objects.push(new_subobj);
     obj_id
@@ -1387,8 +1387,8 @@ trait ParseCtx<'a> {
 
         model.untextured_idx = post_parse_fill_untextured_slot(&mut model.sub_objects, &mut model.textures);
 
-        model.recalc_radius();
-        model.recalc_bbox();
+        model.header.max_radius = model.recalc_radius();
+        model.header.bbox = model.recalc_bbox();
         model.recalc_mass();
         model.recalc_moi();
     }

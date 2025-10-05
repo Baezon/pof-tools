@@ -19,11 +19,11 @@ use crate::{
 use eframe::egui::PointerButton;
 use egui::{Color32, RichText, TextEdit, ViewportId};
 use glium::{glutin::surface::WindowSurface, texture::SrgbTexture2d, BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer};
-use glm::Mat4x4;
+use glm::{Mat4x4, TMat4};
 use native_dialog::FileDialog;
 use pof::{
-    properties_get_field, BspData, Insignia, NameLink, NormalId, NormalVec3, ObjVec, ObjectId, Parser, PolyVertex, Polygon, ShieldData, SubObject,
-    TextureId, Vec3d, VertexId,
+    properties_get_field, BspData, Insignia, NameLink, NormalId, NormalVec3, ObjVec, ObjectId, Parser, PolyVertex, Polygon, Set, ShieldData,
+    SubObject, TextureId, Vec3d, VertexId,
 };
 use simplelog::*;
 use std::{
@@ -359,11 +359,14 @@ pub struct Normal {
 
 glium::implement_vertex!(Normal, normal);
 
+// pof tools uses an indirection here, including extra data that is not necessarily part of the canonical pof model itself
+// but is useful to associate along with it, particularly for the undo system
 pub struct Model {
     pof_model: pof::Model,
     /// Annoying, but 'merge' textures is best handled as simply filling this map and deferring the actual task
     /// of merging textures until write
     texture_map: HashMap<TextureId, TextureId>,
+    subobject_transform_matrix: ObjVec<TMat4<f32>>,
 }
 impl Deref for Model {
     type Target = pof::Model;
@@ -384,6 +387,11 @@ impl Model {
             for (_, poly) in subobj.bsp_data.collision_tree.leaves_mut() {
                 poly.texture = self.texture_map[&poly.texture];
             }
+        }
+
+        for id in 0..self.pof_model.sub_objects.len() {
+            let id = ObjectId(id as u32);
+            self.pof_model.apply_subobj_transform_mesh(id, &self.subobject_transform_matrix[id]);
         }
 
         self.pof_model.clean_up();
@@ -457,6 +465,7 @@ impl PofToolsGui {
                         _ => todo!(),
                     },
                     texture_map: HashMap::new(),
+                    subobject_transform_matrix: ObjVec::default(),
                 })
             })
         });
@@ -533,6 +542,9 @@ impl PofToolsGui {
             self.buffer_shield = Some(GlBufferedShield::new(display, shield));
         }
 
+        for _ in 0..self.model.sub_objects.len() {
+            self.model.subobject_transform_matrix.push(glm::identity());
+        }
         self.model.recheck_warnings(pof::Set::All);
         self.model.recheck_errors(pof::Set::All);
         for i in 0..self.model.textures.len() {
@@ -739,9 +751,15 @@ fn main() {
                     target.clear_color_and_depth((0.0, 0.0, 0.0, 1.0), 1.0);
 
                     // undo/redo
-                    if egui.egui_ctx().memory(|m| m.focus().is_none()) && egui.egui_ctx().input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Z)) {
+                    if egui.egui_ctx().input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Z)) {
                         undo_history.undo(&mut *pt_gui.model);
+                        pt_gui.rebuild_all_subobj_buffers(&display);
+
+                        pt_gui.model.recalc_semantic_name_links();
+                        pt_gui.model.recheck_warnings(Set::All);
+                        pt_gui.model.recheck_errors(Set::All);
                         pt_gui.sanitize_ui_state();
+                        pt_gui.ui_state.refresh_properties_panel(&pt_gui.model);
                     }
 
                     let model = &pt_gui.model;
@@ -911,29 +929,36 @@ fn main() {
                                     _ => pt_gui.drag_axis,
                                 };
 
-                                let new_pos: Option<Vec3d> = {
-                                    let mouse_vec = mouse_vec.unwrap();
-                                    let t = match pt_gui.drag_axis {
-                                        DragAxis::YZ => ((*vec + maybe_turret_offset).x - mouse_vec.0.x) / (mouse_vec.1.x - mouse_vec.0.x),
-                                        DragAxis::XZ => ((*vec + maybe_turret_offset).y - mouse_vec.0.y) / (mouse_vec.1.y - mouse_vec.0.y),
-                                        DragAxis::XY => ((*vec + maybe_turret_offset).z - mouse_vec.0.z) / (mouse_vec.1.z - mouse_vec.0.z),
-                                    };
-                                    let in_3d_viewport = hover_pos.map_or(false, |hover_pos| availble_rect.contains(hover_pos));
-
-                                    if mouse_pos.is_none() || !(-1.0..=1.0).contains(&t) || !primary_down || !in_3d_viewport {
-                                        pt_gui.drag_lollipop = None;
-                                        pt_gui.actually_dragging = false;
-                                        None
-                                    } else {
-                                        Some(mouse_vec.0 + (mouse_vec.1 - mouse_vec.0) * t)
-                                    }
+                                let mouse_vec = mouse_vec.unwrap();
+                                let t = match pt_gui.drag_axis {
+                                    DragAxis::YZ => ((*vec + maybe_turret_offset).x - mouse_vec.0.x) / (mouse_vec.1.x - mouse_vec.0.x),
+                                    DragAxis::XZ => ((*vec + maybe_turret_offset).y - mouse_vec.0.y) / (mouse_vec.1.y - mouse_vec.0.y),
+                                    DragAxis::XY => ((*vec + maybe_turret_offset).z - mouse_vec.0.z) / (mouse_vec.1.z - mouse_vec.0.z),
                                 };
 
-                                if let Some(new_pos) = new_pos {
+                                let in_3d_viewport = hover_pos.map_or(false, |hover_pos| availble_rect.contains(hover_pos));
+                                if mouse_pos.is_none() || !(-1.0..=1.0).contains(&t) || !primary_down || !in_3d_viewport {
+                                    // awkward but this will immediately apply the action, even though its already been done (we just need to push it to the stack)
+                                    // so filter out its first invocation
+                                    let mut delta_vec =
+                                        (pt_gui.drag_start - maybe_turret_offset) - *drag_lollipop.get_position_ref(&mut pt_gui.model).unwrap();
+                                    let mut first_time = true;
+                                    let func = Box::new(move |model: &mut Model| {
+                                        info!("Modifying: {} position", drag_lollipop);
+                                        if first_time {
+                                            first_time = false;
+                                        } else {
+                                            *drag_lollipop.get_position_ref(model).unwrap() += delta_vec;
+                                            delta_vec = -delta_vec;
+                                        }
+                                    });
+                                    let _ = undo_history.apply(&mut pt_gui.model, UndoAction { function: func });
+                                    pt_gui.drag_lollipop = None;
+                                    pt_gui.actually_dragging = false;
+                                } else {
+                                    let new_pos = mouse_vec.0 + (mouse_vec.1 - mouse_vec.0) * t;
                                     let delta_vec = new_pos - maybe_turret_offset - *vec;
-                                    undo_history
-                                        .apply(&mut *pt_gui.model, UndoAction::MoveLollipop { tree_val: drag_lollipop, delta_vec })
-                                        .unwrap();
+                                    *drag_lollipop.get_position_ref(&mut pt_gui.model).unwrap() += delta_vec;
 
                                     pt_gui.ui_state.refresh_properties_panel(&pt_gui.model);
                                     pt_gui.ui_state.viewport_3d_dirty = true;
@@ -941,7 +966,7 @@ fn main() {
                             }
                         }
 
-                        // for when the user releases without dragging
+                        // for when the user releases
                         if !primary_down {
                             pt_gui.drag_lollipop = None;
                             pt_gui.actually_dragging = false;
@@ -1036,7 +1061,7 @@ fn main() {
                     for buffer_objs in &pt_gui.buffer_objects {
                         // only render if its currently being displayed
                         if displayed_subobjects[buffer_objs.obj_id] {
-                            let mut mat = glm::identity::<f32, 4>();
+                            let mut mat = pt_gui.model.subobject_transform_matrix[buffer_objs.obj_id];
                             mat.append_translation_mut(&pt_gui.model.get_total_subobj_offset(buffer_objs.obj_id).into());
 
                             let matrix = view_mat * mat;
@@ -2019,8 +2044,10 @@ impl PofToolsGui {
                     display,
                     model.glow_banks.iter().enumerate().flat_map(|(bank_idx, glow_bank)| {
                         let enabled = !self.glow_point_simulation
-                            || (elapsed as i128 - glow_bank.disp_time as i128).rem_euclid(glow_bank.on_time as i128 + glow_bank.off_time as i128)
-                                < glow_bank.on_time as i128;
+                            || (glow_bank.on_time + glow_bank.off_time > 0
+                                && (elapsed as i128 - glow_bank.disp_time as i128)
+                                    .rem_euclid(glow_bank.on_time as i128 + glow_bank.off_time as i128)
+                                    < glow_bank.on_time as i128);
                         glow_bank.glow_points.iter().enumerate().map(move |(point_idx, glow_point)| {
                             let position = glow_point.position;
                             let normal = glow_point.normal * glow_point.radius * 2.0;

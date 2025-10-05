@@ -753,7 +753,6 @@ fn main() {
                     // undo/redo
                     if egui.egui_ctx().input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Z)) {
                         undo_history.undo(&mut *pt_gui.model);
-                        pt_gui.rebuild_all_subobj_buffers(&display);
 
                         pt_gui.model.recalc_semantic_name_links();
                         pt_gui.model.recheck_warnings(Set::All);

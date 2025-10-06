@@ -551,6 +551,9 @@ impl BoundingBox {
             acc_bbox
         })
     }
+    pub fn shift(&self, shift: Vec3d) -> BoundingBox {
+        BoundingBox { min: self.min + shift, max: self.max + shift }
+    }
 
     pub fn pad(mut self, pad: f32) -> BoundingBox {
         self.min.x -= pad;
@@ -1454,44 +1457,42 @@ impl SubObject {
         false
     }
 
-    pub fn recalc_radius(&mut self) {
-        self.radius = 0.00001;
+    pub fn recalc_radius(&mut self) -> f32 {
+        let mut radius = 0.00001;
 
         for vert in &self.bsp_data.verts {
-            if vert.magnitude() > self.radius {
-                self.radius = vert.magnitude();
+            if vert.magnitude() > radius {
+                radius = vert.magnitude();
             }
         }
+
+        radius
     }
 
-    pub fn recalc_bbox(&mut self) {
-        self.bbox.min = self.bsp_data.verts[0];
-        self.bbox.max = self.bsp_data.verts[0];
+    pub fn recalc_bbox(&mut self) -> BoundingBox {
+        let mut bbox = BoundingBox::EMPTY;
 
         for vert in &self.bsp_data.verts {
-            if vert.x < self.bbox.min.x {
-                self.bbox.min.x = vert.x
+            if vert.x < bbox.min.x {
+                bbox.min.x = vert.x
             }
-            if vert.y < self.bbox.min.y {
-                self.bbox.min.y = vert.y
+            if vert.y < bbox.min.y {
+                bbox.min.y = vert.y
             }
-            if vert.z < self.bbox.min.z {
-                self.bbox.min.z = vert.z
+            if vert.z < bbox.min.z {
+                bbox.min.z = vert.z
             }
-            if vert.x > self.bbox.max.x {
-                self.bbox.max.x = vert.x
+            if vert.x > bbox.max.x {
+                bbox.max.x = vert.x
             }
-            if vert.y > self.bbox.max.y {
-                self.bbox.max.y = vert.y
+            if vert.y > bbox.max.y {
+                bbox.max.y = vert.y
             }
-            if vert.z > self.bbox.max.z {
-                self.bbox.max.z = vert.z
+            if vert.z > bbox.max.z {
+                bbox.max.z = vert.z
             }
         }
-        // self.bbox = match self.bsp_data.collision_tree {
-        //     BspNode::Split { bbox, .. } => bbox,
-        //     BspNode::Leaf { bbox, .. } => bbox,
-        // };
+        bbox
     }
 
     pub fn uvec_fvec(&self) -> Option<(Vec3d, Vec3d)> {
@@ -2289,6 +2290,16 @@ impl Model {
         }
     }
 
+    pub fn path_insertion_fixup(&mut self, inserted_idx: usize) {
+        for bay in &mut self.docking_bays {
+            if let Some(path_num) = bay.path {
+                if path_num.0 >= inserted_idx as u32 {
+                    bay.path = Some(PathId(path_num.0 + 1));
+                }
+            }
+        }
+    }
+
     pub fn get_valid_gun_subobjects_for_turret(&self, existing_obj: ObjectId, turret_obj: ObjectId) -> (Vec<ObjectId>, usize) {
         let mut out_vec = vec![];
         let mut out_idx = 0;
@@ -2348,8 +2359,8 @@ impl Model {
             }
         }
 
-        self.recalc_bbox();
-        self.recalc_radius();
+        self.header.bbox = self.recalc_bbox();
+        self.header.max_radius = self.recalc_radius();
 
         for path in &mut self.paths {
             path.apply_transform(&matrix);
@@ -2443,10 +2454,32 @@ impl Model {
         }
     }
 
-    pub fn recalc_subobj_offset(&mut self, id: ObjectId) {
+    // as above, but only affects the mesh itself
+    pub fn apply_subobj_transform_mesh(&mut self, id: ObjectId, matrix: &TMat4<f32>) {
+        let zero = Vec3d::ZERO.into();
+        let translation = matrix.transform_point(&zero) - zero;
+        let no_trans_matrix = &matrix.append_translation(&(-translation));
+
+        let subobj = &mut self.sub_objects[id];
+        for vert in &mut subobj.bsp_data.verts {
+            *vert = matrix * *vert;
+        }
+
+        // this preserves rotations, but inverts scales, which is the proper transformation for normals
+        let norm_matrix = no_trans_matrix.try_inverse().unwrap().transpose();
+
+        for norm in &mut subobj.bsp_data.norms {
+            *norm = (&norm_matrix * *norm).normalize();
+        }
+
+        subobj.bsp_data.collision_tree =
+            BspData::recalculate(&subobj.bsp_data.verts, std::mem::take(&mut subobj.bsp_data.collision_tree).into_leaves().map(|(_, poly)| poly));
+    }
+
+    pub fn recalc_subobj_offset(&mut self, id: ObjectId) -> Vec3d {
         let subobj = &mut self.sub_objects[id];
         let new_offset = Vec3d::average(subobj.bsp_data.verts.iter().map(|vert| *vert + subobj.offset));
-        self.subobj_move_only_offset(id, new_offset)
+        new_offset
     }
 
     pub fn subobj_move_only_offset(&mut self, id: ObjectId, new_offset: Vec3d) {
@@ -2466,8 +2499,8 @@ impl Model {
         self.sub_objects[id].recalc_radius();
     }
 
-    pub fn recalc_radius(&mut self) {
-        self.header.max_radius = 0.00001;
+    pub fn recalc_radius(&self) -> f32 {
+        let mut radius = 0.00001;
         if let Some(&detail_0) = self.header.detail_levels.first() {
             for subobj in &self.sub_objects {
                 if !self.is_obj_id_ancestor(subobj.obj_id, detail_0) {
@@ -2476,27 +2509,28 @@ impl Model {
 
                 let offset = self.get_total_subobj_offset(subobj.obj_id);
                 for vert in &subobj.bsp_data.verts {
-                    if (*vert + offset).magnitude() > self.header.max_radius {
-                        self.header.max_radius = (*vert + offset).magnitude();
+                    if (*vert + offset).magnitude() > radius {
+                        radius = (*vert + offset).magnitude();
                     }
                 }
             }
         }
+
         // Also include shield mesh in radius calculation, but only if a shield exists
         if let Some(shield) = &self.shield_data {
             for vert in &shield.verts {
                 let mag = vert.magnitude();
-                if mag > self.header.max_radius {
-                    self.header.max_radius = mag;
+                if mag > radius {
+                    radius = mag;
                 }
             }
         }
+
+        radius
     }
 
-    pub fn recalc_bbox(&mut self) {
-        let mut new_bbox = self.header.bbox;
-        new_bbox.min = Vec3d { x: -0.00001, y: -0.00001, z: -0.00001 };
-        new_bbox.max = Vec3d { x: 0.00001, y: 0.00001, z: 0.00001 };
+    pub fn recalc_bbox(&self) -> BoundingBox {
+        let mut bbox = BoundingBox::EMPTY;
 
         if let Some(&detail_0) = self.header.detail_levels.first() {
             for subobj in &self.sub_objects {
@@ -2507,30 +2541,28 @@ impl Model {
                 let offset = self.get_total_subobj_offset(subobj.obj_id);
                 let min = offset + subobj.bbox.min;
                 let max = offset + subobj.bbox.max;
-                new_bbox.min = Vec3d {
-                    x: f32::min(new_bbox.min.x, min.x),
-                    y: f32::min(new_bbox.min.y, min.y),
-                    z: f32::min(new_bbox.min.z, min.z),
+                bbox.min = Vec3d {
+                    x: f32::min(bbox.min.x, min.x),
+                    y: f32::min(bbox.min.y, min.y),
+                    z: f32::min(bbox.min.z, min.z),
                 };
 
-                new_bbox.max = Vec3d {
-                    x: f32::max(new_bbox.max.x, max.x),
-                    y: f32::max(new_bbox.max.y, max.y),
-                    z: f32::max(new_bbox.max.z, max.z),
+                bbox.max = Vec3d {
+                    x: f32::max(bbox.max.x, max.x),
+                    y: f32::max(bbox.max.y, max.y),
+                    z: f32::max(bbox.max.z, max.z),
                 };
             }
         }
 
-        self.header.bbox = new_bbox;
+        bbox
     }
 
-    pub fn recalc_mass(&mut self) {
-        self.header.mass = 4.65 * (self.header.bbox.volume().powf(2.0 / 3.0));
+    pub fn recalc_mass(&mut self) -> f32 {
+        4.65 * (self.header.bbox.volume().powf(2.0 / 3.0))
     }
 
-    pub fn recalc_moi(&mut self) {
-        self.header.moment_of_inertia = Mat3d::default();
-
+    pub fn recalc_moi(&mut self) -> Option<Mat3d> {
         fn sum_verts_recurse(subobjects: &ObjVec<SubObject>, id: ObjectId) -> usize {
             subobjects[id].bsp_data.verts.len() + subobjects[id].children.iter().map(|id| sum_verts_recurse(subobjects, *id)).sum::<usize>()
         }
@@ -2562,7 +2594,10 @@ impl Model {
             let point_mass = self.header.mass as f64 / num_verts as f64;
             new_moi *= point_mass;
             new_moi = new_moi.try_inverse().unwrap();
-            self.header.moment_of_inertia = new_moi.cast::<f32>().into();
+
+            Some(new_moi.cast::<f32>().into())
+        } else {
+            None
         }
     }
 
@@ -2785,6 +2820,7 @@ pub enum Warning {
     // thruster with no engine subsys (and an engine subsys exists)
     // turret uvec != turret normal
     // turret subobject properties not set up for a turret
+    // turret without 'turret' in name
 }
 
 pub fn post_parse_fill_untextured_slot(sub_objects: &mut Vec<SubObject>, textures: &mut Vec<String>) -> Option<TextureId> {

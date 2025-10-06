@@ -1185,9 +1185,9 @@ impl GltfBuilder {
             &mut self.root.buffer_views,
             json::buffer::View {
                 buffer: json::Index::new(0),
-                byte_length: (size * count).into(),
+                byte_length: (size * count) as u32,
                 byte_offset: Some(offset.try_into().unwrap()),
-                byte_stride: if packed { None } else { Some(gltf_json::buffer::Stride(size)) },
+                byte_stride: if packed { None } else { Some(size as u32) },
                 extensions: None,
                 extras: Default::default(),
                 name: None,
@@ -1204,8 +1204,8 @@ impl GltfBuilder {
             &mut self.root.accessors,
             json::Accessor {
                 buffer_view: Some(buffer_view),
-                byte_offset: Some(byte_offset.into()),
-                count: count.into(),
+                byte_offset: Some(byte_offset as u32),
+                count: count as u32,
                 component_type: Valid(json::accessor::GenericComponentType(component_type)),
                 extensions: Default::default(),
                 extras: Default::default(),
@@ -1526,7 +1526,7 @@ impl GltfBuilder {
         ));
 
         self.root.buffers.push(json::Buffer {
-            byte_length: self.buffer.len().into(),
+            byte_length: self.buffer.len() as u32,
             name: None,
             uri: None,
             extensions: Default::default(),
@@ -1548,7 +1548,7 @@ impl Model {
                 header: gltf::binary::Header {
                     magic: *b"glTF",
                     version: 2,
-                    length: json_offset + builder.root.buffers[0].byte_length.0 as u32,
+                    length: json_offset + builder.root.buffers[0].byte_length,
                 },
                 bin: Some(Cow::Borrowed(&builder.buffer)),
                 json: Cow::Owned(json_string.into_bytes()),

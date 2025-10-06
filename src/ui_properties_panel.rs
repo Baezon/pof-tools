@@ -1,6 +1,8 @@
 #![allow(clippy::unnecessary_lazy_evaluations)]
 use std::collections::HashMap;
+use std::f32::consts::TAU;
 use std::hash::Hash;
+use std::mem::swap;
 use std::str::FromStr;
 
 use egui::Align2;
@@ -9,19 +11,37 @@ use glium::glutin::surface::WindowSurface;
 use glium::Display;
 use nalgebra_glm::TMat4;
 use pof::{
-    Dock, Error, EyePoint, GlowPoint, GlowPointBank, Insignia, ObjectId, PathId, PathPoint, Set::*, SpecialPoint, SubsysRotationAxis,
-    SubsysRotationType, SubsysTranslationAxis, SubsysTranslationType, ThrusterGlow, Vec3d, Warning, WeaponHardpoint,
+    Dock, Error, NormalVec3, ObjectId, PathId, Set::*, SubsysRotationAxis, SubsysRotationType, SubsysTranslationAxis, SubsysTranslationType, Vec3d,
+    Warning,
 };
 
 use crate::Model;
 
 use crate::ui::{
-    DockingTreeValue, EyeTreeValue, GlowTreeValue, IndexingButtonsAction, InsigniaTreeValue, PathTreeValue, PofToolsGui, SpecialPointTreeValue,
+    model_action, DockingTreeValue, EyeTreeValue, GlowTreeValue, InsigniaTreeValue, PathTreeValue, PofToolsGui, SpecialPointTreeValue,
     SubObjectTreeValue, TextureTreeValue, ThrusterTreeValue, TreeValue, TurretTreeValue, UiState, UndoAction, WeaponTreeValue, ERROR_RED, LIGHT_BLUE,
     LIGHT_ORANGE, WARNING_YELLOW,
 };
 
 const NON_BREAK_SPACE: char = '\u{00A0}';
+
+type UndoFunction = Box<dyn FnMut(&mut Model)>;
+type PathFunction<T> = Box<dyn FnMut(&mut Model) -> &mut T>;
+
+/// doesnt do much other than boxing, but the real benefit is to coerce arbitrary closure types into the type needed by the undo system
+pub fn path_func<T: 'static>(val: impl FnMut(&mut Model) -> &mut T + 'static) -> PathFunction<T> {
+    Box::new(val)
+}
+
+/// doesnt do much, but the real benefit is to coerce arbitrary closure types into the type needed by the undo system
+pub fn parse_func<T, F: FnMut(&Model, T) -> UndoFunction>(val: F) -> F {
+    val
+}
+
+/// doesnt do much other than boxing, but the real benefit is to coerce arbitrary closure types into the type needed by the undo system
+pub fn undo_func(val: impl FnMut(&mut Model) + 'static) -> UndoFunction {
+    Box::new(val)
+}
 
 pub enum IndexingButtonsResponse<T: Clone> {
     Switch(usize),
@@ -103,6 +123,11 @@ impl<T: Clone> IndexingButtonsResponse<T> {
             IndexingButtonsResponse::Insert(..) => None,
         }
     }
+
+    /// does this response need to count as an action for the undo system
+    pub fn undoable(&self) -> bool {
+        !matches!(self, IndexingButtonsResponse::Switch(_))
+    }
 }
 
 pub fn visibility_button(ui: &mut Ui, toggled: bool) -> Response {
@@ -128,7 +153,7 @@ pub fn visibility_button(ui: &mut Ui, toggled: bool) -> Response {
     res
 }
 
-fn text_edit_single(ui: &mut Ui, id: impl Hash, string: &mut String) -> Response {
+fn text_edit_single_no_undo(ui: &mut Ui, id: impl Hash, string: &mut String) -> Response {
     let id = egui::Id::new(id);
     let text_edit = egui::TextEdit::singleline(string).id(id);
     let response = ui.add(text_edit);
@@ -136,11 +161,58 @@ fn text_edit_single(ui: &mut Ui, id: impl Hash, string: &mut String) -> Response
     response
 }
 
-fn text_edit_multi(ui: &mut Ui, id: impl Hash, string: &mut String, desired_rows: usize) -> Response {
-    let id = egui::Id::new(id);
-    let text_edit = egui::TextEdit::multiline(string).desired_rows(desired_rows).id(id);
+fn text_edit_single(
+    ui: &mut Ui, id: String, model: &mut Model, mut string_path: PathFunction<String>, undo_history: &mut undo::History<UndoAction>,
+) -> Response {
+    let mut old_val = string_path(model).clone();
+
+    let egui_id = egui::Id::new(&id);
+    let text_edit = egui::TextEdit::singleline(string_path(model)).id(egui_id);
     let response = ui.add(text_edit);
-    egui::TextEdit::load_state(ui.ctx(), id).unwrap().clear_undoer();
+
+    if response.changed() {
+        let mut first_time = true;
+        let func = Box::new(move |model: &mut Model| {
+            if first_time {
+                first_time = false;
+            } else {
+                let val = string_path(model);
+                info!("Modifying: {}", id);
+                swap(&mut old_val, val);
+            }
+        });
+        let _ = undo_history.apply(model, UndoAction { function: func });
+    }
+
+    egui::TextEdit::load_state(ui.ctx(), egui_id).unwrap().clear_undoer();
+    response
+}
+
+fn text_edit_multi(
+    ui: &mut Ui, id: String, desired_rows: usize, model: &mut Model, mut string_path: PathFunction<String>,
+    undo_history: &mut undo::History<UndoAction>,
+) -> Response {
+    let mut old_val = string_path(model).clone();
+
+    let egui_id = egui::Id::new(&id);
+    let text_edit = egui::TextEdit::multiline(string_path(model)).desired_rows(desired_rows).id(egui_id);
+    let response = ui.add(text_edit);
+
+    if response.changed() {
+        let mut first_time = true;
+        let func = Box::new(move |model: &mut Model| {
+            if first_time {
+                first_time = false;
+            } else {
+                let val = string_path(model);
+                info!("Modifying: {}", id);
+                swap(&mut old_val, val);
+            }
+        });
+        let _ = undo_history.apply(model, UndoAction { function: func });
+    }
+
+    egui::TextEdit::load_state(ui.ctx(), egui_id).unwrap().clear_undoer();
     response
 }
 
@@ -159,12 +231,13 @@ impl UiState {
 
     #[must_use]
     fn list_manipulator_widget<T: Clone>(
-        ui: &mut Ui, current_num: Option<usize>, list_len: Option<usize>, index_name: &str,
+        ui: &mut Ui, current_num: Option<usize>, list: Option<&Vec<T>>, index_name: &str,
     ) -> Option<IndexingButtonsResponse<T>> {
         enum Icon {
             Arrow,
             Plus,
         }
+        let list_len = list.map(|list| list.len());
 
         // figuring out what actions the left/right buttons should be is not simple...
         let (left, right) = match (list_len, current_num) {
@@ -299,20 +372,29 @@ impl UiState {
         ret
     }
 
-    fn model_value_edit<T: FromStr>(
-        id: impl Hash, viewport_3d_dirty: &mut bool, ui: &mut Ui, active_warning: bool, model_value: Option<&mut T>, parsable_string: &mut String,
+    // model_value_edit but with a custom undo function
+    #[allow(clippy::too_many_arguments)]
+    fn model_value_edit_custom<T: FromStr + Clone + 'static, F: FnMut(&Model, T) -> UndoFunction>(
+        id: impl Hash, viewport_3d_dirty: &mut bool, ui: &mut Ui, active_warning: bool, model_func: Option<F>, parsable_string: &mut String,
+        undo_history: &mut undo::History<UndoAction>, model: &mut Model,
     ) -> Response {
-        if let Some(value) = model_value {
+        if let Some(mut model_func) = model_func {
             if parsable_string.parse::<T>().is_err() {
                 ui.visuals_mut().override_text_color = Some(ERROR_RED);
             } else if active_warning {
                 ui.visuals_mut().override_text_color = Some(WARNING_YELLOW);
             }
 
-            let response = text_edit_single(ui, id, parsable_string);
+            let egui_id = egui::Id::new(id);
+            let text_edit = egui::TextEdit::singleline(parsable_string).id(egui_id);
+            let response = ui.add(text_edit);
+            egui::TextEdit::load_state(ui.ctx(), egui_id).unwrap().clear_undoer();
+
             if response.changed() {
-                if let Ok(parsed_string) = parsable_string.parse() {
-                    *value = parsed_string;
+                if let Ok(new_val) = parsable_string.parse::<T>() {
+                    let func = model_func(model, new_val);
+                    let _ = undo_history.apply(model, UndoAction { function: func });
+
                     *viewport_3d_dirty = true;
                 }
             }
@@ -323,7 +405,45 @@ impl UiState {
         }
     }
 
-    fn show_transform_window(ctx: &egui::Context, transform_window: &mut TransformWindow) -> Option<TMat4<f32>> {
+    #[allow(clippy::too_many_arguments)] // yeah its got a lot of arguments, but it is mostly called through a macro model_value_widget which elides many of them
+    fn model_value_edit<T: FromStr + Clone + 'static>(
+        id: String, viewport_3d_dirty: &mut bool, ui: &mut Ui, active_warning: bool, model_path: Option<PathFunction<T>>,
+        parsable_string: &mut String, undo_history: &mut undo::History<UndoAction>, model: &mut Model,
+    ) -> Response {
+        if let Some(mut model_path) = model_path {
+            if parsable_string.parse::<T>().is_err() {
+                ui.visuals_mut().override_text_color = Some(ERROR_RED);
+            } else if active_warning {
+                ui.visuals_mut().override_text_color = Some(WARNING_YELLOW);
+            }
+
+            let egui_id = egui::Id::new(&id);
+            let text_edit = egui::TextEdit::singleline(parsable_string).id(egui_id);
+            let response = ui.add(text_edit);
+            egui::TextEdit::load_state(ui.ctx(), egui_id).unwrap().clear_undoer();
+
+            if response.changed() {
+                if let Ok(mut new_val) = parsable_string.parse() {
+                    let func = Box::new(move |model: &mut Model| {
+                        let val = model_path(model);
+                        info!("Modifying: {}", id);
+                        swap(&mut new_val, val);
+                    });
+                    let _ = undo_history.apply(model, UndoAction { function: func });
+
+                    *viewport_3d_dirty = true;
+                }
+            }
+            ui.visuals_mut().override_text_color = None;
+            response
+        } else {
+            ui.add_enabled_ui(false, |ui| ui.text_edit_singleline(parsable_string)).inner
+        }
+    }
+
+    fn show_transform_window(
+        ctx: &egui::Context, transform_window: &mut TransformWindow, text: Option<impl Into<egui::WidgetText>>,
+    ) -> Option<TMat4<f32>> {
         let mut ret = None;
         let window = egui::Window::new("Transform")
             .collapsible(false)
@@ -333,6 +453,10 @@ impl UiState {
             .anchor(egui::Align2::RIGHT_TOP, [-100.0, 100.0]);
 
         window.show(ctx, |ui| {
+            if let Some(text) = text {
+                ui.label(text);
+            }
+
             let mut changed = false;
             ui.horizontal(|ui| {
                 changed = changed
@@ -620,7 +744,7 @@ impl UiState {
             TreeValue::Paths(path_selection) => match path_selection {
                 PathTreeValue::PathPoint(path, point) => {
                     self.properties_panel = PropertiesPanel::Path {
-                        name: format!("{}", model.paths[path].name),
+                        name_string: format!("{}", model.paths[path].name),
                         parent_string: format!("{}", model.paths[path].parent),
                         position_string: format!("{}", model.paths[path].points[point].position),
                         radius_string: format!("{}", model.paths[path].points[point].radius),
@@ -628,7 +752,7 @@ impl UiState {
                 }
                 PathTreeValue::Path(path) => {
                     self.properties_panel = PropertiesPanel::Path {
-                        name: format!("{}", model.paths[path].name),
+                        name_string: format!("{}", model.paths[path].name),
                         parent_string: format!("{}", model.paths[path].parent),
                         position_string: Default::default(),
                         radius_string: Default::default(),
@@ -749,7 +873,7 @@ pub enum PropertiesPanel {
         position_string: String,
     },
     Path {
-        name: String,
+        name_string: String,
         parent_string: String,
         position_string: String,
         radius_string: String,
@@ -866,7 +990,7 @@ impl PropertiesPanel {
     }
     fn default_path() -> Self {
         Self::Path {
-            name: Default::default(),
+            name_string: Default::default(),
             parent_string: Default::default(),
             position_string: Default::default(),
             radius_string: Default::default(),
@@ -903,9 +1027,17 @@ impl PofToolsGui {
             };
         }
 
+        macro_rules! model_value_widget {
+            ($id:expr, $ui:expr, $warning:expr, $path:expr, $string:expr) => {
+                UiState::model_value_edit($id, &mut self.ui_state.viewport_3d_dirty, $ui, $warning, $path, $string, undo_history, &mut self.model)
+            };
+        }
+
         // this is needed for blank string fields when the properties panel can't display
         // anything for that field due to an invalid tree selection
         let mut blank_string = String::new();
+
+        let current_tree_selection = self.ui_state.tree_view_selection;
 
         match &mut self.ui_state.properties_panel {
             PropertiesPanel::Header {
@@ -921,7 +1053,6 @@ impl PofToolsGui {
                 ui.heading("Header");
                 ui.separator();
 
-                let mut bbox_changed = false;
                 let mut display_bbox = false;
                 ui.horizontal(|ui| {
                     if visibility_button(ui, self.always_show_bbox).clicked() {
@@ -933,43 +1064,39 @@ impl PofToolsGui {
 
                 ui.horizontal(|ui| {
                     ui.label("Min:");
-                    let response = UiState::model_value_edit(
-                        "header bbox min",
-                        &mut self.ui_state.viewport_3d_dirty,
+                    let response = model_value_widget!(
+                        format!("{} bounding box min", current_tree_selection),
                         ui,
                         self.model.warnings.contains(&Warning::BBoxTooSmall(None)),
-                        Some(&mut self.model.header.bbox.min),
-                        bbox_min_string,
+                        Some(path_func(|model| &mut model.header.bbox.min)),
+                        bbox_min_string
                     );
-
-                    if response.changed() {
-                        bbox_changed = true;
-                    }
                     display_bbox |= response.hovered() || response.has_focus();
                 });
 
                 ui.horizontal(|ui| {
                     ui.label("Max:");
-                    let response = UiState::model_value_edit(
-                        "header bbox max",
-                        &mut self.ui_state.viewport_3d_dirty,
+                    let response = model_value_widget!(
+                        format!("{} bounding box max", current_tree_selection),
                         ui,
                         self.model.warnings.contains(&Warning::BBoxTooSmall(None)),
-                        Some(&mut self.model.header.bbox.max),
-                        bbox_max_string,
+                        Some(path_func(|model| &mut model.header.bbox.max)),
+                        bbox_max_string
                     );
-
-                    if response.changed() {
-                        bbox_changed = true;
-                    }
                     display_bbox |= response.hovered() || response.has_focus();
                 });
 
                 let response = ui.button("Recalculate");
                 if response.clicked() {
-                    self.model.recalc_bbox();
+                    let mut new_bbox = self.model.recalc_bbox();
+                    model_action(
+                        undo_history,
+                        &mut self.model,
+                        undo_func(move |model| {
+                            swap(&mut model.header.bbox, &mut new_bbox);
+                        }),
+                    );
                     self.ui_state.properties_panel_dirty = true;
-                    bbox_changed = true;
                 }
                 display_bbox |= response.hovered() || response.has_focus();
 
@@ -984,7 +1111,6 @@ impl PofToolsGui {
 
                 ui.separator();
 
-                let mut radius_changed = false;
                 let mut display_radius = false;
                 ui.horizontal(|ui| {
                     if visibility_button(ui, self.always_show_radius).clicked() {
@@ -994,23 +1120,26 @@ impl PofToolsGui {
                     ui.label("Radius:");
                 });
 
-                let response = UiState::model_value_edit(
-                    "header radius",
-                    &mut self.ui_state.viewport_3d_dirty,
+                let response = model_value_widget!(
+                    format!("{} radius", current_tree_selection),
                     ui,
                     self.model.warnings.contains(&Warning::RadiusTooSmall(None)),
-                    Some(&mut self.model.header.max_radius),
-                    radius_string,
+                    Some(path_func(|model| &mut model.header.max_radius)),
+                    radius_string
                 );
-                if response.changed() {
-                    radius_changed = true;
-                }
                 display_radius |= response.hovered() || response.has_focus();
 
                 let response = ui.button("Recalculate");
                 if response.clicked() {
-                    self.model.recalc_radius();
-                    radius_changed = true;
+                    let mut new_radius = self.model.recalc_radius();
+
+                    model_action(
+                        undo_history,
+                        &mut self.model,
+                        undo_func(move |model| {
+                            swap(&mut model.header.max_radius, &mut new_radius);
+                        }),
+                    );
                     self.ui_state.properties_panel_dirty = true;
                 }
                 display_radius |= response.hovered() || response.has_focus();
@@ -1022,58 +1151,61 @@ impl PofToolsGui {
                 ui.horizontal(|ui| {
                     ui.add(egui::Label::new("Mass:"));
                     if ui.button("Recalculate").clicked() {
-                        self.model.recalc_mass();
+                        let mut mass = self.model.recalc_mass();
+                        model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model| {
+                                swap(&mut model.header.mass, &mut mass);
+                            }),
+                        );
                         self.ui_state.properties_panel_dirty = true;
                     }
                 });
-                UiState::model_value_edit(
-                    "header mass",
-                    &mut self.ui_state.viewport_3d_dirty,
+                model_value_widget!(
+                    format!("{} mass", current_tree_selection),
                     ui,
                     false,
-                    Some(&mut self.model.header.mass),
-                    mass_string,
+                    Some(path_func(|model| &mut model.header.mass)),
+                    mass_string
                 );
 
                 ui.horizontal(|ui| {
                     ui.add(egui::Label::new("Moment of Inertia:"));
                     if ui.button("Recalculate").clicked() {
-                        self.model.recalc_moi();
-                        self.ui_state.properties_panel_dirty = true;
+                        if let Some(mut moi) = self.model.recalc_moi() {
+                            model_action(
+                                undo_history,
+                                &mut self.model,
+                                undo_func(move |model| {
+                                    swap(&mut model.header.moment_of_inertia, &mut moi);
+                                }),
+                            );
+                            self.ui_state.properties_panel_dirty = true;
+                        }
                     }
                 });
-                UiState::model_value_edit(
-                    "header moi rvec",
-                    &mut self.ui_state.viewport_3d_dirty,
+                model_value_widget!(
+                    format!("{} moment of inertia rvec", current_tree_selection),
                     ui,
                     false,
-                    Some(&mut self.model.header.moment_of_inertia.rvec),
-                    moir_string,
+                    Some(path_func(|model| &mut model.header.moment_of_inertia.rvec)),
+                    moir_string
                 );
-                UiState::model_value_edit(
-                    "header moi uvec",
-                    &mut self.ui_state.viewport_3d_dirty,
+                model_value_widget!(
+                    format!("{} moment of inertia uvec", current_tree_selection),
                     ui,
                     false,
-                    Some(&mut self.model.header.moment_of_inertia.uvec),
-                    moiu_string,
+                    Some(path_func(|model| &mut model.header.moment_of_inertia.uvec)),
+                    moiu_string
                 );
-                UiState::model_value_edit(
-                    "header moi fvec",
-                    &mut self.ui_state.viewport_3d_dirty,
+                model_value_widget!(
+                    format!("{} moment of inertia fvec", current_tree_selection),
                     ui,
                     false,
-                    Some(&mut self.model.header.moment_of_inertia.fvec),
-                    moif_string,
+                    Some(path_func(|model| &mut model.header.moment_of_inertia.fvec)),
+                    moif_string
                 );
-
-                if radius_changed {
-                    self.model.recheck_warnings(One(Warning::RadiusTooSmall(None)));
-                }
-                if bbox_changed {
-                    self.model.recheck_warnings(One(Warning::BBoxTooSmall(None)));
-                    self.model.recheck_warnings(One(Warning::InvertedBBox(None)));
-                }
 
                 ui.separator();
 
@@ -1156,38 +1288,63 @@ impl PofToolsGui {
 
                 //now we'll handle any changes
                 if let Some((level, id_opt)) = changed_detail {
+                    let mut new_list = self.model.header.detail_levels.clone();
                     if let Some(new_id) = id_opt {
                         // change to a new idx
-                        if level == self.model.header.detail_levels.len() {
+                        if level == new_list.len() {
                             // add a new detail level
-                            self.model.header.detail_levels.push(new_id);
-                        } else if let Some(swapped_level) = self.model.header.detail_levels.iter().position(|&id| id == new_id) {
+                            new_list.push(new_id);
+                        } else if let Some(swapped_level) = new_list.iter().position(|&id| id == new_id) {
                             // swap with an existing level
-                            let swapped_id = self.model.header.detail_levels[level];
-                            self.model.header.detail_levels[level] = new_id;
-                            self.model.header.detail_levels[swapped_level] = swapped_id;
+                            let swapped_id = new_list[level];
+                            new_list[level] = new_id;
+                            new_list[swapped_level] = swapped_id;
                         } else {
-                            self.model.header.detail_levels[level] = new_id;
+                            new_list[level] = new_id;
                         }
                     } else {
                         // Remove a detail level
                         // No holes allowed, so truncate
-                        self.model.header.detail_levels.truncate(level);
+                        new_list.truncate(level);
                     }
 
-                    self.model.recheck_warnings(All);
-                    self.model.recheck_errors(All);
-                    // FIX
+                    model_action(
+                        undo_history,
+                        &mut self.model,
+                        undo_func(move |model| {
+                            swap(&mut model.header.detail_levels, &mut new_list);
+                        }),
+                    );
                 }
 
                 ui.separator();
 
-                if ui.add(egui::Button::new("Transform Mesh")).clicked() {
+                if ui.add(egui::Button::new("Transform")).clicked() {
                     transform_window.open = true;
                 }
-                if let Some(matrix) = UiState::show_transform_window(ctx, transform_window) {
+
+                let mut text = LayoutJob::default();
+                text.append(
+                    "This will affect all subobjects, all weapon points, docking points etc. and ",
+                    0.0,
+                    TextFormat {
+                        font_id: TextStyle::Body.resolve(ui.style()),
+                        ..Default::default()
+                    },
+                );
+                text.append(
+                    "can't be undone.",
+                    0.0,
+                    TextFormat {
+                        font_id: TextStyle::Body.resolve(ui.style()),
+                        color: WARNING_YELLOW,
+                        ..Default::default()
+                    },
+                );
+                if let Some(matrix) = UiState::show_transform_window(ctx, transform_window, Some(text)) {
+                    // this is way too complicated to undo...
+                    undo_history.clear();
                     self.model.apply_transform(&matrix);
-                    rebuild_all_buffers = true;
                     self.ui_state.viewport_3d_dirty = true;
                     self.ui_state.properties_panel_dirty = true;
                     self.model.recheck_warnings(One(Warning::Detail0NonZeroOffset));
@@ -1218,7 +1375,7 @@ impl PofToolsGui {
                 ui.heading("SubObject");
                 ui.separator();
 
-                let selected_id = if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = self.ui_state.tree_view_selection {
+                let selected_id = if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = current_tree_selection {
                     Some(id)
                 } else {
                     None
@@ -1238,7 +1395,16 @@ impl PofToolsGui {
                     }
                     ui.label(text);
                     let old_name = self.model.sub_objects[id].name.clone();
-                    if text_edit_single(ui, "subobj name", &mut self.model.sub_objects[id].name).changed() {
+
+                    if text_edit_single(
+                        ui,
+                        "subobj name".to_string(),
+                        &mut self.model,
+                        path_func(move |model| &mut model.sub_objects[id].name),
+                        undo_history,
+                    )
+                    .changed()
+                    {
                         self.model.recheck_warnings(One(Warning::SubObjectNameTooLong(id)));
                         self.model.recheck_errors(One(Error::UnnamedSubObject(id)));
                         self.model.recheck_errors(One(Error::DuplicateSubobjectName(old_name)));
@@ -1279,9 +1445,15 @@ impl PofToolsGui {
                     }
 
                     if checkbox.changed() {
-                        self.model.sub_objects[selected_id.unwrap()].is_debris_model = *is_debris_check;
-                        self.model.recheck_errors(One(Error::TooManyDebrisObjects));
-                        self.model.recheck_errors(One(Error::DetailAndDebrisObj(selected_id.unwrap())));
+                        let id = selected_id.unwrap();
+
+                        model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model| {
+                                model.sub_objects[id].is_debris_model = !model.sub_objects[id].is_debris_model;
+                            }),
+                        );
                     }
 
                     UiState::reset_widget_color(ui);
@@ -1303,13 +1475,12 @@ impl PofToolsGui {
 
                 ui.horizontal(|ui| {
                     ui.label("Min:");
-                    let response = UiState::model_value_edit(
-                        "subobj bbox min",
-                        &mut self.ui_state.viewport_3d_dirty,
+                    let response = model_value_widget!(
+                        format!("{} bounding box min", current_tree_selection),
                         ui,
                         false,
-                        selected_id.map(|id| &mut self.model.sub_objects[id].bbox.min),
-                        bbox_min_string,
+                        selected_id.map(|id| path_func(move |model| &mut model.sub_objects[id].bbox.min)),
+                        bbox_min_string
                     );
 
                     if response.changed() {
@@ -1320,13 +1491,12 @@ impl PofToolsGui {
 
                 ui.horizontal(|ui| {
                     ui.label("Max:");
-                    let response = UiState::model_value_edit(
-                        "subobj bbox max",
-                        &mut self.ui_state.viewport_3d_dirty,
+                    let response = model_value_widget!(
+                        format!("{} bounding box max", current_tree_selection),
                         ui,
                         false,
-                        selected_id.map(|id| &mut self.model.sub_objects[id].bbox.max),
-                        bbox_max_string,
+                        selected_id.map(|id| path_func(move |model| &mut model.sub_objects[id].bbox.max)),
+                        bbox_max_string
                     );
 
                     if response.changed() {
@@ -1337,9 +1507,15 @@ impl PofToolsGui {
 
                 let response = ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate"));
                 if response.clicked() {
-                    self.model.sub_objects[selected_id.unwrap()].recalc_bbox();
-                    self.ui_state.properties_panel_dirty = true;
-                    bbox_changed = true;
+                    let id = selected_id.unwrap();
+                    let mut new_bbox = self.model.sub_objects[id].recalc_bbox();
+                    model_action(
+                        undo_history,
+                        &mut self.model,
+                        undo_func(move |model| {
+                            swap(&mut model.sub_objects[id].bbox, &mut new_bbox);
+                        }),
+                    );
                 }
                 display_bbox |= response.hovered() || response.has_focus();
 
@@ -1379,36 +1555,80 @@ impl PofToolsGui {
                 });
 
                 if let Some(id) = selected_id {
-                    if offset_string.parse::<Vec3d>().is_err() {
-                        ui.visuals_mut().override_text_color = Some(ERROR_RED);
-                    }
+                    let only_offset = self.ui_state.move_only_offset;
+                    let offset_move = parse_func(move |model: &Model, mut new_offset: Vec3d| {
+                        let mut diff = model.sub_objects[id].offset - new_offset;
+                        let mut new_radius = model.sub_objects[id].radius + diff.magnitude(); //this is an overestimate... maybe fix...
+                        let mut new_bbox = model.sub_objects[id].bbox.shift(diff);
+                        if only_offset {
+                            undo_func(move |model| {
+                                let subobj = &mut model.sub_objects[id];
+                                swap(&mut subobj.offset, &mut new_offset);
+                                swap(&mut subobj.radius, &mut new_radius);
+                                swap(&mut subobj.bbox, &mut new_bbox);
+                                let children: Vec<_> = subobj.children().copied().collect();
+                                for id in children {
+                                    model.sub_objects[id].offset += diff;
+                                }
+                                model.subobject_transform_matrix[id].append_translation_mut(&diff.into());
 
-                    let response = text_edit_single(ui, "subobj offset", offset_string);
-                    if response.changed() {
-                        if let Ok(parsed_string) = offset_string.parse() {
-                            if self.ui_state.move_only_offset {
-                                self.model.subobj_move_only_offset(id, parsed_string);
-                                buffer_ids_to_rebuild.push(selected_id.unwrap());
-                            } else {
-                                self.model.sub_objects[id].offset = parsed_string;
-                            }
-                            self.ui_state.viewport_3d_dirty = true;
-                            self.model.recheck_warnings(One(Warning::Detail0NonZeroOffset));
+                                diff = -diff;
+                                info!("Modifying: Subobject - {:?} - offset", id);
+                            })
+                        } else {
+                            undo_func(move |model| {
+                                swap(&mut model.sub_objects[id].offset, &mut new_offset);
+                                info!("Modifying: Subobject - {:?} - offset", id);
+                            })
                         }
+                    });
+
+                    let response = UiState::model_value_edit_custom(
+                        "subobj offset",
+                        &mut self.ui_state.viewport_3d_dirty,
+                        ui,
+                        false,
+                        Some(offset_move),
+                        offset_string,
+                        undo_history,
+                        &mut self.model,
+                    );
+                    if response.changed() {
+                        self.model.recheck_warnings(One(Warning::Detail0NonZeroOffset));
+                        self.ui_state.viewport_3d_dirty = true;
+                        self.ui_state.properties_panel_dirty = true;
                     }
                     display_origin |= response.hovered() || response.has_focus();
-                    ui.visuals_mut().override_text_color = None;
                 } else {
                     ui.add_enabled(false, TextEdit::singleline(offset_string));
                 }
 
                 let response = ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate"));
                 if response.clicked() {
-                    self.model.recalc_subobj_offset(selected_id.unwrap());
-                    self.model.recheck_warnings(One(Warning::RadiusTooSmall(selected_id)));
+                    let id = selected_id.unwrap();
+                    let mut new_offset = self.model.recalc_subobj_offset(id);
+                    let mut diff = self.model.sub_objects[id].offset - new_offset;
+                    let mut new_radius = self.model.sub_objects[id].radius + diff.magnitude(); //this is an overestimate... maybe fix...
+                    let mut new_bbox = self.model.sub_objects[id].bbox.shift(diff);
+                    model_action(
+                        undo_history,
+                        &mut self.model,
+                        undo_func(move |model| {
+                            let subobj = &mut model.sub_objects[id];
+                            swap(&mut subobj.offset, &mut new_offset);
+                            swap(&mut subobj.radius, &mut new_radius);
+                            swap(&mut subobj.bbox, &mut new_bbox);
+                            let children: Vec<_> = subobj.children().copied().collect();
+                            for id in children {
+                                model.sub_objects[id].offset += diff;
+                            }
+                            model.subobject_transform_matrix[id].append_translation_mut(&diff.into());
 
+                            diff = -diff;
+                            info!("Recalculating: Subobject - {:?} - offset", id);
+                        }),
+                    );
                     self.ui_state.viewport_3d_dirty = true;
-                    buffer_ids_to_rebuild.push(selected_id.unwrap());
                     self.ui_state.properties_panel_dirty = true;
                 }
                 display_origin |= response.hovered() || response.has_focus();
@@ -1426,7 +1646,6 @@ impl PofToolsGui {
 
                 // Radius edit ================================================================
 
-                let mut radius_changed = false;
                 let mut display_radius = false;
                 ui.horizontal(|ui| {
                     if visibility_button(ui, self.always_show_radius).clicked() {
@@ -1436,48 +1655,101 @@ impl PofToolsGui {
                     ui.label("Radius:");
                 });
 
-                let response = UiState::model_value_edit(
-                    "subobj radius",
-                    &mut self.ui_state.viewport_3d_dirty,
+                let response = model_value_widget!(
+                    format!("{} radius", current_tree_selection),
                     ui,
                     self.model.warnings.contains(&Warning::RadiusTooSmall(selected_id)),
-                    selected_id.map(|id| &mut self.model.sub_objects[id].radius),
-                    radius_string,
+                    selected_id.map(|id| path_func(move |model| &mut model.sub_objects[id].radius)),
+                    radius_string
                 );
-                if response.changed() {
-                    radius_changed = true;
-                }
                 display_radius |= response.hovered() || response.has_focus();
+
+                if response.changed() {
+                    self.model.recheck_warnings(One(Warning::RadiusTooSmall(selected_id)));
+                }
 
                 let response = ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate"));
                 if response.clicked() {
-                    self.model.sub_objects[selected_id.unwrap()].recalc_radius();
-                    self.ui_state.properties_panel_dirty = true;
-                    radius_changed = true;
+                    let id = selected_id.unwrap();
+                    let mut new_radius = self.model.sub_objects[id].recalc_radius();
+
+                    model_action(
+                        undo_history,
+                        &mut self.model,
+                        undo_func(move |model| {
+                            swap(&mut model.sub_objects[id].radius, &mut new_radius);
+                        }),
+                    );
                 }
                 display_radius |= response.hovered() || response.has_focus();
 
                 self.ui_state.display_radius = self.always_show_radius || display_radius;
 
-                if radius_changed {
-                    self.model.recheck_warnings(One(Warning::RadiusTooSmall(selected_id)));
-                }
-
                 ui.separator();
 
-                // Transform Mesh button ================================================================
+                // Transform button ================================================================
 
-                if ui.add_enabled(selected_id.is_some(), egui::Button::new("Transform Mesh")).clicked() {
+                if ui.add_enabled(selected_id.is_some(), egui::Button::new("Transform")).clicked() {
                     transform_window.open = true;
                 }
-                if let Some(matrix) = UiState::show_transform_window(ctx, transform_window) {
-                    if let Some(id) = selected_id {
-                        self.model.apply_subobj_transform(id, &matrix, false);
-                        self.ui_state.viewport_3d_dirty = true;
-                        self.ui_state.properties_panel_dirty = true;
+                let mut text = LayoutJob::default();
+                text.append(
+                    "This will affect all child subobjects of this one, its turret firepoints if any and ",
+                    0.0,
+                    TextFormat {
+                        font_id: TextStyle::Body.resolve(ui.style()),
+                        ..Default::default()
+                    },
+                );
+                text.append(
+                    "can't be undone.",
+                    0.0,
+                    TextFormat {
+                        font_id: TextStyle::Body.resolve(ui.style()),
+                        color: WARNING_YELLOW,
+                        ..Default::default()
+                    },
+                );
 
-                        self.model
-                            .do_for_recursive_subobj_children(id, &mut |subobj| buffer_ids_to_rebuild.push(subobj.obj_id));
+                if let Some(matrix) = UiState::show_transform_window(ctx, transform_window, Some(text)) {
+                    if let Some(id) = selected_id {
+                        // even though the header version of this actually modifies the mesh, this just modifies the transform matrix
+                        // ideally this would allow it to be undoable, but that's still really complicated...
+                        pub fn transform_subobj(model: &mut Model, id: ObjectId, matrix: &TMat4<f32>, transform_offset: bool) {
+                            let no_trans_matrix = glm::set_row(matrix, 3, &glm::vec4(0.0, 0.0, 0.0, 1.0));
+                            let rot_matrix = no_trans_matrix.normalize();
+
+                            if !transform_offset {
+                                model.subobject_transform_matrix[id] *= matrix;
+                            } else {
+                                model.subobject_transform_matrix[id] *= no_trans_matrix;
+                            }
+
+                            for turret in &mut model.turrets {
+                                if id == turret.base_obj {
+                                    for firepoint in &mut turret.fire_points {
+                                        *firepoint = &no_trans_matrix * *firepoint;
+                                    }
+                                    turret.normal.0 = &rot_matrix * turret.normal.0;
+                                }
+                            }
+
+                            if let Some((mut uvec, mut fvec)) = model.sub_objects[id].uvec_fvec() {
+                                uvec = &rot_matrix * uvec;
+                                fvec = &rot_matrix * fvec;
+                                pof::properties_update_field(&mut model.sub_objects[id].properties, "$uvec", &uvec.to_string());
+                                pof::properties_update_field(&mut model.sub_objects[id].properties, "$fvec", &fvec.to_string());
+                            }
+
+                            let children: Vec<_> = model.sub_objects[id].children().copied().collect();
+                            for child_id in children {
+                                transform_subobj(model, child_id, &no_trans_matrix, true)
+                            }
+                        }
+
+                        transform_subobj(&mut self.model, id, &matrix, false);
+
+                        transform_window.open = false;
                     }
                 }
 
@@ -1506,16 +1778,25 @@ impl PofToolsGui {
                 }
 
                 if let Some(new_parent) = UiState::subobject_combo_box(ui, &subobj_names_list, &mut combo_idx, selected_id, "Parent", None, None) {
-                    self.model.make_orphan(selected_id.unwrap());
+                    let id = selected_id.unwrap();
+                    let mut new_parent = if new_parent != 0 {
+                        self.model.get_obj_id_by_name(&subobj_names_list[new_parent])
+                    } else {
+                        None
+                    };
 
-                    if new_parent != 0 {
-                        let parent_id = self.model.get_obj_id_by_name(&subobj_names_list[new_parent]).unwrap();
-                        self.model.make_parent(parent_id, selected_id.unwrap());
-                    }
-
-                    //Error::InvalidTurretGunSubobject(())
-                    //Error::DetailObjWithParent(())
-                    self.model.recheck_errors(All);
+                    model_action(
+                        undo_history,
+                        &mut self.model,
+                        undo_func(move |model| {
+                            let old_parent = model.sub_objects[id].parent;
+                            model.make_orphan(id);
+                            if let Some(parent_id) = new_parent {
+                                new_parent = old_parent; // swap in the old value
+                                model.make_parent(parent_id, id);
+                            }
+                        }),
+                    );
                 }
 
                 // Properties edit ================================================================
@@ -1525,7 +1806,16 @@ impl PofToolsGui {
                     if self.model.sub_objects[id].uvec_fvec().is_some() {
                         self.ui_state.display_uvec_fvec = true;
                     }
-                    if text_edit_multi(ui, "subobj props", &mut self.model.sub_objects[id].properties, 2).changed() {
+
+                    let widget_response = text_edit_multi(
+                        ui,
+                        format!("{} properties", current_tree_selection),
+                        2,
+                        &mut self.model,
+                        path_func(move |model| &mut model.sub_objects[id].properties),
+                        undo_history,
+                    );
+                    if widget_response.changed() {
                         self.model.recheck_warnings(One(Warning::SubObjectPropertiesTooLong(id)));
                         self.ui_state.viewport_3d_dirty = true; // There may be changes to the uvec/fvec
                     };
@@ -1547,13 +1837,21 @@ impl PofToolsGui {
                             ui.radio_value(rot_axis, SubsysRotationAxis::Other, "Other");
                         });
                         if old_val != *rot_axis {
-                            let obj = &mut self.model.sub_objects[selected_id.unwrap()];
-                            obj.rotation_axis = *rot_axis;
-                            if *rot_axis == SubsysRotationAxis::None {
-                                obj.rotation_type = SubsysRotationType::None
-                            } else if obj.rotation_type == SubsysRotationType::None {
-                                obj.rotation_type = SubsysRotationType::Regular
-                            }
+                            let id = selected_id.unwrap();
+                            let mut new_axis = *rot_axis;
+                            model_action(
+                                undo_history,
+                                &mut self.model,
+                                undo_func(move |model: &mut Model| {
+                                    let obj = &mut model.sub_objects[id];
+                                    swap(&mut obj.rotation_axis, &mut new_axis);
+                                    if obj.rotation_axis == SubsysRotationAxis::None {
+                                        obj.rotation_type = SubsysRotationType::None
+                                    } else if obj.rotation_type == SubsysRotationType::None {
+                                        obj.rotation_type = SubsysRotationType::Regular
+                                    }
+                                }),
+                            );
                         }
                     });
 
@@ -1584,15 +1882,21 @@ impl PofToolsGui {
                             },
                         );
                         if old_val != *trans_axis {
-                            let obj = &mut self.model.sub_objects[selected_id.unwrap()];
-                            obj.translation_axis = *trans_axis;
-                            if *trans_axis == SubsysTranslationAxis::None {
-                                obj.translation_type = SubsysTranslationType::None
-                            } else if obj.translation_type == SubsysTranslationType::None {
-                                obj.translation_type = SubsysTranslationType::Regular
-                            }
-                            self.model
-                                .recheck_warnings(One(Warning::SubObjectTranslationInvalidVersion(selected_id.unwrap())))
+                            let id = selected_id.unwrap();
+                            let mut new_axis = *trans_axis;
+                            model_action(
+                                undo_history,
+                                &mut self.model,
+                                undo_func(move |model: &mut Model| {
+                                    let obj = &mut model.sub_objects[id];
+                                    swap(&mut obj.translation_axis, &mut new_axis);
+                                    if obj.translation_axis == SubsysTranslationAxis::None {
+                                        obj.translation_type = SubsysTranslationType::None
+                                    } else if obj.translation_type == SubsysTranslationType::None {
+                                        obj.translation_type = SubsysTranslationType::Regular
+                                    }
+                                }),
+                            );
                         }
                     });
                 });
@@ -1737,16 +2041,16 @@ impl PofToolsGui {
 
                 ui.separator();
 
-                let tex = if let TreeValue::Textures(TextureTreeValue::Texture(tex)) = self.ui_state.tree_view_selection {
-                    Some(&mut self.model.textures[tex.0 as usize])
+                let tex = if let TreeValue::Textures(TextureTreeValue::Texture(tex)) = current_tree_selection {
+                    Some(path_func(move |model| &mut model.textures[tex.0 as usize]))
                 } else {
                     None
                 };
 
                 ui.label("Texture Name:");
-                if UiState::model_value_edit("textures texture name", &mut self.ui_state.viewport_3d_dirty, ui, false, tex, texture_name).changed()
+                if model_value_widget!(format!("{} texture name", current_tree_selection), ui, false, tex, texture_name).changed()
                     && self.model.untextured_idx.is_some()
-                    && self.ui_state.tree_view_selection == TreeValue::Textures(TextureTreeValue::Texture(self.model.untextured_idx.unwrap()))
+                    && current_tree_selection == TreeValue::Textures(TextureTreeValue::Texture(self.model.untextured_idx.unwrap()))
                 {
                     self.model.untextured_idx = None;
                     self.model.recheck_warnings(One(Warning::UntexturedPolygons));
@@ -1756,7 +2060,7 @@ impl PofToolsGui {
                 if self
                     .model
                     .untextured_idx
-                    .map_or(false, |idx| TreeValue::Textures(TextureTreeValue::Texture(idx)) == self.ui_state.tree_view_selection)
+                    .map_or(false, |idx| TreeValue::Textures(TextureTreeValue::Texture(idx)) == current_tree_selection)
                 {
                     ui.label("If this is intentional, you may prefer \"invisible\", which FSO will ignore.");
                 }
@@ -1770,13 +2074,13 @@ impl PofToolsGui {
                 ui.heading("Thruster");
                 ui.separator();
 
-                let (bank_num, point_num) = match self.ui_state.tree_view_selection {
+                let (bank_num, point_num) = match current_tree_selection {
                     TreeValue::Thrusters(ThrusterTreeValue::Bank(bank)) => (Some(bank), None),
                     TreeValue::Thrusters(ThrusterTreeValue::BankPoint(bank, point)) => (Some(bank), Some(point)),
                     _ => (None, None),
                 };
 
-                let bank_idx_response = UiState::list_manipulator_widget(ui, bank_num, Some(self.model.thruster_banks.len()), "Bank");
+                let bank_idx_response = UiState::list_manipulator_widget(ui, bank_num, Some(&self.model.thruster_banks), "Bank");
 
                 ui.add_space(10.0);
 
@@ -1786,11 +2090,27 @@ impl PofToolsGui {
                         if self.model.warnings.contains(&Warning::ThrusterPropertiesInvalidVersion(bank)) {
                             UiState::set_widget_color(ui, WARNING_YELLOW);
                         }
-                        if text_edit_single(ui, "thrusters engine subsys", engine_subsys_string).changed() {
-                            pof::properties_update_field(&mut self.model.thruster_banks[bank].properties, "$engine_subsystem", engine_subsys_string);
-                            self.model.recheck_warnings(One(Warning::ThrusterPropertiesTooLong(bank)));
-                            self.model.recheck_warnings(One(Warning::ThrusterPropertiesInvalidVersion(bank)));
+
+                        if text_edit_single_no_undo(ui, "thrusters engine subsys", engine_subsys_string).changed() {
+                            let mut engine_subsys_string = engine_subsys_string.clone();
+
+                            model_action(
+                                undo_history,
+                                &mut self.model,
+                                undo_func(move |model: &mut Model| {
+                                    let temp = pof::properties_get_field(&model.thruster_banks[bank].properties, "$engine_subsystem")
+                                        .map(|s| s.to_string())
+                                        .unwrap_or_default();
+                                    pof::properties_update_field(
+                                        &mut model.thruster_banks[bank].properties,
+                                        "$engine_subsystem",
+                                        &engine_subsys_string,
+                                    );
+                                    engine_subsys_string = temp;
+                                }),
+                            );
                         }
+
                         UiState::reset_widget_color(ui);
                     } else {
                         ui.add_enabled(false, egui::TextEdit::multiline(&mut blank_string).desired_rows(1));
@@ -1802,13 +2122,20 @@ impl PofToolsGui {
                         if self.model.warnings.contains(&Warning::ThrusterPropertiesInvalidVersion(bank)) {
                             UiState::set_widget_color(ui, WARNING_YELLOW);
                         }
-                        if ui
-                            .add(egui::TextEdit::multiline(&mut self.model.thruster_banks[bank].properties).desired_rows(1))
-                            .changed()
-                        {
+
+                        let widget_response = text_edit_multi(
+                            ui,
+                            format!("{} properties", current_tree_selection),
+                            1,
+                            &mut self.model,
+                            path_func(move |model| &mut model.thruster_banks[bank].properties),
+                            undo_history,
+                        );
+                        if widget_response.changed() {
                             self.model.recheck_warnings(One(Warning::ThrusterPropertiesTooLong(bank)));
                             self.model.recheck_warnings(One(Warning::ThrusterPropertiesInvalidVersion(bank)));
                         }
+
                         UiState::reset_widget_color(ui);
                     } else {
                         ui.add_enabled(false, egui::TextEdit::multiline(&mut blank_string).desired_rows(1));
@@ -1818,79 +2145,99 @@ impl PofToolsGui {
                 ui.separator();
 
                 let point_idx_response =
-                    UiState::list_manipulator_widget(ui, point_num, bank_num.map(|bank| self.model.thruster_banks[bank].glows.len()), "Point");
+                    UiState::list_manipulator_widget(ui, point_num, bank_num.map(|bank| &self.model.thruster_banks[bank].glows), "Point");
 
                 ui.add_space(10.0);
 
-                let (pos, norm, radius) = if let TreeValue::Thrusters(ThrusterTreeValue::BankPoint(bank, point)) = self.ui_state.tree_view_selection {
-                    let ThrusterGlow { position, normal, radius } = &mut self.model.thruster_banks[bank].glows[point];
-                    (Some(position), Some(normal), Some(radius))
+                let (pos, norm, radius) = if let TreeValue::Thrusters(ThrusterTreeValue::BankPoint(bank, point)) = current_tree_selection {
+                    (
+                        Some(path_func(move |model| &mut model.thruster_banks[bank].glows[point].position)),
+                        Some(path_func(move |model| &mut model.thruster_banks[bank].glows[point].normal)),
+                        Some(path_func(move |model| &mut model.thruster_banks[bank].glows[point].radius)),
+                    )
                 } else {
                     (None, None, None)
                 };
 
                 ui.label("Radius:");
-                UiState::model_value_edit("thrusters radius", &mut self.ui_state.viewport_3d_dirty, ui, false, radius, radius_string);
+                model_value_widget!(format!("{} radius", current_tree_selection), ui, false, radius, radius_string);
                 ui.label("Position:");
-                UiState::model_value_edit("thrusters position", &mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
+                model_value_widget!(format!("{} position", current_tree_selection), ui, false, pos, position_string);
                 ui.label("Normal:");
-                UiState::model_value_edit("thrusters normal", &mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
+                model_value_widget!(format!("{} normal", current_tree_selection), ui, false, norm, normal_string);
 
-                if let Some(response) = bank_idx_response {
+                if let Some(mut response) = bank_idx_response {
                     let new_idx = response.get_new_ui_idx(&self.model.thruster_banks);
 
-                    undo_history
-                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::ThrusterBanks(response)))
-                        .unwrap();
+                    if response.undoable() {
+                        model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model: &mut Model| {
+                                response.apply(&mut model.thruster_banks);
+                            }),
+                        );
+                    } else {
+                        response.apply(&mut self.model.thruster_banks);
+                    }
 
                     self.model.recheck_warnings(All); //FIX
 
                     select_new_tree_val!(TreeValue::Thrusters(ThrusterTreeValue::bank(new_idx)));
-                } else if let Some(response) = point_idx_response {
+                } else if let Some(mut response) = point_idx_response {
                     let new_idx = response.get_new_ui_idx(&self.model.thruster_banks[bank_num.unwrap()].glows);
 
-                    undo_history
-                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::ThrusterBankPoints(bank_num.unwrap(), response)))
-                        .unwrap();
+                    if response.undoable() {
+                        model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model: &mut Model| {
+                                response.apply(&mut model.thruster_banks[bank_num.unwrap()].glows);
+                            }),
+                        );
+                    } else {
+                        response.apply(&mut self.model.thruster_banks[bank_num.unwrap()].glows);
+                    }
 
                     select_new_tree_val!(TreeValue::Thrusters(ThrusterTreeValue::bank_point(bank_num.unwrap(), new_idx)));
                 }
             }
             PropertiesPanel::Weapon { position_string, normal_string, offset_string } => {
-                let (mut weapon_system, bank_num, point_num) = match self.ui_state.tree_view_selection {
-                    TreeValue::Weapons(WeaponTreeValue::Header) => {
+                let weapon_tree_selection = match current_tree_selection {
+                    TreeValue::Weapons(select) => select,
+                    _ => unreachable!(),
+                };
+                let (bank_num, point_num) = match weapon_tree_selection {
+                    WeaponTreeValue::Header => {
                         ui.heading("Weapons");
-                        (None, None, None)
+                        (None, None)
                     }
-                    TreeValue::Weapons(WeaponTreeValue::PriHeader) => {
+                    WeaponTreeValue::PriHeader => {
                         ui.heading("Primary Weapons");
-                        (Some((&mut self.model.pof_model.primary_weps, true)), None, None)
+                        (None, None)
                     }
-                    TreeValue::Weapons(WeaponTreeValue::PriBank(bank)) => {
+                    WeaponTreeValue::PriBank(bank) => {
                         ui.heading("Primary Weapons");
-                        (Some((&mut self.model.pof_model.primary_weps, true)), Some(bank), None)
+                        (Some(bank), None)
                     }
-                    TreeValue::Weapons(WeaponTreeValue::PriBankPoint(bank, point)) => {
+                    WeaponTreeValue::PriBankPoint(bank, point) => {
                         ui.heading("Primary Weapons");
-                        (Some((&mut self.model.pof_model.primary_weps, true)), Some(bank), Some(point))
+                        (Some(bank), Some(point))
                     }
-                    TreeValue::Weapons(WeaponTreeValue::SecHeader) => {
+                    WeaponTreeValue::SecHeader => {
                         ui.heading("Secondary Weapons");
-                        (Some((&mut self.model.pof_model.secondary_weps, false)), None, None)
+                        (None, None)
                     }
-                    TreeValue::Weapons(WeaponTreeValue::SecBank(bank)) => {
+                    WeaponTreeValue::SecBank(bank) => {
                         ui.heading("Secondary Weapons");
-                        (Some((&mut self.model.pof_model.secondary_weps, false)), Some(bank), None)
+                        (Some(bank), None)
                     }
-                    TreeValue::Weapons(WeaponTreeValue::SecBankPoint(bank, point)) => {
+                    WeaponTreeValue::SecBankPoint(bank, point) => {
                         ui.heading("Secondary Weapons");
-                        (Some((&mut self.model.pof_model.secondary_weps, false)), Some(bank), Some(point))
-                    }
-                    _ => {
-                        unreachable!();
+                        (Some(bank), Some(point))
                     }
                 };
-                let weapon_selection = if let TreeValue::Weapons(selection) = self.ui_state.tree_view_selection {
+                let weapon_selection = if let TreeValue::Weapons(selection) = current_tree_selection {
                     selection
                 } else {
                     unreachable!()
@@ -1898,7 +2245,8 @@ impl PofToolsGui {
 
                 ui.separator();
 
-                let bank_idx_response = UiState::list_manipulator_widget(ui, bank_num, weapon_system.as_ref().map(|weps| weps.0.len()), "Bank");
+                let weapon_system = weapon_selection.current_weapons_vec(&mut self.model);
+                let bank_idx_response = UiState::list_manipulator_widget(ui, bank_num, weapon_system.as_deref(), "Bank");
 
                 ui.add_space(10.0);
 
@@ -1907,70 +2255,97 @@ impl PofToolsGui {
                 let point_idx_response = UiState::list_manipulator_widget(
                     ui,
                     point_num,
-                    weapon_system.as_ref().and_then(|weps| bank_num.map(|bank| weps.0[bank].len())),
+                    weapon_system.as_ref().and_then(|weps| bank_num.map(|bank| &weps[bank])),
                     "Point",
                 );
 
                 ui.add_space(10.0);
 
-                let (pos, norm, offset) =
-                    if let TreeValue::Weapons(WeaponTreeValue::PriBankPoint(bank, point) | WeaponTreeValue::SecBankPoint(bank, point)) =
-                        self.ui_state.tree_view_selection
-                    {
-                        let WeaponHardpoint { position, normal, offset } = &mut weapon_system.as_mut().unwrap().0[bank][point];
-                        (Some(position), Some(normal), Some(offset))
-                    } else {
-                        (None, None, None)
-                    };
+                let (pos, norm, offset) = if let TreeValue::Weapons(WeaponTreeValue::PriBankPoint(bank, point)) = current_tree_selection {
+                    (
+                        Some(path_func(move |model| &mut model.primary_weps[bank][point].position)),
+                        Some(path_func(move |model| &mut model.primary_weps[bank][point].normal)),
+                        Some(path_func(move |model| &mut model.primary_weps[bank][point].offset)),
+                    )
+                } else if let TreeValue::Weapons(WeaponTreeValue::SecBankPoint(bank, point)) = current_tree_selection {
+                    (
+                        Some(path_func(move |model| &mut model.secondary_weps[bank][point].position)),
+                        Some(path_func(move |model| &mut model.secondary_weps[bank][point].normal)),
+                        Some(path_func(move |model| &mut model.secondary_weps[bank][point].offset)),
+                    )
+                } else {
+                    (None, None, None)
+                };
 
                 ui.label("Position:");
-                UiState::model_value_edit("weapons position", &mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
+                model_value_widget!(format!("{} position", current_tree_selection), ui, false, pos, position_string);
                 ui.label("Normal:");
-                UiState::model_value_edit("weapons normal", &mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
+                model_value_widget!(format!("{} normal", current_tree_selection), ui, false, norm, normal_string);
                 ui.label("Offset:");
-                let offset_changed = UiState::model_value_edit(
-                    "weapons angle offset",
-                    &mut self.ui_state.viewport_3d_dirty,
-                    ui,
-                    self.model.pof_model.warnings.contains(&Warning::WeaponOffsetInvalidVersion {
-                        primary: weapon_selection.is_primary(),
-                        bank: bank_num.unwrap_or_default(),
-                        point: point_num.unwrap_or_default(),
-                    }),
-                    offset,
-                    offset_string,
-                )
-                .changed();
+                let warning = self.model.pof_model.warnings.contains(&Warning::WeaponOffsetInvalidVersion {
+                    primary: weapon_selection.is_primary(),
+                    bank: bank_num.unwrap_or_default(),
+                    point: point_num.unwrap_or_default(),
+                });
+                let offset_changed =
+                    model_value_widget!(format!("{} angle offset", current_tree_selection), ui, warning, offset, offset_string).changed();
 
-                if let Some(response) = bank_idx_response {
-                    let (weapon_system, is_primary) = weapon_system.unwrap();
+                let is_primary = weapon_selection.is_primary();
+                if let Some(mut response) = bank_idx_response {
+                    let weapon_system = weapon_selection.current_weapons_vec(&mut self.model).unwrap();
                     let new_idx = response.get_new_ui_idx(weapon_system);
 
-                    if is_primary {
-                        undo_history
-                            .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::PrimaryBanks(response)))
-                            .unwrap();
-                    } else {
-                        undo_history
-                            .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::SecondaryBanks(response)))
-                            .unwrap();
+                    match (is_primary, response.undoable()) {
+                        (true, true) => model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model: &mut Model| {
+                                response.apply(&mut model.primary_weps);
+                            }),
+                        ),
+                        (false, true) => model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model: &mut Model| {
+                                response.apply(&mut model.secondary_weps);
+                            }),
+                        ),
+                        (true, false) => {
+                            response.apply(&mut self.model.primary_weps);
+                        }
+                        (false, false) => {
+                            response.apply(&mut self.model.primary_weps);
+                        }
                     }
 
                     self.model.recheck_warnings(All); // FIX
 
                     select_new_tree_val!(TreeValue::Weapons(WeaponTreeValue::bank(is_primary, new_idx)));
-                } else if let Some(response) = point_idx_response {
-                    let (weapon_system, is_primary) = weapon_system.unwrap();
+                } else if let Some(mut response) = point_idx_response {
+                    let weapon_system = weapon_selection.current_weapons_vec(&mut self.model).unwrap();
                     let new_idx = response.get_new_ui_idx(&weapon_system[bank_num.unwrap()]);
 
-                    if is_primary {
-                        undo_history
-                            .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::PrimaryBankPoints(bank_num.unwrap(), response)))
-                            .unwrap();
-                    } else {
-                        undo_history
-                            .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::SecondaryBankPoints(bank_num.unwrap(), response)))
-                            .unwrap();
+                    match (is_primary, response.undoable()) {
+                        (true, true) => model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model: &mut Model| {
+                                response.apply(&mut model.primary_weps[bank_num.unwrap()]);
+                            }),
+                        ),
+                        (false, true) => model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model: &mut Model| {
+                                response.apply(&mut model.secondary_weps[bank_num.unwrap()]);
+                            }),
+                        ),
+                        (true, false) => {
+                            response.apply(&mut self.model.primary_weps[bank_num.unwrap()]);
+                        }
+                        (false, false) => {
+                            response.apply(&mut self.model.primary_weps[bank_num.unwrap()]);
+                        }
                     }
 
                     self.model.recheck_warnings(All); // FIX
@@ -1996,22 +2371,32 @@ impl PofToolsGui {
                 ui.heading("Docking Bay");
                 ui.separator();
 
-                let bay_num = match self.ui_state.tree_view_selection {
+                let bay_num = match current_tree_selection {
                     TreeValue::DockingBays(DockingTreeValue::Bay(bay)) => Some(bay),
                     _ => None,
                 };
 
-                let bay_idx_response = UiState::list_manipulator_widget(ui, bay_num, Some(self.model.docking_bays.len()), "Bay");
+                let bay_idx_response = UiState::list_manipulator_widget(ui, bay_num, Some(&self.model.docking_bays), "Bay");
 
                 ui.add_space(10.0);
 
                 ui.horizontal(|ui| {
                     ui.label("Name:");
                     if let Some(bay) = bay_num {
-                        if text_edit_single(ui, "docking bay name", name_string).changed() {
-                            pof::properties_update_field(&mut self.model.docking_bays[bay].properties, "$name", name_string);
-                            self.model.recheck_warnings(One(Warning::DockingBayNameTooLong(bay)));
-                            self.model.recheck_warnings(One(Warning::DockingBayPropertiesTooLong(bay)));
+                        if text_edit_single_no_undo(ui, "docking bay name", name_string).changed() {
+                            let mut name_string = name_string.clone();
+
+                            model_action(
+                                undo_history,
+                                &mut self.model,
+                                undo_func(move |model: &mut Model| {
+                                    let temp = pof::properties_get_field(&model.docking_bays[bay].properties, "$name")
+                                        .map(|s| s.to_string())
+                                        .unwrap_or_default();
+                                    pof::properties_update_field(&mut model.docking_bays[bay].properties, "$name", &name_string);
+                                    name_string = temp;
+                                }),
+                            );
                         }
                     } else {
                         ui.add_enabled(false, egui::TextEdit::singleline(&mut blank_string));
@@ -2047,14 +2432,20 @@ impl PofToolsGui {
                 if let Some(new_subobj) =
                     UiState::subobject_combo_box(ui, &subobj_names_list, &mut parent_id, bay_num, "Parent Object", None, warning_idx)
                 {
-                    pof::properties_update_field(
-                        &mut self.model.docking_bays[bay_num.unwrap()].properties,
-                        "$parent_submodel",
-                        &subobj_names_list[new_subobj],
+                    let bay_num = bay_num.unwrap();
+                    let mut new_name = subobj_names_list[new_subobj].clone();
+                    let mut old_name = pof::properties_get_field(&self.model.docking_bays[bay_num].properties, "$parent_submodel")
+                        .unwrap_or_default()
+                        .to_owned();
+
+                    model_action(
+                        undo_history,
+                        &mut self.model,
+                        undo_func(move |model| {
+                            pof::properties_update_field(&mut model.docking_bays[bay_num].properties, "$parent_submodel", &new_name);
+                            swap(&mut old_name, &mut new_name);
+                        }),
                     );
-                    self.model.recheck_warnings(One(Warning::DockingBayPropertiesTooLong(bay_num.unwrap())));
-                    self.model.recheck_warnings(One(Warning::InvalidDockParentSubmodel(bay_num.unwrap())));
-                    self.ui_state.viewport_3d_dirty = true;
                 }
 
                 // combo box list of path names
@@ -2070,19 +2461,27 @@ impl PofToolsGui {
                 } else {
                     vec![String::new()]
                 };
+
                 // make da combo box
                 ui.add_enabled_ui(bay_num.is_some(), |ui| {
                     if egui::ComboBox::from_label("Path")
                         .show_index(ui, path_num, paths.len(), |i| paths[i].to_owned())
                         .changed()
                     {
-                        // assign any changes
-                        if *path_num == self.model.paths.len() {
-                            self.model.docking_bays[bay_num.unwrap()].path = None
+                        let bay_num = bay_num.unwrap();
+                        let mut new_path = if *path_num == self.model.paths.len() {
+                            None
                         } else {
-                            self.model.docking_bays[bay_num.unwrap()].path = Some(PathId(*path_num as u32))
-                        }
-                        self.model.recheck_warnings(One(Warning::DockingBayWithoutPath(bay_num.unwrap())));
+                            Some(PathId(*path_num as u32))
+                        };
+
+                        model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model| {
+                                swap(&mut model.docking_bays[bay_num].path, &mut new_path);
+                            }),
+                        );
                     }
                 });
 
@@ -2090,16 +2489,21 @@ impl PofToolsGui {
 
                 CollapsingHeader::new("Properties Raw").show(ui, |ui| {
                     if let Some(bay) = bay_num {
-                        if ui
-                            .add(egui::TextEdit::multiline(&mut self.model.docking_bays[bay].properties).desired_rows(1))
-                            .changed()
-                        {
+                        let widget_response = text_edit_multi(
+                            ui,
+                            format!("{} properties", current_tree_selection),
+                            1,
+                            &mut self.model,
+                            path_func(move |model| &mut model.docking_bays[bay].properties),
+                            undo_history,
+                        );
+                        if widget_response.changed() {
                             if let Some(new_name) = pof::properties_get_field(&self.model.docking_bays[bay].properties, "$name") {
                                 *name_string = new_name.to_string();
                             }
                             self.model.recheck_warnings(One(Warning::DockingBayNameTooLong(bay)));
                             self.model.recheck_warnings(One(Warning::DockingBayPropertiesTooLong(bay)));
-                            self.model.recheck_warnings(One(Warning::InvalidDockParentSubmodel(bay_num.unwrap())));
+                            self.model.recheck_warnings(One(Warning::InvalidDockParentSubmodel(bay)));
                         }
                     } else {
                         ui.add_enabled(false, egui::TextEdit::multiline(&mut String::new()).desired_rows(1));
@@ -2111,23 +2515,51 @@ impl PofToolsGui {
                 ui.add_space(10.0);
 
                 ui.label("Position:");
-                let pos = bay_num.map(|num| &mut self.model.docking_bays[num].position);
-                UiState::model_value_edit("docking bay position", &mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
+                let pos = bay_num.map(|num| path_func(move |model| &mut model.docking_bays[num].position));
+                model_value_widget!(format!("{} position", current_tree_selection), ui, false, pos, position_string).changed();
 
                 ui.label(RichText::new("Forward Vector:").color(Color32::from_rgb(140, 150, 210)));
-                let norm = bay_num.map(|num| &mut self.model.docking_bays[num].fvec);
-                if UiState::model_value_edit("docking bay fvec", &mut self.ui_state.viewport_3d_dirty, ui, false, norm, fvec_string).changed() {
-                    let bay = &mut self.model.docking_bays[bay_num.unwrap()];
-                    bay.uvec = Dock::orthonormalize(&bay.uvec.0.into(), &bay.fvec.0.into());
-                    *uvec_ang = bay.get_uvec_angle().to_degrees() % 360.0
-                }
+                let norm = bay_num.map(|num| {
+                    parse_func(move |model: &Model, mut new_val: NormalVec3| {
+                        // after getting the new fvec, orthonormalize and get a new uvec too
+                        let mut uvec = Dock::orthonormalize(&model.docking_bays[num].uvec.0.into(), &new_val.0.into());
+                        undo_func(move |model| {
+                            // and use both when applying the undo function
+                            swap(&mut new_val, &mut model.docking_bays[num].fvec);
+                            swap(&mut uvec, &mut model.docking_bays[num].uvec);
+                            info!("Modifying: DockingBays - {} fvec", num);
+                        })
+                    })
+                });
+                UiState::model_value_edit_custom(
+                    "docking bay fvec",
+                    &mut self.ui_state.viewport_3d_dirty,
+                    ui,
+                    false,
+                    norm,
+                    fvec_string,
+                    undo_history,
+                    &mut self.model,
+                );
 
                 ui.label(RichText::new("Up Vector:").color(Color32::from_rgb(210, 140, 140)));
+                let log_text = format!("{} uvec", current_tree_selection);
                 ui.add_enabled_ui(bay_num.is_some(), |ui| {
+                    // this undo sucks, it triggers for every single change, fix this
                     if ui.add(DragValue::new(uvec_ang).speed(0.5)).changed() {
                         self.ui_state.viewport_3d_dirty = true;
-                        self.model.docking_bays[bay_num.unwrap()].set_uvec_angle(uvec_ang.to_radians());
                         *uvec_ang %= 360.0;
+                        let mut uvec_ang = uvec_ang.to_radians();
+                        model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model| {
+                                let temp = model.docking_bays[bay_num.unwrap()].get_uvec_angle() % TAU;
+                                model.docking_bays[bay_num.unwrap()].set_uvec_angle(uvec_ang);
+                                uvec_ang = temp;
+                                info!("Modifying: {}", log_text);
+                            }),
+                        )
                     }
                 });
 
@@ -2156,12 +2588,20 @@ impl PofToolsGui {
 
                 ui.image(&self.dock_demo_img);
 
-                if let Some(response) = bay_idx_response {
+                if let Some(mut response) = bay_idx_response {
                     let new_idx = response.get_new_ui_idx(&self.model.docking_bays);
 
-                    undo_history
-                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::DockingBays(response)))
-                        .unwrap();
+                    if response.undoable() {
+                        model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model: &mut Model| {
+                                response.apply(&mut model.docking_bays);
+                            }),
+                        );
+                    } else {
+                        response.apply(&mut self.model.docking_bays);
+                    }
 
                     self.model.recheck_warnings(All); // FIX
 
@@ -2183,23 +2623,33 @@ impl PofToolsGui {
                 ui.heading("Glow Bank");
                 ui.separator();
 
-                let (bank_num, point_num) = match self.ui_state.tree_view_selection {
+                let (bank_num, point_num) = match current_tree_selection {
                     TreeValue::Glows(GlowTreeValue::Bank(bank)) => (Some(bank), None),
                     TreeValue::Glows(GlowTreeValue::BankPoint(bank, point)) => (Some(bank), Some(point)),
                     _ => (None, None),
                 };
 
                 // no subobjects = no glow banks allowed
-                let glow_banks_len_opt = (!self.model.sub_objects.is_empty()).then(|| self.model.glow_banks.len());
-                let bank_idx_response = UiState::list_manipulator_widget(ui, bank_num, glow_banks_len_opt, "Bank");
+                let glow_banks_opt = (!self.model.sub_objects.is_empty()).then(|| &self.model.glow_banks);
+                let bank_idx_response = UiState::list_manipulator_widget(ui, bank_num, glow_banks_opt, "Bank");
 
                 ui.add_space(10.0);
 
                 ui.label("Glow Texture:");
                 if let Some(bank) = bank_num {
-                    if text_edit_single(ui, "glows tex name", glow_texture_string).changed() {
-                        pof::properties_update_field(&mut self.model.glow_banks[bank].properties, "$glow_texture", glow_texture_string);
-                        self.model.recheck_warnings(One(Warning::GlowBankPropertiesTooLong(bank)));
+                    if text_edit_single_no_undo(ui, "glows tex name", glow_texture_string).changed() {
+                        let mut glow_texture_string = glow_texture_string.clone();
+                        model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model: &mut Model| {
+                                let temp = pof::properties_get_field(&model.glow_banks[bank].properties, "$glow_texture")
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_default();
+                                pof::properties_update_field(&mut model.glow_banks[bank].properties, "$glow_texture", &glow_texture_string);
+                                glow_texture_string = temp;
+                            }),
+                        );
                     }
                 } else {
                     ui.add_enabled(false, egui::TextEdit::singleline(&mut blank_string).desired_rows(1));
@@ -2209,30 +2659,39 @@ impl PofToolsGui {
 
                 if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, attached_subobj_idx, bank_num, "SubObject", None, None)
                 {
-                    self.model.glow_banks[bank_num.unwrap()].obj_parent = ObjectId(new_subobj as u32);
+                    let num = bank_num.unwrap();
+                    let mut new_id = ObjectId(new_subobj as u32);
+                    model_action(
+                        undo_history,
+                        &mut self.model,
+                        undo_func(move |model| {
+                            swap(&mut model.glow_banks[num].obj_parent, &mut new_id);
+                        }),
+                    );
                 }
 
-                let (disp_time, on_time, off_time, lod, glow_type) =
-                    if let TreeValue::Glows(GlowTreeValue::BankPoint(bank, _)) = self.ui_state.tree_view_selection {
-                        let GlowPointBank { disp_time, on_time, off_time, lod, glow_type, .. } = &mut self.model.glow_banks[bank];
-
-                        (Some(disp_time), Some(on_time), Some(off_time), Some(lod), Some(glow_type))
-                    } else if let TreeValue::Glows(GlowTreeValue::Bank(bank)) = self.ui_state.tree_view_selection {
-                        let GlowPointBank { disp_time, on_time, off_time, lod, glow_type, .. } = &mut self.model.glow_banks[bank];
-
-                        (Some(disp_time), Some(on_time), Some(off_time), Some(lod), Some(glow_type))
-                    } else {
-                        (None, None, None, None, None)
-                    };
+                let (disp_time, on_time, off_time, lod, glow_type) = if let TreeValue::Glows(GlowTreeValue::BankPoint(bank, _))
+                | TreeValue::Glows(GlowTreeValue::Bank(bank)) = current_tree_selection
+                {
+                    (
+                        Some(path_func(move |model| &mut model.glow_banks[bank].disp_time)),
+                        Some(path_func(move |model| &mut model.glow_banks[bank].on_time)),
+                        Some(path_func(move |model| &mut model.glow_banks[bank].off_time)),
+                        Some(path_func(move |model| &mut model.glow_banks[bank].lod)),
+                        Some(path_func(move |model| &mut model.glow_banks[bank].glow_type)),
+                    )
+                } else {
+                    (None, None, None, None, None)
+                };
 
                 ui.horizontal(|ui| {
                     ui.label("LOD:");
-                    UiState::model_value_edit("glows lod", &mut self.ui_state.viewport_3d_dirty, ui, false, lod, lod_string);
+                    model_value_widget!(format!("{} lod", current_tree_selection), ui, false, lod, lod_string);
                 });
 
                 ui.horizontal(|ui| {
                     ui.label("Type:");
-                    UiState::model_value_edit("glows type", &mut self.ui_state.viewport_3d_dirty, ui, false, glow_type, glow_type_string);
+                    model_value_widget!(format!("{} type", current_tree_selection), ui, false, glow_type, glow_type_string);
                 });
 
                 ui.separator();
@@ -2243,26 +2702,31 @@ impl PofToolsGui {
                 }
 
                 ui.label("Displacement Time:");
-                UiState::model_value_edit("glows disp time", &mut self.ui_state.viewport_3d_dirty, ui, false, disp_time, disp_time_string);
+                model_value_widget!(format!("{} disp time", current_tree_selection), ui, false, disp_time, disp_time_string);
 
                 ui.horizontal(|ui| {
                     ui.label("On Time:");
-                    UiState::model_value_edit("glows on time", &mut self.ui_state.viewport_3d_dirty, ui, false, on_time, on_time_string);
+                    model_value_widget!(format!("{} on time", current_tree_selection), ui, false, on_time, on_time_string);
                 });
 
                 ui.horizontal(|ui| {
                     ui.label("Off Time:");
-                    UiState::model_value_edit("glows off time", &mut self.ui_state.viewport_3d_dirty, ui, false, off_time, off_time_string);
+                    model_value_widget!(format!("{} off time", current_tree_selection), ui, false, off_time, off_time_string);
                 });
 
                 ui.separator();
 
                 CollapsingHeader::new("Properties Raw").show(ui, |ui| {
                     if let Some(bank) = bank_num {
-                        if ui
-                            .add(egui::TextEdit::multiline(&mut self.model.glow_banks[bank].properties).desired_rows(1))
-                            .changed()
-                        {
+                        let widget_response = text_edit_multi(
+                            ui,
+                            format!("{} properties", current_tree_selection),
+                            1,
+                            &mut self.model,
+                            path_func(move |model| &mut model.glow_banks[bank].properties),
+                            undo_history,
+                        );
+                        if widget_response.changed() {
                             self.model.recheck_warnings(One(Warning::GlowBankPropertiesTooLong(bank)));
                         }
                     } else {
@@ -2272,20 +2736,22 @@ impl PofToolsGui {
 
                 ui.separator();
 
-                let glow_points = if let TreeValue::Glows(GlowTreeValue::BankPoint(bank, _)) = self.ui_state.tree_view_selection {
+                let glow_points = if let TreeValue::Glows(GlowTreeValue::BankPoint(bank, _)) = current_tree_selection {
                     Some(&mut self.model.glow_banks[bank].glow_points)
-                } else if let TreeValue::Glows(GlowTreeValue::Bank(bank)) = self.ui_state.tree_view_selection {
+                } else if let TreeValue::Glows(GlowTreeValue::Bank(bank)) = current_tree_selection {
                     Some(&mut self.model.glow_banks[bank].glow_points)
                 } else {
                     None
                 };
 
-                let point_idx_response = UiState::list_manipulator_widget(ui, point_num, glow_points.map(|list| list.len()), "Point");
+                let point_idx_response = UiState::list_manipulator_widget(ui, point_num, glow_points.as_deref(), "Point");
 
-                let (pos, norm, radius) = if let TreeValue::Glows(GlowTreeValue::BankPoint(bank, point)) = self.ui_state.tree_view_selection {
-                    let GlowPoint { position, normal, radius } = &mut self.model.glow_banks[bank].glow_points[point];
-
-                    (Some(position), Some(normal), Some(radius))
+                let (pos, norm, radius) = if let TreeValue::Glows(GlowTreeValue::BankPoint(bank, point)) = current_tree_selection {
+                    (
+                        Some(path_func(move |model| &mut model.glow_banks[bank].glow_points[point].position)),
+                        Some(path_func(move |model| &mut model.glow_banks[bank].glow_points[point].normal)),
+                        Some(path_func(move |model| &mut model.glow_banks[bank].glow_points[point].radius)),
+                    )
                 } else {
                     (None, None, None)
                 };
@@ -2293,29 +2759,43 @@ impl PofToolsGui {
                 ui.add_space(10.0);
 
                 ui.label("Radius:");
-                UiState::model_value_edit("glows radius", &mut self.ui_state.viewport_3d_dirty, ui, false, radius, radius_string);
+                model_value_widget!(format!("{} radius", current_tree_selection), ui, false, radius, radius_string);
                 ui.label("Position:");
-                UiState::model_value_edit("glows position", &mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
+                model_value_widget!(format!("{} position", current_tree_selection), ui, false, pos, position_string);
                 ui.label("Normal:");
-                UiState::model_value_edit("glows normal", &mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
+                model_value_widget!(format!("{} normal", current_tree_selection), ui, false, norm, normal_string);
 
-                if let Some(response) = bank_idx_response {
+                if let Some(mut response) = bank_idx_response {
                     let new_idx = response.get_new_ui_idx(&self.model.glow_banks);
 
-                    undo_history
-                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::GlowBanks(response)))
-                        .unwrap();
+                    if response.undoable() {
+                        model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model: &mut Model| {
+                                response.apply(&mut model.glow_banks);
+                            }),
+                        );
+                    } else {
+                        response.apply(&mut self.model.glow_banks);
+                    }
 
-                    self.model.recheck_warnings(All); // FIX
                     select_new_tree_val!(TreeValue::Glows(GlowTreeValue::bank(new_idx)));
-                } else if let Some(response) = point_idx_response {
+                } else if let Some(mut response) = point_idx_response {
                     let new_idx = response.get_new_ui_idx(&self.model.glow_banks[bank_num.unwrap()].glow_points);
 
-                    undo_history
-                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::GlowBankPoints(bank_num.unwrap(), response)))
-                        .unwrap();
+                    if response.undoable() {
+                        model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model: &mut Model| {
+                                response.apply(&mut model.glow_banks[bank_num.unwrap()].glow_points);
+                            }),
+                        );
+                    } else {
+                        response.apply(&mut self.model.glow_banks[bank_num.unwrap()].glow_points);
+                    }
 
-                    self.model.recheck_warnings(All); // FIX
                     select_new_tree_val!(TreeValue::Glows(GlowTreeValue::bank_point(bank_num.unwrap(), new_idx)));
                 }
             }
@@ -2323,23 +2803,21 @@ impl PofToolsGui {
                 ui.heading("Special Point");
                 ui.separator();
 
-                let point_num = match self.ui_state.tree_view_selection {
-                    TreeValue::SpecialPoints(SpecialPointTreeValue::Point(point)) => Some(point),
-                    _ => None,
+                let (point_num, name) = match current_tree_selection {
+                    TreeValue::SpecialPoints(SpecialPointTreeValue::Point(point)) => {
+                        (Some(point), Some(path_func(move |model| &mut model.special_points[point].name)))
+                    }
+                    _ => (None, None),
                 };
 
-                let spec_point_idx_response = UiState::list_manipulator_widget(ui, point_num, Some(self.model.special_points.len()), "Point");
+                let spec_point_idx_response = UiState::list_manipulator_widget(ui, point_num, Some(self.model.special_points.as_ref()), "Point");
 
                 ui.add_space(10.0);
 
                 ui.horizontal(|ui| {
                     ui.label("Name:");
-                    if let Some(point) = point_num {
-                        if text_edit_single(ui, "specpoint name", &mut self.model.special_points[point].name).changed() {
-                            self.model.recheck_warnings(One(Warning::SpecialPointNameTooLong(point)));
-                        }
-                    } else {
-                        ui.add_enabled(false, egui::TextEdit::singleline(name_string));
+                    if model_value_widget!(format!("{} name", current_tree_selection), ui, false, name, name_string).changed() {
+                        self.model.recheck_warnings(One(Warning::SpecialPointNameTooLong(point_num.unwrap())));
                     }
                 });
 
@@ -2364,9 +2842,20 @@ impl PofToolsGui {
                             changed |= ui.selectable_value(&mut idx, 1, types_display[1]).changed();
                             changed |= ui.selectable_value(&mut idx, 2, types_display[2]).changed();
                         });
+
                         if changed {
-                            pof::properties_update_field(&mut self.model.special_points[point].properties, "$special", types[idx]);
-                            self.model.recheck_warnings(One(Warning::SpecialPointPropertiesTooLong(point)));
+                            let mut new_val = types[idx].to_string();
+                            model_action(
+                                undo_history,
+                                &mut self.model,
+                                undo_func(move |model: &mut Model| {
+                                    let val = pof::properties_get_field(&model.special_points[point].properties, "$special")
+                                        .unwrap_or_default()
+                                        .to_string();
+                                    pof::properties_update_field(&mut model.special_points[point].properties, "$special", &new_val);
+                                    new_val = val;
+                                }),
+                            );
                         }
                     } else {
                         egui::ComboBox::from_label("Type").show_ui(ui, |ui| {
@@ -2377,10 +2866,15 @@ impl PofToolsGui {
 
                 CollapsingHeader::new("Properties Raw").show(ui, |ui| {
                     if let Some(point) = point_num {
-                        if ui
-                            .add(egui::TextEdit::multiline(&mut self.model.special_points[point].properties).desired_rows(1))
-                            .changed()
-                        {
+                        let widget_response = text_edit_multi(
+                            ui,
+                            format!("{} properties", current_tree_selection),
+                            1,
+                            &mut self.model,
+                            path_func(move |model| &mut model.special_points[point].properties),
+                            undo_history,
+                        );
+                        if widget_response.changed() {
                             if let Some(new_name) = pof::properties_get_field(&self.model.special_points[point].properties, "$name") {
                                 *name_string = new_name.to_string();
                             }
@@ -2395,25 +2889,34 @@ impl PofToolsGui {
 
                 ui.add_space(10.0);
 
-                let (pos, radius) = if let TreeValue::SpecialPoints(SpecialPointTreeValue::Point(point)) = self.ui_state.tree_view_selection {
-                    let SpecialPoint { position, radius, .. } = &mut self.model.special_points[point];
-                    (Some(position), Some(radius))
+                let (pos, radius) = if let TreeValue::SpecialPoints(SpecialPointTreeValue::Point(point)) = current_tree_selection {
+                    (
+                        Some(path_func(move |model| &mut model.special_points[point].position)),
+                        Some(path_func(move |model| &mut model.special_points[point].radius)),
+                    )
                 } else {
                     (None, None)
                 };
-                ui.label("Radius:");
-                UiState::model_value_edit("specpoint radius", &mut self.ui_state.viewport_3d_dirty, ui, false, radius, radius_string);
-                ui.label("Position:");
-                UiState::model_value_edit("specpoint position", &mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
 
-                if let Some(response) = spec_point_idx_response {
+                ui.label("Radius:");
+                model_value_widget!(format!("{} radius", current_tree_selection), ui, false, radius, radius_string);
+                ui.label("Position:");
+                model_value_widget!(format!("{} position", current_tree_selection), ui, false, pos, position_string);
+
+                if let Some(mut response) = spec_point_idx_response {
                     let new_idx = response.get_new_ui_idx(&self.model.special_points);
 
-                    undo_history
-                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::SpecialPoints(response)))
-                        .unwrap();
-
-                    self.model.recheck_warnings(All); // FIX
+                    if response.undoable() {
+                        model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model: &mut Model| {
+                                response.apply(&mut model.special_points);
+                            }),
+                        );
+                    } else {
+                        response.apply(&mut self.model.special_points);
+                    }
 
                     select_new_tree_val!(TreeValue::SpecialPoints(SpecialPointTreeValue::point(new_idx)));
                 }
@@ -2422,25 +2925,34 @@ impl PofToolsGui {
                 ui.heading("Turret");
                 ui.separator();
 
-                let (turret_num, point_num) = match self.ui_state.tree_view_selection {
+                let (turret_num, point_num) = match current_tree_selection {
                     TreeValue::Turrets(TurretTreeValue::Turret(turret)) => (Some(turret), None),
                     TreeValue::Turrets(TurretTreeValue::TurretPoint(turret, point)) => (Some(turret), Some(point)),
                     _ => (None, None),
                 };
 
                 // no subobjects = no turrets allowed
-                let turrets_len_opt = (!self.model.sub_objects.is_empty()).then(|| self.model.turrets.len());
-                let turret_idx_response = UiState::list_manipulator_widget(ui, turret_num, turrets_len_opt, "Turret");
+                let turrets_opt = (!self.model.sub_objects.is_empty()).then(|| &self.model.turrets);
+                let turret_idx_response = UiState::list_manipulator_widget(ui, turret_num, turrets_opt, "Turret");
 
                 ui.add_space(10.0);
                 let subobj_names_list = self.model.get_subobj_names();
 
                 if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, base_idx, turret_num, "Base object", None, None) {
-                    self.model.turrets[turret_num.unwrap()].base_obj = ObjectId(new_subobj as u32);
-                    self.model.recheck_errors(One(Error::InvalidTurretGunSubobject(turret_num.unwrap())));
+                    let mut new_val = ObjectId(new_subobj as u32);
+                    let turret_num = turret_num.unwrap(); // the unwrap is ok here, if it were none, the combo box would be un-interactable
+
+                    model_action(
+                        undo_history,
+                        &mut self.model,
+                        undo_func(move |model: &mut Model| {
+                            let val = &mut model.turrets[turret_num].base_obj;
+                            swap(&mut new_val, val);
+                        }),
+                    );
                 }
 
-                // turret gun subobjexct combo box is a bit trickier since we only want to show valid subobjects (and the currently used one,
+                // turret gun subobject combo box is a bit trickier since we only want to show valid subobjects (and the currently used one,
                 // which may be invalid)
 
                 let mut gun_subobj_ids_list = vec![];
@@ -2471,142 +2983,210 @@ impl PofToolsGui {
                 if let Some(new_idx) =
                     UiState::subobject_combo_box(ui, &gun_subobj_names_list, &mut gun_subobj_idx, turret_num, "Gun object", error_idx, None)
                 {
-                    // the unwraps are ok here, if it were none, the combo box would be un-interactable
-                    self.model.turrets[turret_num.unwrap()].gun_obj = gun_subobj_ids_list[new_idx];
-                    self.model.recheck_errors(One(Error::InvalidTurretGunSubobject(turret_num.unwrap())));
-                    self.ui_state.viewport_3d_dirty = true;
+                    let mut new_val = gun_subobj_ids_list[new_idx];
+                    let turret_num = turret_num.unwrap(); // the unwrap is ok here, if it were none, the combo box would be un-interactable
+
+                    model_action(
+                        undo_history,
+                        &mut self.model,
+                        undo_func(move |model: &mut Model| {
+                            let val = &mut model.turrets[turret_num].gun_obj;
+                            swap(&mut new_val, val);
+                        }),
+                    );
                 }
 
-                let norm = if let TreeValue::Turrets(TurretTreeValue::Turret(turret) | TurretTreeValue::TurretPoint(turret, _)) =
-                    self.ui_state.tree_view_selection
-                {
-                    Some(&mut self.model.turrets[turret].normal)
-                } else {
-                    None
-                };
+                let norm =
+                    if let TreeValue::Turrets(TurretTreeValue::Turret(turret) | TurretTreeValue::TurretPoint(turret, _)) = current_tree_selection {
+                        Some(path_func(move |model| &mut model.turrets[turret].normal))
+                    } else {
+                        None
+                    };
 
                 ui.label("Normal:");
-                UiState::model_value_edit("turret normal", &mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
+                model_value_widget!(format!("{} normal", current_tree_selection), ui, false, norm, normal_string);
 
                 ui.separator();
                 ui.add(Label::new(RichText::new("Turret Fire Points").text_style(TextStyle::Button)));
                 ui.separator();
 
                 let point_idx_response =
-                    UiState::list_manipulator_widget(ui, point_num, turret_num.map(|num| self.model.turrets[num].fire_points.len()), "Fire Point");
+                    UiState::list_manipulator_widget(ui, point_num, turret_num.map(|num| &self.model.turrets[num].fire_points), "Fire Point");
 
                 ui.add_space(10.0);
 
-                let pos = if let TreeValue::Turrets(TurretTreeValue::TurretPoint(turret, point)) = self.ui_state.tree_view_selection {
-                    Some(&mut self.model.turrets[turret].fire_points[point])
+                let pos = if let TreeValue::Turrets(TurretTreeValue::TurretPoint(turret, point)) = current_tree_selection {
+                    Some(path_func(move |model| &mut model.turrets[turret].fire_points[point]))
                 } else {
                     None
                 };
 
                 ui.label("Position:");
-                UiState::model_value_edit("turret position", &mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
+                model_value_widget!(format!("{} position", current_tree_selection), ui, false, pos, position_string);
 
-                if let Some(response) = turret_idx_response {
+                if let Some(mut response) = turret_idx_response {
                     let new_idx = response.get_new_ui_idx(&self.model.turrets);
 
-                    undo_history
-                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::Turrets(response)))
-                        .unwrap();
-
-                    self.model.recheck_errors(All); // FIX
-                    self.model.recheck_warnings(All); // FIX
+                    if response.undoable() {
+                        model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model: &mut Model| {
+                                response.apply(&mut model.turrets);
+                            }),
+                        );
+                    } else {
+                        response.apply(&mut self.model.turrets);
+                    }
 
                     select_new_tree_val!(TreeValue::Turrets(TurretTreeValue::turret(new_idx)));
-                } else if let Some(response) = point_idx_response {
+                } else if let Some(mut response) = point_idx_response {
                     let new_idx = response.get_new_ui_idx(&self.model.turrets[turret_num.unwrap()].fire_points);
 
-                    undo_history
-                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::TurretPoints(turret_num.unwrap(), response)))
-                        .unwrap();
-
-                    self.model.recheck_errors(All); // FIX
-                    self.model.recheck_warnings(All); // FIX
+                    if response.undoable() {
+                        model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model: &mut Model| {
+                                response.apply(&mut model.turrets[turret_num.unwrap()].fire_points);
+                            }),
+                        );
+                    } else {
+                        response.apply(&mut self.model.turrets[turret_num.unwrap()].fire_points);
+                    }
 
                     select_new_tree_val!(TreeValue::Turrets(TurretTreeValue::turret_point(turret_num.unwrap(), new_idx)));
                 }
             }
-            PropertiesPanel::Path { name, parent_string, position_string, radius_string } => {
+            PropertiesPanel::Path { name_string, parent_string, position_string, radius_string } => {
                 ui.heading("Path");
                 ui.separator();
 
-                let (path_num, point_num) = match self.ui_state.tree_view_selection {
+                let (path_num, point_num) = match current_tree_selection {
                     TreeValue::Paths(PathTreeValue::Path(path)) => (Some(path), None),
                     TreeValue::Paths(PathTreeValue::PathPoint(path, point)) => (Some(path), Some(point)),
                     _ => (None, None),
                 };
 
-                let path_idx_response = UiState::list_manipulator_widget(ui, path_num, Some(self.model.paths.len()), "Bank");
+                let path_idx_response = UiState::list_manipulator_widget(ui, path_num, Some(&self.model.paths), "Path");
 
                 ui.add_space(10.0);
+
+                let (name, parent) = match current_tree_selection {
+                    TreeValue::Paths(PathTreeValue::PathPoint(path, _)) | TreeValue::Paths(PathTreeValue::Path(path)) => {
+                        (Some(path_func(move |model| &mut model.paths[path].name)), Some(path_func(move |model| &mut model.paths[path].parent)))
+                    }
+                    _ => (None, None),
+                };
 
                 ui.label("Name:");
                 if let Some(num) = path_num {
                     let old_name = self.model.paths[num].name.clone();
-                    if ui
-                        .add(egui::TextEdit::multiline(&mut self.model.paths[num].name).desired_rows(1))
-                        .changed()
-                    {
+                    let warnings = self.model.warnings.contains(&Warning::DuplicatePathName(old_name.clone()))
+                        || self.model.warnings.contains(&Warning::PathNameTooLong(num));
+
+                    if model_value_widget!(format!("{} name", current_tree_selection), ui, warnings, name, name_string).changed() {
                         self.model.recheck_warnings(One(Warning::DuplicatePathName(old_name)));
-                        self.model
-                            .pof_model
-                            .recheck_warnings(One(Warning::DuplicatePathName(self.model.pof_model.paths[num].name.clone())));
+                        let new_name = self.model.pof_model.paths[num].name.clone();
+                        self.model.recheck_warnings(One(Warning::DuplicatePathName(new_name)));
                         self.model.recheck_warnings(One(Warning::PathNameTooLong(num)));
-                    };
+                    }
                 } else {
-                    ui.add_enabled(false, egui::TextEdit::multiline(name).desired_rows(1));
+                    ui.add_enabled(false, egui::TextEdit::multiline(name_string).desired_rows(1));
                 }
 
                 ui.label("Parent:");
-                if let Some(num) = path_num {
-                    ui.add(egui::TextEdit::multiline(&mut self.model.paths[num].parent).desired_rows(1))
-                        .changed();
-                } else {
-                    ui.add_enabled(false, egui::TextEdit::multiline(parent_string).desired_rows(1));
-                }
+                model_value_widget!(format!("{} parent", current_tree_selection), ui, false, parent, parent_string);
 
                 ui.separator();
 
-                let point_idx_response =
-                    UiState::list_manipulator_widget(ui, point_num, path_num.map(|num| self.model.paths[num].points.len()), "Point");
+                let point_idx_response = UiState::list_manipulator_widget(ui, point_num, path_num.map(|num| &self.model.paths[num].points), "Point");
 
                 ui.add_space(10.0);
 
-                let (radius, pos) = if let TreeValue::Paths(PathTreeValue::PathPoint(path, point)) = self.ui_state.tree_view_selection {
-                    let PathPoint { position, radius, .. } = &mut self.model.paths[path].points[point];
-                    (Some(radius), Some(position))
+                let (radius, pos) = if let TreeValue::Paths(PathTreeValue::PathPoint(path, point)) = current_tree_selection {
+                    (
+                        Some(path_func(move |model| &mut model.paths[path].points[point].radius)),
+                        Some(path_func(move |model| &mut model.paths[path].points[point].position)),
+                    )
                 } else {
                     (None, None)
                 };
 
                 ui.label("Radius:");
-                UiState::model_value_edit("path radius", &mut self.ui_state.viewport_3d_dirty, ui, false, radius, radius_string);
+                model_value_widget!(format!("{} radius", current_tree_selection), ui, false, radius, radius_string);
                 ui.label("Position:");
-                UiState::model_value_edit("path position", &mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
+                model_value_widget!(format!("{} position", current_tree_selection), ui, false, pos, position_string);
 
-                if let Some(response) = path_idx_response {
-                    if let IndexingButtonsResponse::Delete(idx) = response {
-                        self.model.path_removal_fixup(PathId(idx as u32));
-                    }
+                if let Some(mut response) = path_idx_response {
                     let new_idx = response.get_new_ui_idx(&self.model.paths);
 
-                    undo_history
-                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::Paths(response)))
-                        .unwrap();
+                    if response.undoable() {
+                        // a path deletion or insertion requires any docking bays connected to that path be updated
+                        // as well as any other path references be re-indexed
+                        let mut relevant_dock_bays = vec![];
+                        let modified_path_id = if let IndexingButtonsResponse::Delete(idx) = response {
+                            PathId(idx as u32)
+                        } else {
+                            PathId(new_idx.unwrap() as u32)
+                        };
+
+                        if let IndexingButtonsResponse::Delete(_) = response {
+                            relevant_dock_bays = self
+                                .model
+                                .docking_bays
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(bay_idx, bay)| if bay.path == Some(modified_path_id) { Some(bay_idx) } else { None })
+                                .collect::<Vec<_>>();
+                        }
+
+                        model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model: &mut Model| {
+                                if let IndexingButtonsResponse::Delete(_) = response {
+                                    relevant_dock_bays = model
+                                        .docking_bays
+                                        .iter()
+                                        .enumerate()
+                                        .filter_map(|(bay_idx, bay)| if bay.path == Some(modified_path_id) { Some(bay_idx) } else { None })
+                                        .collect::<Vec<_>>();
+
+                                    model.path_removal_fixup(modified_path_id);
+                                    for bay_idx in &relevant_dock_bays {
+                                        model.docking_bays[*bay_idx].path = None;
+                                    }
+                                } else if let IndexingButtonsResponse::Insert(idx, _) = response {
+                                    model.path_insertion_fixup(idx);
+                                    for bay_idx in &relevant_dock_bays {
+                                        model.docking_bays[*bay_idx].path = Some(PathId(idx as u32));
+                                    }
+                                }
+                                response.apply(&mut model.paths);
+                            }),
+                        );
+                    } else {
+                        response.apply(&mut self.model.paths);
+                    }
 
                     self.model.recheck_warnings(All); // FIX
 
                     select_new_tree_val!(TreeValue::Paths(PathTreeValue::path(new_idx)));
-                } else if let Some(response) = point_idx_response {
+                } else if let Some(mut response) = point_idx_response {
                     let new_idx = response.get_new_ui_idx(&self.model.paths[path_num.unwrap()].points);
 
-                    undo_history
-                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::PathPoints(path_num.unwrap(), response)))
-                        .unwrap();
+                    if response.undoable() {
+                        model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model: &mut Model| {
+                                response.apply(&mut model.paths[path_num.unwrap()].points);
+                            }),
+                        );
+                    } else {
+                        response.apply(&mut self.model.paths[path_num.unwrap()].points);
+                    }
 
                     select_new_tree_val!(TreeValue::Paths(PathTreeValue::path_point(path_num.unwrap(), new_idx)));
                 }
@@ -2627,30 +3207,32 @@ impl PofToolsGui {
 
                 ui.add_space(10.0);
 
-                let (lod, offset) = if let TreeValue::Insignia(InsigniaTreeValue::Insignia(idx)) = self.ui_state.tree_view_selection {
-                    let Insignia { detail_level, offset, .. } = &mut self.model.insignias[idx];
-                    (Some(detail_level), Some(offset))
+                let (lod, offset) = if let TreeValue::Insignia(InsigniaTreeValue::Insignia(idx)) = current_tree_selection {
+                    (
+                        Some(path_func(move |model| &mut model.insignias[idx].detail_level)),
+                        Some(path_func(move |model| &mut model.insignias[idx].offset)),
+                    )
                 } else {
                     (None, None)
                 };
 
                 ui.label("Detail Level:");
-                UiState::model_value_edit("insignia lod", &mut self.ui_state.viewport_3d_dirty, ui, false, lod, lod_string);
+                model_value_widget!(format!("{} detail level", current_tree_selection), ui, false, lod, lod_string);
                 ui.label("Offset:");
-                UiState::model_value_edit("insignia offset", &mut self.ui_state.viewport_3d_dirty, ui, false, offset, offset_string);
+                model_value_widget!(format!("{} offset", current_tree_selection), ui, false, offset, offset_string);
             }
             PropertiesPanel::EyePoint { position_string, normal_string, attached_subobj_idx } => {
                 ui.heading("Eye Point");
                 ui.separator();
 
-                let eye_num = match self.ui_state.tree_view_selection {
+                let eye_num = match current_tree_selection {
                     TreeValue::EyePoints(EyeTreeValue::EyePoint(point)) => Some(point),
                     _ => None,
                 };
 
                 // no subobjects = no eye points allowed
-                let eye_points_len_opt = (!self.model.sub_objects.is_empty()).then(|| self.model.eye_points.len());
-                let eye_idx_response = UiState::list_manipulator_widget(ui, eye_num, eye_points_len_opt, "Eye Point");
+                let eye_points_opt = (!self.model.sub_objects.is_empty()).then(|| &self.model.eye_points);
+                let eye_idx_response = UiState::list_manipulator_widget(ui, eye_num, eye_points_opt, "Eye Point");
 
                 ui.add_space(10.0);
 
@@ -2661,11 +3243,20 @@ impl PofToolsGui {
                             name_list.push("None".to_string());
                         }
 
-                        egui::ComboBox::from_label("Attached submodel")
-                            .show_index(ui, attached_subobj_idx, name_list.len(), |i| name_list[i].to_owned());
+                        let changed = egui::ComboBox::from_label("Attached submodel")
+                            .show_index(ui, attached_subobj_idx, name_list.len(), |i| name_list[i].to_owned())
+                            .changed();
 
-                        if *attached_subobj_idx < self.model.sub_objects.len() {
-                            self.model.eye_points[num].attached_subobj = Some(ObjectId(*attached_subobj_idx as u32));
+                        if changed && *attached_subobj_idx < self.model.sub_objects.len() {
+                            let mut new_val = Some(ObjectId(*attached_subobj_idx as u32));
+                            model_action(
+                                undo_history,
+                                &mut self.model,
+                                undo_func(move |model: &mut Model| {
+                                    let val = &mut model.eye_points[num].attached_subobj;
+                                    swap(&mut new_val, val);
+                                }),
+                            );
                         }
                     } else {
                         egui::ComboBox::from_label("Attached submodel").show_index(ui, attached_subobj_idx, 1, |_| format!(""));
@@ -2676,25 +3267,33 @@ impl PofToolsGui {
 
                 ui.add_space(10.0);
 
-                let (pos, norm) = if let TreeValue::EyePoints(EyeTreeValue::EyePoint(point)) = self.ui_state.tree_view_selection {
-                    let EyePoint { position, normal, .. } = &mut self.model.eye_points[point];
-                    (Some(position), Some(normal))
+                let (pos, norm) = if let TreeValue::EyePoints(EyeTreeValue::EyePoint(point)) = current_tree_selection {
+                    (
+                        Some(path_func(move |model| &mut model.eye_points[point].position)),
+                        Some(path_func(move |model| &mut model.eye_points[point].normal)),
+                    )
                 } else {
                     (None, None)
                 };
                 ui.label("Position:");
-                UiState::model_value_edit("eye position", &mut self.ui_state.viewport_3d_dirty, ui, false, pos, position_string);
+                model_value_widget!(format!("{} position", current_tree_selection), ui, false, pos, position_string);
                 ui.label("Normal:");
-                UiState::model_value_edit("eye normal", &mut self.ui_state.viewport_3d_dirty, ui, false, norm, normal_string);
+                model_value_widget!(format!("{} normal", current_tree_selection), ui, false, norm, normal_string);
 
-                if let Some(response) = eye_idx_response {
+                if let Some(mut response) = eye_idx_response {
                     let new_idx = response.get_new_ui_idx(&self.model.eye_points);
 
-                    undo_history
-                        .apply(&mut self.model, UndoAction::IxBAction(IndexingButtonsAction::EyePoints(response)))
-                        .unwrap();
-
-                    self.model.recheck_warnings(All); //FIX
+                    if response.undoable() {
+                        model_action(
+                            undo_history,
+                            &mut self.model,
+                            undo_func(move |model: &mut Model| {
+                                response.apply(&mut model.eye_points);
+                            }),
+                        );
+                    } else {
+                        response.apply(&mut self.model.eye_points);
+                    }
 
                     select_new_tree_val!(TreeValue::EyePoints(EyeTreeValue::point(new_idx)));
                 }
@@ -2705,13 +3304,12 @@ impl PofToolsGui {
 
                 ui.label("The visual center is treated as the center for things like the targeting box, or tech room.");
 
-                UiState::model_value_edit(
-                    "viscenter position",
-                    &mut self.ui_state.viewport_3d_dirty,
+                model_value_widget!(
+                    format!("{} position", current_tree_selection),
                     ui,
                     false,
-                    Some(&mut self.model.visual_center),
-                    position,
+                    Some(path_func(move |model| &mut model.visual_center)),
+                    position
                 );
 
                 ui.add_space(5.0);
@@ -2721,15 +3319,32 @@ impl PofToolsGui {
                     .on_hover_text("Chooses the average position of its surface area")
                     .clicked()
                 {
-                    let (_, center) = self.model.surface_area_average_pos();
-                    self.model.visual_center = center;
-                    self.ui_state.properties_panel_dirty = true;
+                    let (_, mut new_center) = self.model.surface_area_average_pos();
+                    model_action(
+                        undo_history,
+                        &mut self.model,
+                        undo_func(move |model: &mut Model| {
+                            let val = &mut model.visual_center;
+                            info!("Recalculating: VisualCenter position");
+                            swap(&mut new_center, val);
+                        }),
+                    );
                 }
             }
             PropertiesPanel::Comments => {
                 ui.heading("Comments");
                 ui.separator();
-                ui.text_edit_multiline(&mut self.model.comments);
+                text_edit_multi(
+                    ui,
+                    format!(
+                        "Model
+                        Comments"
+                    ),
+                    3,
+                    &mut self.model,
+                    path_func(move |model| &mut model.comments),
+                    undo_history,
+                );
             }
         }
 
@@ -2753,9 +3368,14 @@ impl PofToolsGui {
                 *(new_map.get_mut(&id1).unwrap()) = id2;
             }
 
-            undo_history
-                .apply(&mut self.model, UndoAction::ChangeTextures { id_map: new_map, textures: new_textures })
-                .unwrap();
+            model_action(
+                undo_history,
+                &mut self.model,
+                undo_func(move |model: &mut Model| {
+                    swap(&mut new_map, &mut model.texture_map);
+                    swap(&mut new_textures, &mut model.textures);
+                }),
+            );
 
             self.ui_state.properties_panel_dirty = true;
         }

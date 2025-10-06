@@ -5,8 +5,8 @@ use glium::{
     Display,
 };
 use pof::{
-    properties_get_field, Dock, Error, EyePoint, GlowPoint, GlowPointBank, NormalVec3, Path, PathPoint, SpecialPoint, SubObject, TextureId,
-    ThrusterBank, ThrusterGlow, Turret, Vec3d, Version, Warning, WeaponHardpoint,
+    properties_get_field, Dock, Error, EyePoint, GlowPoint, GlowPointBank, NormalVec3, ObjVec, Path, PathPoint, Set, SpecialPoint, SubObject,
+    TextureId, ThrusterBank, ThrusterGlow, Turret, Vec3d, Version, Warning, WeaponHardpoint,
 };
 use std::{
     collections::HashMap,
@@ -46,21 +46,21 @@ pub enum TreeValue {
 impl std::fmt::Display for TreeValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TreeValue::Header => write!(f, "Treeview - Header"),
-            TreeValue::SubObjects(selection) => write!(f, "Treeview - Subobjects - {}", selection),
-            TreeValue::Textures(selection) => write!(f, "Treeview - Textures - {}", selection),
-            TreeValue::Weapons(selection) => write!(f, "Treeview - Weapons - {}", selection),
-            TreeValue::DockingBays(selection) => write!(f, "Treeview - DockingBays - {}", selection),
-            TreeValue::Thrusters(selection) => write!(f, "Treeview - Thrusters - {}", selection),
-            TreeValue::Glows(selection) => write!(f, "Treeview - Glows - {}", selection),
-            TreeValue::SpecialPoints(selection) => write!(f, "Treeview - SpecialPoints - {}", selection),
-            TreeValue::Turrets(selection) => write!(f, "Treeview - Turrets - {}", selection),
-            TreeValue::Paths(selection) => write!(f, "Treeview - Paths - {}", selection),
-            TreeValue::Shield => write!(f, "Treeview - Shield"),
-            TreeValue::EyePoints(selection) => write!(f, "Treeview - EyePoints - {}", selection),
-            TreeValue::Insignia(selection) => write!(f, "Treeview - Insignia - {}", selection),
-            TreeValue::VisualCenter => write!(f, "Treeview - VisualCenter"),
-            TreeValue::Comments => write!(f, "Treeview - Comments"),
+            TreeValue::Header => write!(f, "Header"),
+            TreeValue::SubObjects(selection) => write!(f, "Subobjects - {}", selection),
+            TreeValue::Textures(selection) => write!(f, "Textures - {}", selection),
+            TreeValue::Weapons(selection) => write!(f, "Weapons - {}", selection),
+            TreeValue::DockingBays(selection) => write!(f, "DockingBays - {}", selection),
+            TreeValue::Thrusters(selection) => write!(f, "Thrusters - {}", selection),
+            TreeValue::Glows(selection) => write!(f, "Glows - {}", selection),
+            TreeValue::SpecialPoints(selection) => write!(f, "SpecialPoints - {}", selection),
+            TreeValue::Turrets(selection) => write!(f, "Turrets - {}", selection),
+            TreeValue::Paths(selection) => write!(f, "Paths - {}", selection),
+            TreeValue::Shield => write!(f, "Shield"),
+            TreeValue::EyePoints(selection) => write!(f, "EyePoints - {}", selection),
+            TreeValue::Insignia(selection) => write!(f, "Insignia - {}", selection),
+            TreeValue::VisualCenter => write!(f, "VisualCenter"),
+            TreeValue::Comments => write!(f, "Comments"),
         }
     }
 }
@@ -405,6 +405,13 @@ impl WeaponTreeValue {
             (false, None) => Self::SecHeader,
         }
     }
+    pub fn current_weapons_vec(self, model: &mut Model) -> Option<&mut Vec<Vec<WeaponHardpoint>>> {
+        match self {
+            WeaponTreeValue::PriBank(_) | WeaponTreeValue::PriBankPoint(..) => Some(&mut model.primary_weps),
+            WeaponTreeValue::SecBank(_) | WeaponTreeValue::SecBankPoint(..) => Some(&mut model.secondary_weps),
+            _ => None,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
@@ -572,6 +579,7 @@ impl PofToolsGui {
             model: Box::new(Model {
                 pof_model: pof::Model::default(),
                 texture_map: HashMap::new(),
+                subobject_transform_matrix: ObjVec::default(),
             }),
             model_loading_thread: Default::default(),
             texture_loading_thread: Default::default(),
@@ -695,7 +703,7 @@ impl UiState {
             self.refresh_properties_panel(model);
             self.viewport_3d_dirty = true;
 
-            info!("Switched to {}", self.tree_view_selection);
+            info!("Switched to Treeview - {}", self.tree_view_selection);
 
             // maybe update ast selected object
             if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = self.tree_view_selection {
@@ -728,7 +736,7 @@ impl UiState {
                     self.refresh_properties_panel(model);
                     self.viewport_3d_dirty = true;
 
-                    info!("Switched to {}", self.tree_view_selection);
+                    info!("Switched to Treeview - {}", self.tree_view_selection);
 
                     // maybe update last selected object
                     if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = self.tree_view_selection {
@@ -751,38 +759,8 @@ impl UiState {
     }
 }
 
-pub enum IndexingButtonsAction {
-    PrimaryBanks(IndexingButtonsResponse<Vec<WeaponHardpoint>>),
-    PrimaryBankPoints(usize, IndexingButtonsResponse<WeaponHardpoint>),
-    SecondaryBanks(IndexingButtonsResponse<Vec<WeaponHardpoint>>),
-    SecondaryBankPoints(usize, IndexingButtonsResponse<WeaponHardpoint>),
-    DockingBays(IndexingButtonsResponse<Dock>),
-    ThrusterBanks(IndexingButtonsResponse<ThrusterBank>),
-    ThrusterBankPoints(usize, IndexingButtonsResponse<ThrusterGlow>),
-    GlowBanks(IndexingButtonsResponse<GlowPointBank>),
-    GlowBankPoints(usize, IndexingButtonsResponse<GlowPoint>),
-    SpecialPoints(IndexingButtonsResponse<SpecialPoint>),
-    Turrets(IndexingButtonsResponse<Turret>),
-    TurretPoints(usize, IndexingButtonsResponse<Vec3d>),
-    Paths(IndexingButtonsResponse<Path>),
-    PathPoints(usize, IndexingButtonsResponse<PathPoint>),
-    EyePoints(IndexingButtonsResponse<EyePoint>),
-}
-
-pub enum UndoAction {
-    MoveLollipop {
-        tree_val: TreeValue,
-        delta_vec: Vec3d,
-    },
-    RotateLollipop {
-        tree_val: TreeValue,
-        dir_vec: NormalVec3,
-    },
-    IxBAction(IndexingButtonsAction),
-    ChangeTextures {
-        id_map: HashMap<TextureId, TextureId>,
-        textures: Vec<String>,
-    },
+pub struct UndoAction {
+    pub function: Box<dyn FnMut(&mut Model)>,
 }
 
 impl undo::Action for UndoAction {
@@ -791,79 +769,26 @@ impl undo::Action for UndoAction {
     type Error = &'static str;
 
     fn apply(&mut self, target: &mut Model) -> undo::Result<UndoAction> {
-        match self {
-            UndoAction::ChangeTextures { id_map, textures } => {
-                std::mem::swap(&mut target.texture_map, id_map);
-                std::mem::swap(&mut target.textures, textures);
-                Ok(())
-            }
-            UndoAction::MoveLollipop { tree_val, delta_vec } => {
-                let pos_ref = tree_val.get_position_ref(target);
-                if let Some(pos_ref) = pos_ref {
-                    *pos_ref += *delta_vec;
-                    *delta_vec = -*delta_vec;
-                    Ok(())
-                } else {
-                    Err("No position ref for tree_val")
-                }
-            }
-            UndoAction::RotateLollipop { tree_val, dir_vec } => {
-                let vec_ref = tree_val.get_direction_ref(target);
-                if let Some(vec) = vec_ref {
-                    *vec = *dir_vec;
-                    Ok(())
-                } else {
-                    Err("No position ref for tree_val")
-                }
-            }
-            UndoAction::IxBAction(action) => {
-                use IndexingButtonsAction::*;
-                match action {
-                    SpecialPoints(response) => response.apply(&mut target.special_points),
-                    PrimaryBanks(response) => response.apply(&mut target.primary_weps),
-                    PrimaryBankPoints(idx, response) => response.apply(&mut target.primary_weps[*idx]),
-                    SecondaryBanks(response) => response.apply(&mut target.secondary_weps),
-                    SecondaryBankPoints(idx, response) => response.apply(&mut target.secondary_weps[*idx]),
-                    DockingBays(response) => response.apply(&mut target.docking_bays),
-                    ThrusterBanks(response) => response.apply(&mut target.thruster_banks),
-                    ThrusterBankPoints(idx, response) => response.apply(&mut target.thruster_banks[*idx].glows),
-                    GlowBanks(response) => response.apply(&mut target.glow_banks),
-                    GlowBankPoints(idx, response) => response.apply(&mut target.glow_banks[*idx].glow_points),
-                    Turrets(response) => response.apply(&mut target.turrets),
-                    TurretPoints(idx, response) => response.apply(&mut target.turrets[*idx].fire_points),
-                    Paths(response) => response.apply(&mut target.paths),
-                    PathPoints(idx, response) => response.apply(&mut target.paths[*idx].points),
-                    EyePoints(response) => response.apply(&mut target.eye_points),
-                };
-
-                Ok(())
-            }
-        }
+        (self.function)(target);
+        Ok(())
     }
 
     fn undo(&mut self, target: &mut Model) -> undo::Result<UndoAction> {
         self.apply(target)
     }
 
-    fn merge(&mut self, other: &mut Self) -> undo::Merged
+    fn merge(&mut self, _: &mut Self) -> undo::Merged
     where
         Self: Sized,
     {
-        match (self, other) {
-            (
-                UndoAction::MoveLollipop { tree_val: tree_val1, delta_vec: vec1 },
-                UndoAction::MoveLollipop { tree_val: tree_val2, delta_vec: vec2 },
-            ) if tree_val1 == tree_val2 => {
-                *vec1 += *vec2;
-                undo::Merged::Yes
-            }
-            (
-                UndoAction::RotateLollipop { tree_val: tree_val1, dir_vec: vec1 },
-                UndoAction::RotateLollipop { tree_val: tree_val2, dir_vec: vec2 },
-            ) if tree_val1 == tree_val2 => undo::Merged::Yes,
-            _ => undo::Merged::No,
-        }
+        undo::Merged::No
     }
+}
+
+pub fn model_action(undo_history: &mut undo::History<UndoAction>, model: &mut Model, func: Box<dyn FnMut(&mut Model)>) {
+    let _ = undo_history.apply(model, UndoAction { function: func });
+    model.recheck_warnings(Set::All);
+    model.recheck_errors(Set::All);
 }
 
 impl PofToolsGui {
@@ -1039,7 +964,10 @@ impl PofToolsGui {
                     .clicked()
                 {
                     undo_history.undo(&mut *self.model);
+                    self.model.recheck_warnings(Set::All);
+                    self.model.recheck_errors(Set::All);
                     self.sanitize_ui_state();
+                    self.ui_state.refresh_properties_panel(&self.model);
                 }
 
                 if ui
@@ -1048,7 +976,10 @@ impl PofToolsGui {
                     .clicked()
                 {
                     undo_history.redo(&mut *self.model);
+                    self.model.recheck_warnings(Set::All);
+                    self.model.recheck_errors(Set::All);
                     self.sanitize_ui_state();
+                    self.ui_state.refresh_properties_panel(&self.model);
                 }
 
                 ui.separator();
@@ -1455,12 +1386,8 @@ impl PofToolsGui {
                     self.ui_state
                         .tree_collapsing_item(&self.model, ui, &name, TreeValue::Textures(TextureTreeValue::Header), |ui_state, ui| {
                             for (i, tex) in self.model.textures.iter().enumerate() {
-                                ui_state.tree_selectable_item(
-                                    &self.model,
-                                    ui,
-                                    tex,
-                                    TreeValue::Textures(TextureTreeValue::Texture(TextureId(i as u32))),
-                                );
+                                let id = TextureId(i as u32);
+                                ui_state.tree_selectable_item(&self.model, ui, tex, TreeValue::Textures(TextureTreeValue::Texture(id)));
                             }
                         });
 

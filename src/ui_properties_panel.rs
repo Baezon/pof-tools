@@ -1424,10 +1424,10 @@ impl PofToolsGui {
 
                 let num_debris = self.model.num_debris_objects();
                 let cannot_be_debris =
-                    num_debris >= pof::MAX_DEBRIS_OBJECTS || selected_id.map_or(false, |id| self.model.header.detail_levels.contains(&id));
+                    num_debris >= pof::MAX_DEBRIS_OBJECTS || selected_id.is_some_and(|id| self.model.header.detail_levels.contains(&id));
 
-                ui.add_enabled_ui(selected_id.map_or(false, |id| !cannot_be_debris || self.model.sub_objects[id].is_debris_model), |ui| {
-                    if selected_id.map_or(false, |id| {
+                ui.add_enabled_ui(selected_id.is_some_and(|id| !cannot_be_debris || self.model.sub_objects[id].is_debris_model), |ui| {
+                    if selected_id.is_some_and(|id| {
                         self.model.sub_objects[id].is_debris_model
                             && (self.model.header.detail_levels.contains(&id) || num_debris > pof::MAX_DEBRIS_OBJECTS)
                     }) {
@@ -1436,11 +1436,11 @@ impl PofToolsGui {
 
                     let mut checkbox = ui.checkbox(is_debris_check, "Debris Subobject");
 
-                    if selected_id.map_or(false, |_| num_debris >= pof::MAX_DEBRIS_OBJECTS) {
+                    if selected_id.is_some_and(|_| num_debris >= pof::MAX_DEBRIS_OBJECTS) {
                         checkbox = checkbox.on_disabled_hover_text(format!("The maximum number of debris is {}", pof::MAX_DEBRIS_OBJECTS));
                     }
 
-                    if selected_id.map_or(false, |id| self.model.header.detail_levels.contains(&id)) {
+                    if selected_id.is_some_and(|id| self.model.header.detail_levels.contains(&id)) {
                         checkbox = checkbox.on_disabled_hover_text(format!("A detail object cannot also be debris"));
                     }
 
@@ -1545,7 +1545,7 @@ impl PofToolsGui {
                         self.always_show_offset = !self.always_show_offset;
                     }
 
-                    if self.model.header.detail_levels.first().map_or(false, |id| selected_id == Some(*id))
+                    if self.model.header.detail_levels.first().is_some_and(|id| selected_id == Some(*id))
                         && self.model.warnings.contains(&Warning::Detail0NonZeroOffset)
                     {
                         ui.visuals_mut().override_text_color = Some(WARNING_YELLOW);
@@ -1856,7 +1856,7 @@ impl PofToolsGui {
                     });
 
                     ui.vertical(|ui| {
-                        if selected_id.map_or(false, |id| self.model.warnings.contains(&Warning::SubObjectTranslationInvalidVersion(id))) {
+                        if selected_id.is_some_and(|id| self.model.warnings.contains(&Warning::SubObjectTranslationInvalidVersion(id))) {
                             UiState::set_widget_color(ui, WARNING_YELLOW);
                             ui.label("Translation Axis:");
                             UiState::reset_widget_color(ui);
@@ -2060,7 +2060,7 @@ impl PofToolsGui {
                 if self
                     .model
                     .untextured_idx
-                    .map_or(false, |idx| TreeValue::Textures(TextureTreeValue::Texture(idx)) == current_tree_selection)
+                    .is_some_and(|idx| TreeValue::Textures(TextureTreeValue::Texture(idx)) == current_tree_selection)
                 {
                     ui.label("If this is intentional, you may prefer \"invisible\", which FSO will ignore.");
                 }
@@ -2406,7 +2406,7 @@ impl PofToolsGui {
                 let mut subobj_names_list = vec!["None".to_string()];
 
                 let mut warning_idx = None;
-                if bay_num.map_or(false, |idx| self.model.warnings.contains(&Warning::InvalidDockParentSubmodel(idx))) {
+                if bay_num.is_some_and(|idx| self.model.warnings.contains(&Warning::InvalidDockParentSubmodel(idx))) {
                     // this bay has an invalid parent object, so add whatever its name is to the list
                     subobj_names_list.push(
                         pof::properties_get_field(&self.model.docking_bays[bay_num.unwrap()].properties, "$parent_submodel")

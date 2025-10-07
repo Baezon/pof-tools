@@ -316,7 +316,7 @@ impl UiState {
                                 if let TreeValue::Thrusters(ThrusterTreeValue::Bank(idx)) = tree_val {
                                     let import_model = &import_model.as_ref().unwrap();
                                     if let Some(subsys_name) = import_model.thruster_banks[*idx].get_engine_subsys() {
-                                        let mut found_a_match = import_model.get_obj_id_by_name(subsys_name).map_or(false, |id| {
+                                        let mut found_a_match = import_model.get_obj_id_by_name(subsys_name).is_some_and(|id| {
                                             !self
                                                 .import_window
                                                 .import_selection
@@ -1159,7 +1159,7 @@ impl PofToolsGui {
                     if let Some(parent_name) = dock.get_parent_obj() {
                         if import_model
                             .get_obj_id_by_name(parent_name)
-                            .map_or(true, |id| !obj_id_map.contains_key(&id))
+                            .is_some_and(|id| !obj_id_map.contains_key(&id))
                         {
                             // parent submodel was not imported, lose it
                             properties_delete_field(&mut dock.properties, "$parent_submodel");
@@ -1195,7 +1195,7 @@ impl PofToolsGui {
                     if let Some(subsys_name) = t_bank.get_engine_subsys() {
                         let mut found_a_match = import_model
                             .get_obj_id_by_name(subsys_name)
-                            .map_or(false, |id| !obj_id_map.contains_key(&id));
+                            .is_some_and(|id| !obj_id_map.contains_key(&id));
 
                         found_a_match |= import_model
                             .special_points

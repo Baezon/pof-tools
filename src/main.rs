@@ -685,7 +685,7 @@ fn main() {
             // maybe not great? but filters out a huge amount of unrelated shit
             let should_print = frame.symbols().iter().any(|symbol| match symbol.filename().and_then(|s| s.to_str()) {
                 Some(file) => file.contains("pof-tools"),
-                None => symbol.name().and_then(|name| name.as_str()).map_or(false, |name| name.contains("pof")),
+                None => symbol.name().and_then(|name| name.as_str()).is_some_and(|name| name.contains("pof")),
             });
             if should_print {
                 frames.push(frame.clone())
@@ -804,10 +804,10 @@ fn main() {
                     let mut mouse_in_3d_viewport = false;
                     egui.egui_ctx().input(|input| {
                         let mouse_pos = input.pointer.hover_pos();
-                        mouse_in_3d_viewport = mouse_pos.map_or(false, |hover_pos| rect.contains(hover_pos));
+                        mouse_in_3d_viewport = mouse_pos.is_some_and(|hover_pos| rect.contains(hover_pos));
                         if rect.is_positive() {
                             let last_click_pos = input.pointer.press_origin();
-                            let clicked_in_3d_viewport = last_click_pos.map_or(false, |hover_pos| rect.contains(hover_pos));
+                            let clicked_in_3d_viewport = last_click_pos.is_some_and(|hover_pos| rect.contains(hover_pos));
                             if clicked_in_3d_viewport {
                                 if !input.modifiers.shift && input.pointer.button_down(egui::PointerButton::Secondary) {
                                     pt_gui.camera_heading += input.pointer.delta().x * -0.01;
@@ -896,7 +896,7 @@ fn main() {
 
                         // only drag if they've sufficiently moved the mouse
                         if !pt_gui.actually_dragging
-                            && press_origin.map_or(false, |origin| hover_pos.map_or(false, |current_pos| current_pos.distance(origin) > 4.))
+                            && press_origin.is_some_and(|origin| hover_pos.is_some_and(|current_pos| current_pos.distance(origin) > 4.))
                         {
                             pt_gui.actually_dragging = true;
                         }
@@ -935,7 +935,7 @@ fn main() {
                                     DragAxis::XY => ((*vec + maybe_turret_offset).z - mouse_vec.0.z) / (mouse_vec.1.z - mouse_vec.0.z),
                                 };
 
-                                let in_3d_viewport = hover_pos.map_or(false, |hover_pos| availble_rect.contains(hover_pos));
+                                let in_3d_viewport = hover_pos.is_some_and(|hover_pos| availble_rect.contains(hover_pos));
                                 if mouse_pos.is_none() || !(-1.0..=1.0).contains(&t) || !primary_down || !in_3d_viewport {
                                     // awkward but this will immediately apply the action, even though its already been done (we just need to push it to the stack)
                                     // so filter out its first invocation

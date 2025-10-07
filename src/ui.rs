@@ -4,10 +4,7 @@ use glium::{
     texture::{RawImage2d, SrgbTexture2d},
     Display,
 };
-use pof::{
-    properties_get_field, Dock, Error, EyePoint, GlowPoint, GlowPointBank, NormalVec3, ObjVec, Path, PathPoint, Set, SpecialPoint, SubObject,
-    TextureId, ThrusterBank, ThrusterGlow, Turret, Vec3d, Version, Warning, WeaponHardpoint,
-};
+use pof::{properties_get_field, Error, NormalVec3, ObjVec, Set, SubObject, TextureId, Vec3d, Version, Warning, WeaponHardpoint};
 use std::{
     collections::HashMap,
     f32::consts::{FRAC_PI_2, PI},
@@ -20,9 +17,8 @@ use eframe::egui::{self, Button, TextStyle, Ui};
 use pof::ObjectId;
 
 use crate::{
-    ui_import::ImportWindow,
-    ui_properties_panel::{IndexingButtonsResponse, PropertiesPanel},
-    GlArrowhead, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers, Graphics, Model, POF_TOOLS_VERSION,
+    ui_import::ImportWindow, ui_properties_panel::PropertiesPanel, GlArrowhead, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers,
+    Graphics, Model, POF_TOOLS_VERSION,
 };
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, PartialOrd, Ord)]

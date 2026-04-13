@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display};
 use std::io::{self, Write};
@@ -2298,6 +2298,191 @@ impl Model {
                 }
             }
         }
+    }
+
+    /// Computes paths to auto-generate for all turrets, `$special=subsystem` subobjects,
+    /// `$special=subsystem` special points, and docking bays not already covered by an
+    /// existing path. Returns `(new_paths_to_append, dock_bay_assignments)`.
+    /// `dock_bay_assignments` is a list of `(bay_index, PathId)` where `PathId` is the index
+    /// in the combined (existing + new) paths list.
+    pub fn compute_auto_gen_paths(&self) -> (Vec<Path>, Vec<(usize, PathId)>) {
+        let mut new_paths: Vec<Path> = Vec::new();
+        let mut dock_assignments: Vec<(usize, PathId)> = Vec::new();
+
+        // Find the highest $pathNN number already in use
+        let mut max_path = 0u32;
+        for path in &self.paths {
+            let name = path.name.as_str();
+            let suffix = name.strip_prefix("$path").or_else(|| name.strip_prefix("$Path"));
+            if let Some(num_str) = suffix {
+                if let Ok(n) = num_str.parse::<u32>() {
+                    if n > max_path {
+                        max_path = n;
+                    }
+                }
+            }
+        }
+
+        // Build maps... object name to index
+        let mut sobj_name_to_turret_idx: HashMap<String, usize> = HashMap::new();
+        for (i, turret) in self.turrets.iter().enumerate() {
+            let base_name = self.sub_objects[turret.base_obj].name.clone();
+            sobj_name_to_turret_idx.insert(base_name, i);
+        }
+
+        let sobj_name_map: HashMap<String, usize> = self.sub_objects.iter().map(|s| (s.name.clone(), s.obj_id.0 as usize)).collect();
+
+        let spcl_name_map: HashMap<String, usize> = self.special_points.iter().enumerate().map(|(i, s)| (s.name.clone(), i)).collect();
+
+        // Track which objects already have paths (true = skip)
+        let mut turret_has_path = vec![false; self.turrets.len()];
+        let mut sobj_has_path = vec![false; self.sub_objects.len()];
+        let mut spcl_has_path = vec![false; self.special_points.len()];
+
+        // Skip non subsystem subobjects and special points, which is what PCS2 did
+        for (i, sobj) in self.sub_objects.iter().enumerate() {
+            if !sobj.properties.contains("$special=subsystem") {
+                sobj_has_path[i] = true;
+            }
+        }
+        for (i, spcl) in self.special_points.iter().enumerate() {
+            if !spcl.properties.contains("$special=subsystem") {
+                spcl_has_path[i] = true;
+            }
+        }
+
+        // Mark objects already covered by an existing path's parent field
+        for path in &self.paths {
+            let parent = &path.parent;
+            if let Some(&ti) = sobj_name_to_turret_idx.get(parent) {
+                turret_has_path[ti] = true;
+            }
+            if let Some(&si) = spcl_name_map.get(parent) {
+                spcl_has_path[si] = true;
+            }
+            if let Some(&oi) = sobj_name_map.get(parent) {
+                sobj_has_path[oi] = true;
+            }
+        }
+
+        // return next unique $pathNN name
+        let mut next_name = || {
+            max_path += 1;
+            format!("$path{:02}", max_path)
+        };
+
+        // --- Turrets ---
+        for (i, turret) in self.turrets.iter().enumerate() {
+            if turret_has_path[i] {
+                continue;
+            }
+            let base = &self.sub_objects[turret.base_obj];
+            let offset = self.get_total_subobj_offset(turret.base_obj);
+            let r = base.radius;
+            let r0 = (r * 30.0_f32).min(1000.0);
+            let r1 = (r * 2.0_f32).min(100.0);
+            let n = turret.normal.0;
+            new_paths.push(Path {
+                name: next_name(),
+                parent: base.name.clone(),
+                points: vec![
+                    PathPoint {
+                        position: offset + n * (r0 * 1.2),
+                        radius: r0,
+                        turrets: vec![],
+                    },
+                    PathPoint {
+                        position: offset + n * (r * 4.0),
+                        radius: r1,
+                        turrets: vec![],
+                    },
+                ],
+            });
+            // Mark the base_obj as covered so a subobject path is not also generated for it
+            sobj_has_path[turret.base_obj.0 as usize] = true;
+        }
+
+        // --- Subobjects ($special=subsystem only, not already covered by a turret path) ---
+        for sobj in self.sub_objects.iter() {
+            let idx = sobj.obj_id.0 as usize;
+            if sobj_has_path[idx] {
+                continue;
+            }
+            let offset = self.get_total_subobj_offset(sobj.obj_id);
+            let r = sobj.radius;
+            let r0 = (r * 30.0_f32).min(1000.0);
+            let r1 = (r * 2.0_f32).min(100.0);
+            let n = if offset.is_null() {
+                Vec3d::new(0.0, 1.0, 0.0)
+            } else {
+                offset.normalize()
+            };
+            new_paths.push(Path {
+                name: next_name(),
+                parent: sobj.name.clone(),
+                points: vec![
+                    PathPoint {
+                        position: offset + n * (r0 * 1.2),
+                        radius: r0,
+                        turrets: vec![],
+                    },
+                    PathPoint {
+                        position: offset + n * (r * 4.0),
+                        radius: r1,
+                        turrets: vec![],
+                    },
+                ],
+            });
+        }
+
+        // --- Special points ($special=subsystem only) ---
+        for (i, spcl) in self.special_points.iter().enumerate() {
+            if spcl_has_path[i] {
+                continue;
+            }
+            let pos = spcl.position;
+            let r = spcl.radius;
+            let r0 = (r * 6.0_f32).min(1000.0);
+            let r1 = (r * 0.3_f32).min(100.0);
+            let n = if pos.is_null() { Vec3d::new(0.0, 1.0, 0.0) } else { pos.normalize() };
+            new_paths.push(Path {
+                name: next_name(),
+                parent: spcl.name.clone(),
+                points: vec![
+                    PathPoint { position: pos + n * (r0 * 1.2), radius: r0, turrets: vec![] },
+                    PathPoint { position: pos + n * (r * 0.9), radius: r1, turrets: vec![] },
+                ],
+            });
+        }
+
+        // --- Docking bays (those without a path assigned) ---
+        for (bay_idx, dock) in self.docking_bays.iter().enumerate() {
+            if dock.path.is_some() {
+                continue;
+            }
+            let fvec = dock.fvec.0;
+            let pos = dock.position;
+            let path_id = PathId((self.paths.len() + new_paths.len()) as u32);
+            new_paths.push(Path {
+                name: next_name(),
+                // FSO format: $dock{XX}-{YY}, XX = bay index (1-based), YY = path slot within bay (1-based).
+                // We always generate one path per dock, so the slot is always 01.
+                parent: format!("$dock{:02}-01", bay_idx + 1),
+                points: vec![
+                    PathPoint {
+                        position: pos + fvec * 500.0,
+                        radius: 1000.0,
+                        turrets: vec![],
+                    },
+                    PathPoint { position: pos + fvec * 100.0, radius: 100.0, turrets: vec![] },
+                    PathPoint { position: pos + fvec * 15.0, radius: 10.0, turrets: vec![] },
+                    PathPoint { position: pos + fvec * 2.0, radius: 1.0, turrets: vec![] },
+                ],
+            });
+            dock_assignments.push((bay_idx, path_id));
+        }
+
+        (new_paths, dock_assignments)
     }
 
     pub fn get_valid_gun_subobjects_for_turret(&self, existing_obj: ObjectId, turret_obj: ObjectId) -> (Vec<ObjectId>, usize) {

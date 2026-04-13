@@ -556,6 +556,8 @@ pub(crate) struct PofToolsGui {
     pub buffer_insignias: Vec<GlBufferedInsignia>, // the insignias, similar to the above
     pub lollipops: Vec<GlLollipops>, // the current set of lollipops being being drawn, grouped by color, and recalculated with viewport_3d_dirty above
     pub arrowheads: Vec<GlArrowhead>, // The arrowheads to draw
+
+    pub auto_gen_paths_confirm: bool,
 }
 impl std::ops::Deref for PofToolsGui {
     type Target = UiState;
@@ -616,6 +618,7 @@ impl PofToolsGui {
             drag_axis: DragAxis::YZ,
             actually_dragging: false,
             graphics: Graphics::init(display),
+            auto_gen_paths_confirm: false,
         }
     }
 

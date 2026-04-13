@@ -3190,6 +3190,74 @@ impl PofToolsGui {
 
                     select_new_tree_val!(TreeValue::Paths(PathTreeValue::path_point(path_num.unwrap(), new_idx)));
                 }
+
+                // Auto-Gen Paths: generates approach paths for all turrets, subsystem subobjects,
+                // subsystem special points, and docking bays that don't already have paths.
+                // Ported from PCS2
+                ui.add_space(10.0);
+                ui.separator();
+                if ui.button("Auto-Gen Paths").clicked() {
+                    self.auto_gen_paths_confirm = true;
+                }
+
+                // Confirmation popup for autogen paths
+                if self.auto_gen_paths_confirm {
+                    let mut confirmed = false;
+                    egui::Window::new("Auto-Gen Paths")
+                        .collapsible(false)
+                        .resizable(false)
+                        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                        .show(ctx, |ui| {
+                            ui.label(
+                                "This will automatically add any missing paths for turrets, \
+                                subsystems, and docking bays. Generated paths are generic \
+                                approximations and should be reviewed and adjusted manually afterwards.",
+                            );
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                if ui.button("OK").clicked() {
+                                    confirmed = true;
+                                    self.auto_gen_paths_confirm = false;
+                                }
+                                if ui.button("Cancel").clicked() {
+                                    self.auto_gen_paths_confirm = false;
+                                }
+                            });
+                        });
+
+                    if confirmed {
+                        let (new_paths, dock_assignments) = self.model.compute_auto_gen_paths();
+                        if !new_paths.is_empty() || !dock_assignments.is_empty() {
+                            // Build the full "after" state for the swap based undo closure
+                            let mut post_paths = self.model.paths.clone();
+                            post_paths.extend(new_paths);
+                            let mut post_dock_refs: Vec<Option<PathId>> = self.model.docking_bays.iter().map(|d| d.path).collect();
+                            for &(bay_idx, path_id) in &dock_assignments {
+                                post_dock_refs[bay_idx] = Some(path_id);
+                            }
+
+                            // The swap closure is self inverting... each call toggles between
+                            // pre-auto-gen and post-auto-gen states, giving correct undo/redo.
+                            let mut saved_paths = post_paths;
+                            let mut saved_dock_refs = post_dock_refs;
+                            model_action(
+                                undo_history,
+                                &mut self.model,
+                                undo_func(move |model: &mut Model| {
+                                    swap(&mut model.paths, &mut saved_paths);
+                                    // saved_dock_refs was built from docking_bays at capture time;
+                                    // the lengths should match, but guard anyway in case another
+                                    // action added bays after this one was recorded.
+                                    for (i, bay) in model.docking_bays.iter_mut().enumerate() {
+                                        if i < saved_dock_refs.len() {
+                                            swap(&mut bay.path, &mut saved_dock_refs[i]);
+                                        }
+                                    }
+                                }),
+                            );
+                        }
+                    }
+                }
             }
             PropertiesPanel::Shield => {
                 ui.heading("Shield");

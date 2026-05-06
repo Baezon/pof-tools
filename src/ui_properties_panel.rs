@@ -1556,8 +1556,8 @@ impl PofToolsGui {
                                 });
 
                                 self.model.pof_model.docking_bays.retain_mut(|bay| {
-                                    pof::properties_get_field(&bay.properties, "$parent_submodel")
-                                        .is_none_or(|name| name != self.model.pof_model.sub_objects[deleted_id].name)
+                                    let str = pof::properties_get_field(&bay.properties, "$parent_submodel");
+                                    str.is_none() || str.unwrap() != self.model.pof_model.sub_objects[deleted_id].name
                                 });
 
                                 self.model

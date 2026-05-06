@@ -660,31 +660,6 @@ impl PofToolsGui {
             let _ = sender.send(None);
         });
     }
-
-    pub fn rebuild_subobj_buffers(&mut self, display: &Display<WindowSurface>, ids: Vec<ObjectId>) {
-        for id in ids {
-            self.model.buffer_objects[id] = GlObjectBuffers::new(display, &self.model.sub_objects[id], self.model.textures.len());
-        }
-    }
-
-    pub fn rebuild_all_subobj_buffers(&mut self, display: &Display<WindowSurface>) {
-        let ids = (0..self.model.sub_objects.len()).map(|idx| ObjectId(idx as u32)).collect();
-        self.rebuild_subobj_buffers(display, ids);
-    }
-
-    pub fn rebuild_all_insignia_buffers(&mut self, display: &Display<WindowSurface>) {
-        for (i, buffer) in self.buffer_insignias.iter_mut().enumerate() {
-            *buffer = GlBufferedInsignia::new(display, &self.model.insignias[i]);
-        }
-    }
-
-    pub fn rebuild_shield_buffer(&mut self, display: &Display<WindowSurface>) {
-        if let Some(shield) = &self.model.shield_data {
-            self.buffer_shield = Some(GlBufferedShield::new(display, shield));
-        } else {
-            self.buffer_shield = None;
-        }
-    }
 }
 
 /// same as `start_loading_model` but for the import model

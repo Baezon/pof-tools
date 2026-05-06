@@ -4,7 +4,7 @@ use glium::{
     texture::{RawImage2d, SrgbTexture2d},
     Display,
 };
-use pof::{properties_get_field, Error, NormalVec3, ObjVec, Set, SubObject, TextureId, Vec3d, Version, Warning, WeaponHardpoint};
+use pof::{properties_get_field, Error, ObjVec, Set, SubObject, TextureId, Vec3d, Version, Warning, WeaponHardpoint};
 use std::{
     collections::HashMap,
     f32::consts::{FRAC_PI_2, PI},
@@ -17,8 +17,8 @@ use eframe::egui::{self, Button, TextStyle, Ui};
 use pof::ObjectId;
 
 use crate::{
-    ui_import::ImportWindow, ui_properties_panel::PropertiesPanel, GlArrowhead, GlBufferedInsignia, GlBufferedShield, GlLollipops, GlObjectBuffers,
-    Graphics, Model, POF_TOOLS_VERSION,
+    ui_import::ImportWindow, ui_properties_panel::PropertiesPanel, GlArrowhead, GlBufferedInsignia, GlBufferedShield, GlLollipops, Graphics, Model,
+    POF_TOOLS_VERSION,
 };
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, PartialOrd, Ord)]
@@ -81,19 +81,19 @@ impl TreeValue {
             _ => None,
         }
     }
-    pub fn get_direction_ref<'a>(&self, model: &'a mut Model) -> Option<&'a mut NormalVec3> {
-        match *self {
-            TreeValue::Weapons(WeaponTreeValue::PriBankPoint(i, j)) => Some(&mut model.primary_weps[i][j].normal),
-            TreeValue::Weapons(WeaponTreeValue::SecBankPoint(i, j)) => Some(&mut model.secondary_weps[i][j].normal),
-            TreeValue::DockingBays(DockingTreeValue::Bay(i)) => Some(&mut model.docking_bays[i].fvec),
-            TreeValue::Thrusters(ThrusterTreeValue::BankPoint(i, j)) => Some(&mut model.thruster_banks[i].glows[j].normal),
-            // TreeValue::Glows(GlowTreeValue::BankPoint(i, j)) => Some(&mut model.glow_banks[i].glow_points[j].normal),
-            TreeValue::Turrets(TurretTreeValue::Turret(i)) => Some(&mut model.turrets[i].normal),
-            TreeValue::Turrets(TurretTreeValue::TurretPoint(i, _)) => Some(&mut model.turrets[i].normal),
-            TreeValue::EyePoints(EyeTreeValue::EyePoint(i)) => Some(&mut model.eye_points[i].normal),
-            _ => None,
-        }
-    }
+    // pub fn get_direction_ref<'a>(&self, model: &'a mut Model) -> Option<&'a mut NormalVec3> {
+    //     match *self {
+    //         TreeValue::Weapons(WeaponTreeValue::PriBankPoint(i, j)) => Some(&mut model.primary_weps[i][j].normal),
+    //         TreeValue::Weapons(WeaponTreeValue::SecBankPoint(i, j)) => Some(&mut model.secondary_weps[i][j].normal),
+    //         TreeValue::DockingBays(DockingTreeValue::Bay(i)) => Some(&mut model.docking_bays[i].fvec),
+    //         TreeValue::Thrusters(ThrusterTreeValue::BankPoint(i, j)) => Some(&mut model.thruster_banks[i].glows[j].normal),
+    //         // TreeValue::Glows(GlowTreeValue::BankPoint(i, j)) => Some(&mut model.glow_banks[i].glow_points[j].normal),
+    //         TreeValue::Turrets(TurretTreeValue::Turret(i)) => Some(&mut model.turrets[i].normal),
+    //         TreeValue::Turrets(TurretTreeValue::TurretPoint(i, _)) => Some(&mut model.turrets[i].normal),
+    //         TreeValue::EyePoints(EyeTreeValue::EyePoint(i)) => Some(&mut model.eye_points[i].normal),
+    //         _ => None,
+    //     }
+    // }
     // returns what, if any, tree_value best corresponds to a given error
     fn from_error(error: &Error) -> Option<TreeValue> {
         match error {
@@ -1013,7 +1013,7 @@ impl PofToolsGui {
                 }
             });
         });
-        let mut warnings = egui::TopBottomPanel::bottom("info bar")
+        egui::TopBottomPanel::bottom("info bar")
             .resizable(true)
             .default_height(22.0)
             .height_range(22.0..=500.0)

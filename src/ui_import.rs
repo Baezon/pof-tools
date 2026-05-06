@@ -10,10 +10,7 @@ use crate::{
     LoadingThread, Model,
 };
 
-use std::{
-    collections::{hash_map::Entry, BTreeSet, HashMap},
-    path::PathBuf,
-};
+use std::collections::{hash_map::Entry, BTreeSet, HashMap};
 
 #[derive(PartialEq)]
 pub enum ImportType {
@@ -43,8 +40,6 @@ pub struct ImportWindow {
     pub import_type: ImportType,
     /// the model to be imported (if one has been selected)
     pub model: Option<Box<pof::Model>>,
-    /// the path to the model to be imported
-    pub model_path: PathBuf,
     /// the thread handling loading of the modle to be imported
     pub import_model_loading_thread: LoadingThread,
     /// the set of tree values corresponding to the individual data structures to import
@@ -58,7 +53,6 @@ impl Default for ImportWindow {
             open: Default::default(),
             import_type: ImportType::Add,
             model: Default::default(),
-            model_path: PathBuf::new(),
             import_model_loading_thread: Default::default(),
             import_selection: BTreeSet::new(),
             import_options: ImportOptions {

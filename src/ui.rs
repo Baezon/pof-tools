@@ -521,7 +521,7 @@ pub struct UiState {
 pub(crate) struct PofToolsGui {
     pub model: Box<Model>,
 
-    pub model_loading_thread: Option<Receiver<Result<Option<Box<Model>>, String>>>,
+    pub model_loading_thread: Option<Receiver<Result<Option<Box<pof::Model>>, String>>>,
     #[allow(clippy::type_complexity)]
     pub texture_loading_thread: Option<Receiver<Option<(RawImage2d<'static, u8>, TextureId)>>>,
     pub glow_point_sim_start: std::time::Instant,
@@ -550,10 +550,9 @@ pub(crate) struct PofToolsGui {
     pub drag_axis: DragAxis,
 
     pub graphics: Graphics,
-    pub buffer_objects: Vec<GlObjectBuffers>, // all the subobjects, conditionally rendered based on the current tree selection
     pub buffer_textures: HashMap<TextureId, SrgbTexture2d>, // map of tex ids to actual textures
-    pub buffer_shield: Option<GlBufferedShield>, // the shield, similar to the above
-    pub buffer_insignias: Vec<GlBufferedInsignia>, // the insignias, similar to the above
+    pub buffer_shield: Option<GlBufferedShield>,            // the shield, similar to the above
+    pub buffer_insignias: Vec<GlBufferedInsignia>,          // the insignias, similar to the above
     pub lollipops: Vec<GlLollipops>, // the current set of lollipops being being drawn, grouped by color, and recalculated with viewport_3d_dirty above
     pub arrowheads: Vec<GlArrowhead>, // The arrowheads to draw
 }
@@ -576,6 +575,7 @@ impl PofToolsGui {
                 pof_model: pof::Model::default(),
                 texture_map: HashMap::new(),
                 subobject_transform_matrix: ObjVec::default(),
+                buffer_objects: ObjVec::default(),
             }),
             model_loading_thread: Default::default(),
             texture_loading_thread: Default::default(),
@@ -604,7 +604,6 @@ impl PofToolsGui {
             camera_scale: Default::default(),
             camera_offset: Default::default(),
             camera_orthographic: false,
-            buffer_objects: Default::default(),
             buffer_textures: Default::default(),
             buffer_shield: Default::default(),
             buffer_insignias: Default::default(),
@@ -1328,10 +1327,6 @@ impl PofToolsGui {
                         }
                     });
             });
-        warnings.response.sense.click = true;
-        if warnings.response.clicked() {
-            println!("clicked!")
-        }
 
         // ==============================================================================================================
         // The 'tree view' is the section on the left of the UI which contains selections for the various kinds of things

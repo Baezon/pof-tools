@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display};
 use std::io::{self, Write};
@@ -598,7 +598,7 @@ impl Serialize for BspLightKind {
 pub const MAX_EYES: usize = 9;
 
 mk_struct! {
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     // this is pretty much unused by the engine
     pub struct BspLight {
         pub location: Vec3d,
@@ -901,7 +901,7 @@ impl GlowPoint {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ObjHeader {
     pub max_radius: f32,
     pub obj_flags: u32,
@@ -1432,7 +1432,7 @@ pub struct SubObject {
     pub bsp_data: BspData,
 
     // the following fields are derived information
-    pub(crate) children: Vec<ObjectId>,
+    pub children: Vec<ObjectId>,
     pub is_debris_model: bool,
 
     // "semantic name links", fields derived specifically from their names
@@ -2278,6 +2278,98 @@ impl Model {
         None
     }
 
+    /// deletes a subobject without modifying other data structures, glow points, docking bays, etc
+    /// this will leave stale obj id references!!!
+    pub fn delete_subobject_only(&mut self, deleted_id: ObjectId) -> (SubObject, Option<usize>) {
+        let deleted_subobj = self.sub_objects.remove(deleted_id.0 as usize);
+        let mut id_map = HashMap::new();
+
+        // generate id mapping from old to new
+        for subobj in &self.sub_objects {
+            if subobj.obj_id.0 >= deleted_id.0 {
+                id_map.insert(subobj.obj_id, ObjectId(subobj.obj_id.0 - 1));
+            } else {
+                id_map.insert(subobj.obj_id, subobj.obj_id);
+            }
+        }
+
+        let mut deleted_subobj_child_list_index = None;
+        // map object id references, keeping track of the newly orphaned
+        let mut orphans = vec![];
+        for subobj in self.sub_objects.iter_mut() {
+            subobj.obj_id = id_map[&subobj.obj_id];
+
+            let mut i = 0;
+            subobj.children.retain_mut(|id| {
+                if *id != deleted_id {
+                    *id = id_map[&id];
+                    i += 1;
+                    true
+                } else {
+                    deleted_subobj_child_list_index = Some(i);
+                    i += 1;
+                    false
+                }
+            });
+
+            if subobj.parent == Some(deleted_id) {
+                subobj.parent = None;
+                orphans.push(subobj.obj_id);
+            } else {
+                subobj.parent = subobj.parent.map(|parent_id| id_map[&parent_id]);
+            }
+        }
+
+        // set those orphans to their grandparent, if it exists
+        if let Some(mut grand_parent_id) = deleted_subobj.parent {
+            grand_parent_id = id_map[&grand_parent_id];
+            for orphan in orphans {
+                self.sub_objects[grand_parent_id].children.push(orphan);
+                self.sub_objects[orphan].parent = Some(grand_parent_id);
+            }
+        }
+
+        (deleted_subobj, deleted_subobj_child_list_index)
+    }
+
+    /// inserts a suboject into the list without modifying other data structures, glow points, docking bays, etc
+    pub fn insert_subobject_only(&mut self, inserted_subobj: SubObject, child_list_idx: Option<usize>) {
+        let mut id_map = HashMap::new();
+        let inserted_id = inserted_subobj.obj_id;
+        for subobj in &self.sub_objects {
+            if subobj.obj_id >= inserted_subobj.obj_id {
+                id_map.insert(subobj.obj_id, ObjectId(subobj.obj_id.0 + 1));
+            } else {
+                id_map.insert(subobj.obj_id, subobj.obj_id);
+            }
+        }
+
+        for subobj in self.sub_objects.iter_mut() {
+            subobj.obj_id = id_map[&subobj.obj_id];
+
+            for child_id in subobj.children.iter_mut() {
+                *child_id = id_map[&child_id];
+            }
+
+            if inserted_subobj.parent == Some(subobj.obj_id) {
+                subobj.children.insert(child_list_idx.unwrap(), inserted_id);
+            }
+
+            if let Some(parent) = subobj.parent.as_mut() {
+                *parent = id_map[parent];
+            }
+        }
+
+        self.sub_objects.insert(inserted_id.0 as usize, inserted_subobj);
+
+        for child_id in self.sub_objects[inserted_id].children.clone() {
+            if let Some(old_parent_id) = self.sub_objects[child_id].parent {
+                self.sub_objects[old_parent_id].children.retain(|x| x != &child_id);
+            }
+            self.sub_objects[child_id].parent = Some(inserted_id);
+        }
+    }
+
     pub fn path_removal_fixup(&mut self, removed_idx: PathId) {
         for bay in &mut self.docking_bays {
             if let Some(path_num) = bay.path {
@@ -2821,6 +2913,7 @@ pub enum Warning {
     // turret uvec != turret normal
     // turret subobject properties not set up for a turret
     // turret without 'turret' in name
+    // nonturret with 'turret' in name
 }
 
 pub fn post_parse_fill_untextured_slot(sub_objects: &mut Vec<SubObject>, textures: &mut Vec<String>) -> Option<TextureId> {

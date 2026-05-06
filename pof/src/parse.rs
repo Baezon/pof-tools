@@ -1389,8 +1389,8 @@ trait ParseCtx<'a> {
 
         model.header.max_radius = model.recalc_radius();
         model.header.bbox = model.recalc_bbox();
-        model.recalc_mass();
-        model.recalc_moi();
+        model.header.mass = model.recalc_mass();
+        model.header.moment_of_inertia = model.recalc_moi().unwrap_or_default();
     }
 }
 

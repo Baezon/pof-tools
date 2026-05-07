@@ -2773,6 +2773,8 @@ impl Model {
                 shield.collision_tree = Some(ShieldData::recalculate_tree(&shield.verts, &shield.polygons));
             }
         }
+
+        self.header.num_subobjects = self.sub_objects.len() as u32;
     }
 
     pub fn make_orphan(&mut self, would_be_orphan: ObjectId) {

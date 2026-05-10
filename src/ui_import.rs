@@ -10,10 +10,7 @@ use crate::{
     LoadingThread, Model,
 };
 
-use std::{
-    collections::{hash_map::Entry, BTreeSet, HashMap},
-    path::PathBuf,
-};
+use std::collections::{hash_map::Entry, BTreeSet, HashMap};
 
 #[derive(PartialEq)]
 pub enum ImportType {
@@ -42,9 +39,7 @@ pub struct ImportWindow {
     /// what type of import has been selected (add or match-and-replace)
     pub import_type: ImportType,
     /// the model to be imported (if one has been selected)
-    pub model: Option<Box<Model>>,
-    /// the path to the model to be imported
-    pub model_path: PathBuf,
+    pub model: Option<Box<pof::Model>>,
     /// the thread handling loading of the modle to be imported
     pub import_model_loading_thread: LoadingThread,
     /// the set of tree values corresponding to the individual data structures to import
@@ -58,7 +53,6 @@ impl Default for ImportWindow {
             open: Default::default(),
             import_type: ImportType::Add,
             model: Default::default(),
-            model_path: PathBuf::new(),
             import_model_loading_thread: Default::default(),
             import_selection: BTreeSet::new(),
             import_options: ImportOptions {
@@ -667,7 +661,7 @@ impl UiState {
 
                     // SubObjects
                     fn make_subobject_child_list(
-                        import_model: &Model, selection: &mut BTreeSet<TreeValue>, object: &SubObject, ui: &mut Ui, bother_with_coloring: bool,
+                        import_model: &pof::Model, selection: &mut BTreeSet<TreeValue>, object: &SubObject, ui: &mut Ui, bother_with_coloring: bool,
                         options: &ImportOptions,
                     ) {
                         let tree_val = TreeValue::SubObjects(SubObjectTreeValue::SubObject(object.obj_id));
@@ -1371,17 +1365,17 @@ impl PofToolsGui {
                 TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) => {
                     // translate old texure ids to new one
                     let mut tex_id_map = HashMap::new();
-                    for (_, poly) in import_model.pof_model.sub_objects[id].bsp_data.collision_tree.leaves_mut() {
+                    for (_, poly) in import_model.sub_objects[id].bsp_data.collision_tree.leaves_mut() {
                         if let Entry::Vacant(e) = tex_id_map.entry(poly.texture) {
                             // see if this texture already exists
-                            if let Some(i) = (self.model.textures.iter())
-                                .position(|tex_name| import_model.pof_model.textures[poly.texture.0 as usize] == *tex_name)
+                            if let Some(i) =
+                                (self.model.textures.iter()).position(|tex_name| import_model.textures[poly.texture.0 as usize] == *tex_name)
                             {
                                 e.insert(TextureId(i as u32));
                             } else {
                                 // still here, gotta add a slot i guess
                                 e.insert(TextureId(self.model.textures.len() as u32));
-                                self.model.textures.push(import_model.pof_model.textures[poly.texture.0 as usize].clone());
+                                self.model.textures.push(import_model.textures[poly.texture.0 as usize].clone());
                             }
                         }
 

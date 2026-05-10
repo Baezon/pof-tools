@@ -315,7 +315,6 @@ struct GlObjectBuffer {
 }
 
 struct GlObjectBuffers {
-    obj_id: ObjectId,
     buffers: Vec<GlObjectBuffer>,
 }
 
@@ -333,7 +332,37 @@ impl GlObjectBuffers {
         for (i, builder) in textures.into_iter().enumerate() {
             builder.finish(display, object, Some(TextureId(i as u32)), &mut buffers)
         }
-        Self { obj_id: object.obj_id, buffers }
+        Self { buffers }
+    }
+
+    fn clone(&self, display: &Display<WindowSurface>) -> Self {
+        let mut new_bufs = GlObjectBuffers { buffers: vec![] };
+        for buf in &self.buffers {
+            let vertices = glium::VertexBuffer::empty(display, buf.vertices.len()).unwrap();
+            buf.vertices.copy_to(vertices.as_slice()).unwrap();
+            let normals = glium::VertexBuffer::empty(display, buf.normals.len()).unwrap();
+            buf.normals.copy_to(normals.as_slice()).unwrap();
+            let indices = glium::IndexBuffer::empty(display, glium::index::PrimitiveType::TrianglesList, buf.indices.len()).unwrap();
+            buf.indices.copy_to(indices.as_slice()).unwrap();
+
+            let mut wireframe_indices = None;
+            if let Some(original_wireframe_indices) = buf.wireframe_indices.as_ref() {
+                let new_buf =
+                    glium::IndexBuffer::empty(display, glium::index::PrimitiveType::TrianglesList, original_wireframe_indices.len()).unwrap();
+                buf.indices.copy_to(new_buf.as_slice()).unwrap();
+                wireframe_indices = Some(new_buf);
+            }
+
+            new_bufs.buffers.push(GlObjectBuffer {
+                texture_id: buf.texture_id,
+                vertices,
+                normals,
+                indices,
+                wireframe_indices,
+                tint_val: buf.tint_val,
+            });
+        }
+        new_bufs
     }
 }
 
@@ -367,6 +396,7 @@ pub struct Model {
     /// of merging textures until write
     texture_map: HashMap<TextureId, TextureId>,
     subobject_transform_matrix: ObjVec<TMat4<f32>>,
+    buffer_objects: ObjVec<GlObjectBuffers>, // all the subobjects, conditionally rendered based on the current tree selection
 }
 impl Deref for Model {
     type Target = pof::Model;
@@ -403,10 +433,10 @@ impl Model {
 ///     * `Ok(Some(Model))`: If the thread has successfuly loaded and returned a model
 ///     * `Ok(None)`: The loading was canceled, probably because they closed the window before choosing anything
 ///     * `Err(panic message)`: the loading failed! Probably while parsing the model
-type LoadingThread = Option<Receiver<Result<Option<Box<Model>>, String>>>;
+type LoadingThread = Option<Receiver<Result<Option<Box<pof::Model>>, String>>>;
 
 impl PofToolsGui {
-    fn save_model(model: &Model) -> Option<String> {
+    fn save_model(model: &pof::Model) -> Option<String> {
         let mut out = None;
         // use a scoped thread here, its ok to block the main window for now i guess
         crossbeam::thread::scope(|s| {
@@ -437,7 +467,7 @@ impl PofToolsGui {
     }
 
     /// Opens a dialog to load a model. Must be run off the main thread.
-    fn load_model(filepath: Option<PathBuf>) -> Result<Option<Box<Model>>, String> {
+    fn load_model(filepath: Option<PathBuf>) -> Result<Option<Box<pof::Model>>, String> {
         let model = std::panic::catch_unwind(move || {
             let path = filepath.or_else(|| {
                 FileDialog::new()
@@ -453,19 +483,15 @@ impl PofToolsGui {
                 let ext = path.extension().map(|ext| ext.to_ascii_lowercase());
                 let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string();
                 info!("Attempting to load {}", filename);
-                Box::new(Model {
-                    pof_model: match ext.as_ref().and_then(|ext| ext.to_str()) {
-                        Some("dae") => pof::parse_dae(path),
-                        Some("gltf" | "glb") => pof::parse_gltf(path),
-                        Some("pof") => {
-                            let file = File::open(&path).expect("TODO invalid file or smth i dunno");
-                            let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
-                            parser.parse(path).expect("TODO invalid pof file or smth i dunno")
-                        }
-                        _ => todo!(),
-                    },
-                    texture_map: HashMap::new(),
-                    subobject_transform_matrix: ObjVec::default(),
+                Box::new(match ext.as_ref().and_then(|ext| ext.to_str()) {
+                    Some("dae") => pof::parse_dae(path),
+                    Some("gltf" | "glb") => pof::parse_gltf(path),
+                    Some("pof") => {
+                        let file = File::open(&path).expect("TODO invalid file or smth i dunno");
+                        let mut parser = Parser::new(file).expect("TODO invalid version of file or smth i dunno");
+                        parser.parse(path).expect("TODO invalid pof file or smth i dunno")
+                    }
+                    _ => todo!(),
                 })
             })
         });
@@ -506,7 +532,12 @@ impl PofToolsGui {
             let response = thread.try_recv();
             match response {
                 Ok(Ok(Some(data))) => {
-                    self.model = data;
+                    self.model = Box::new(Model {
+                        pof_model: *data,
+                        texture_map: HashMap::new(),
+                        subobject_transform_matrix: Default::default(),
+                        buffer_objects: Default::default(),
+                    });
                     self.finish_loading_model(window, display);
 
                     self.model_loading_thread = None;
@@ -525,13 +556,14 @@ impl PofToolsGui {
 
     // after the above thread has returned, stuffs the new model in
     fn finish_loading_model(&mut self, window: &Window, display: &Display<WindowSurface>) {
-        self.buffer_objects.clear();
+        self.model.buffer_objects.clear();
         self.buffer_shield = None;
         self.buffer_insignias.clear();
 
-        for subobject in &self.model.sub_objects {
-            self.buffer_objects
-                .push(GlObjectBuffers::new(display, subobject, self.model.textures.len()));
+        for subobject in &self.model.pof_model.sub_objects {
+            self.model
+                .buffer_objects
+                .push(GlObjectBuffers::new(display, subobject, self.model.pof_model.textures.len()));
         }
 
         for insignia in &self.model.insignias {
@@ -627,33 +659,6 @@ impl PofToolsGui {
 
             let _ = sender.send(None);
         });
-    }
-
-    pub fn rebuild_subobj_buffers(&mut self, display: &Display<WindowSurface>, ids: Vec<ObjectId>) {
-        for buf in &mut self.buffer_objects {
-            if ids.contains(&buf.obj_id) {
-                *buf = GlObjectBuffers::new(display, &self.model.sub_objects[buf.obj_id], self.model.textures.len());
-            }
-        }
-    }
-
-    pub fn rebuild_all_subobj_buffers(&mut self, display: &Display<WindowSurface>) {
-        let ids = (0..self.model.sub_objects.len()).map(|idx| ObjectId(idx as u32)).collect();
-        self.rebuild_subobj_buffers(display, ids);
-    }
-
-    pub fn rebuild_all_insignia_buffers(&mut self, display: &Display<WindowSurface>) {
-        for (i, buffer) in self.buffer_insignias.iter_mut().enumerate() {
-            *buffer = GlBufferedInsignia::new(display, &self.model.insignias[i]);
-        }
-    }
-
-    pub fn rebuild_shield_buffer(&mut self, display: &Display<WindowSurface>) {
-        if let Some(shield) = &self.model.shield_data {
-            self.buffer_shield = Some(GlBufferedShield::new(display, shield));
-        } else {
-            self.buffer_shield = None;
-        }
     }
 }
 
@@ -759,6 +764,13 @@ fn main() {
                         pt_gui.model.recheck_errors(Set::All);
                         pt_gui.sanitize_ui_state();
                         pt_gui.ui_state.refresh_properties_panel(&pt_gui.model);
+                        if pt_gui
+                            .ui_state
+                            .last_selected_subobj
+                            .is_some_and(|id| id.0 as usize >= pt_gui.model.sub_objects.len())
+                        {
+                            pt_gui.ui_state.last_selected_subobj = pt_gui.model.header.detail_levels.first().copied();
+                        }
                     }
 
                     let model = &pt_gui.model;
@@ -1057,11 +1069,12 @@ fn main() {
                         get_list_of_display_subobjects(model, pt_gui.ui_state.tree_view_selection, pt_gui.ui_state.last_selected_subobj);
 
                     // draw the actual subobjects of the model
-                    for buffer_objs in &pt_gui.buffer_objects {
+                    for (i, buffer_objs) in pt_gui.model.buffer_objects.iter().enumerate() {
+                        let id = ObjectId(i as u32);
                         // only render if its currently being displayed
-                        if displayed_subobjects[buffer_objs.obj_id] {
-                            let mut mat = pt_gui.model.subobject_transform_matrix[buffer_objs.obj_id];
-                            mat.append_translation_mut(&pt_gui.model.get_total_subobj_offset(buffer_objs.obj_id).into());
+                        if displayed_subobjects.0.get(i).is_some_and(|val| *val) {
+                            let mut mat = pt_gui.model.subobject_transform_matrix[id];
+                            mat.append_translation_mut(&pt_gui.model.get_total_subobj_offset(id).into());
 
                             let matrix = view_mat * mat;
                             let norm_matrix: [[f32; 3]; 3] = glm::mat4_to_mat3(&matrix).try_inverse().unwrap().transpose().into();
@@ -1760,7 +1773,7 @@ impl PofToolsGui {
     }
 
     fn maybe_recalculate_3d_helpers(&mut self, display: &Display<WindowSurface>) {
-        if self.buffer_objects.is_empty() {
+        if self.model.buffer_objects.is_empty() {
             return;
         }
 
@@ -1769,7 +1782,7 @@ impl PofToolsGui {
         //     return;
         // }
 
-        for buffers in &mut self.buffer_objects {
+        for buffers in self.model.buffer_objects.iter_mut() {
             for buffer in &mut buffers.buffers {
                 buffer.tint_val = 0.0;
             }
@@ -1778,7 +1791,7 @@ impl PofToolsGui {
         self.lollipops.clear();
         self.arrowheads.clear();
 
-        let model = &self.model;
+        let model = &self.model.pof_model;
         let hover_lollipop = self.drag_lollipop.or(self.hover_lollipop);
 
         const UNSELECTED: usize = 0;
@@ -1790,8 +1803,8 @@ impl PofToolsGui {
         // push into 3 separate vectors, for 3 separate colors depending on selection state
         match self.ui_state.tree_view_selection {
             TreeValue::SubObjects(SubObjectTreeValue::SubObject(obj_id)) => {
-                for buffers in &mut self.buffer_objects {
-                    if buffers.obj_id == obj_id {
+                for (i, buffers) in self.model.buffer_objects.iter_mut().enumerate() {
+                    if i as u32 == obj_id.0 {
                         for buffer in &mut buffers.buffers {
                             buffer.tint_val = 0.2;
                         }
@@ -1841,7 +1854,7 @@ impl PofToolsGui {
                 }
             }
             TreeValue::Textures(TextureTreeValue::Texture(tex)) => {
-                for buffers in &mut self.buffer_objects {
+                for buffers in self.model.buffer_objects.iter_mut() {
                     for buffer in &mut buffers.buffers {
                         if buffer.texture_id.map(|id| self.model.texture_map[&id]) == Some(tex) {
                             buffer.tint_val = 0.3;

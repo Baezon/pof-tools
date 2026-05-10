@@ -45,7 +45,7 @@ pub fn undo_func(val: impl FnMut(&mut Model) + 'static) -> UndoFunction {
 
 pub enum IndexingButtonsResponse<T: Clone> {
     Switch(usize),
-    Copy(usize),
+    Duplicate(usize),
     Delete(usize),
     Push,
     Insert(usize, Box<T>),
@@ -62,7 +62,7 @@ impl<T: Clone> IndexingButtonsResponse<T> {
                 assert!(idx < data_vec.len());
                 Some(idx)
             }
-            IndexingButtonsResponse::Copy(idx) => {
+            IndexingButtonsResponse::Duplicate(idx) => {
                 assert!(idx < data_vec.len());
                 let new_idx = data_vec.len();
                 let item = data_vec[idx].clone();
@@ -107,7 +107,7 @@ impl<T: Clone> IndexingButtonsResponse<T> {
                 assert!(idx < data_vec.len());
                 Some(idx)
             }
-            IndexingButtonsResponse::Copy(idx) => {
+            IndexingButtonsResponse::Duplicate(idx) => {
                 assert!(idx < data_vec.len());
                 Some(data_vec.len())
             }
@@ -266,7 +266,7 @@ impl UiState {
                 }
             });
 
-            // the copy/delete buttons (and label)
+            // the duplicate/delete buttons (and label)
             ui.vertical(|ui| {
                 ui.add_sized(
                     [remaining_width, (height - ui.spacing().item_spacing.y) / 2.0],
@@ -283,11 +283,11 @@ impl UiState {
                                 ],
                                 egui::Button::new("🗐"),
                             )
-                            .on_hover_text(format!("Copy this {} into a new {}", index_name, index_name))
+                            .on_hover_text(format!("Duplicate this {} as a new {}", index_name, index_name))
                             .clicked()
                             && list_len.is_some()
                         {
-                            ret = Some(IndexingButtonsResponse::Copy(current_num.unwrap()));
+                            ret = Some(IndexingButtonsResponse::Duplicate(current_num.unwrap()));
                         }
                         if ui
                             .add_sized(
@@ -1016,8 +1016,6 @@ impl PofToolsGui {
         &mut self, ui: &mut egui::Ui, ctx: &egui::Context, display: &Display<WindowSurface>, undo_history: &mut undo::History<UndoAction>,
     ) {
         let mut reload_textures = false;
-        let mut buffer_ids_to_rebuild = vec![];
-        let mut rebuild_all_buffers = false;
         let mut merge_duplicate_textures = false;
 
         macro_rules! select_new_tree_val {
@@ -1372,14 +1370,314 @@ impl PofToolsGui {
                 trans_axis,
                 transform_window,
             } => {
-                ui.heading("SubObject");
-                ui.separator();
-
-                let selected_id = if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = current_tree_selection {
+                let mut selected_id = if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = current_tree_selection {
                     Some(id)
                 } else {
                     None
                 };
+
+                ui.horizontal(|ui| {
+                    ui.heading("SubObject");
+                    ui.add_space(ui.available_width() - 70.0);
+
+                    // Actions menu ===================================================================
+                    if let Some(id) = selected_id {
+                        ui.menu_button("Actions...", |ui| {
+                            if ui.button("Transform").clicked() {
+                                transform_window.open = true;
+                                ui.close_menu();
+                            }
+
+                            if ui.button("Duplicate").clicked() {
+                                let new_id = ObjectId(self.model.sub_objects.len() as u32);
+                                let mut new_subobj = self.model.sub_objects[id].clone();
+                                new_subobj.children.clear(); // we aren't duplicating the children
+                                new_subobj.obj_id = new_id;
+
+                                new_subobj.name = format!("{} - Copy", new_subobj.name);
+
+                                // a lot of work for this gag
+                                let mut lowest_moron = 0;
+                                let mut user_is_moronic = false;
+                                for subobj in &self.model.sub_objects {
+                                    if subobj.name == new_subobj.name {
+                                        user_is_moronic = true;
+                                    }
+                                    if subobj.name.starts_with("U.R.A Moron ") {
+                                        let digits = subobj
+                                            .name
+                                            .trim_end()
+                                            .chars()
+                                            .rev()
+                                            .take_while(|c| c.is_ascii_digit())
+                                            .collect::<String>();
+                                        if !digits.is_empty() {
+                                            lowest_moron = (digits.parse::<u32>().unwrap() + 1).max(lowest_moron);
+                                        }
+                                    }
+                                }
+
+                                if user_is_moronic {
+                                    new_subobj.name = format!("U.R.A Moron {}", lowest_moron);
+                                }
+
+                                let mut new_bufs = Some(self.model.buffer_objects[id].clone(display));
+                                let mut mat = Some(self.model.subobject_transform_matrix[id]);
+                                let mut new_subobj = Some(new_subobj);
+
+                                let mut undo = false;
+
+                                model_action(
+                                    undo_history,
+                                    &mut self.model,
+                                    undo_func(move |model| {
+                                        if undo {
+                                            if let Some(parent_id) = model.sub_objects[new_id].parent() {
+                                                let parent_children = &mut model.sub_objects[parent_id].children;
+                                                parent_children.remove(parent_children.iter().position(|child_id| *child_id == new_id).unwrap());
+                                            }
+
+                                            new_bufs = Some(model.buffer_objects.remove(new_id.0 as usize));
+                                            mat = Some(model.subobject_transform_matrix.remove(new_id.0 as usize));
+                                            new_subobj = Some(model.sub_objects.remove(new_id.0 as usize));
+                                        } else {
+                                            model.buffer_objects.push(new_bufs.take().unwrap());
+                                            model.subobject_transform_matrix.push(mat.take().unwrap());
+                                            model.sub_objects.push(new_subobj.take().unwrap());
+
+                                            if let Some(parent_id) = model.sub_objects[new_id].parent() {
+                                                model.sub_objects[parent_id].children.push(new_id)
+                                            }
+                                        }
+                                        undo = !undo;
+                                    }),
+                                );
+
+                                ui.close_menu();
+                            }
+
+                            if ui.button("Delete").clicked() {
+                                let index = id.0 as usize;
+                                let deleted_id = id; // for clarity
+
+                                // the subobject we're going to select after having done the deletion
+                                let mut reset_id = {
+                                    if let Some(parent_id) = self.model.sub_objects[deleted_id].parent {
+                                        // if it has a parent...
+                                        let list_idx = self.model.sub_objects[parent_id]
+                                            .children
+                                            .iter()
+                                            .position(|id| *id == deleted_id)
+                                            .unwrap();
+                                        if list_idx > 0 {
+                                            // use the next child
+                                            Some(self.model.sub_objects[parent_id].children[list_idx - 1])
+                                        } else {
+                                            // else use the parent
+                                            Some(parent_id)
+                                        }
+                                    } else {
+                                        // use the next top level object (if one exists)
+                                        self.model
+                                            .sub_objects
+                                            .iter()
+                                            .rev()
+                                            .filter(|subobj| subobj.parent.is_none() && subobj.obj_id < deleted_id)
+                                            .map(|subobj| subobj.obj_id)
+                                            .next()
+                                    }
+                                };
+
+                                let mut id_map = HashMap::new();
+                                for subobj in &self.model.sub_objects {
+                                    if subobj.obj_id.0 > id.0 {
+                                        id_map.insert(subobj.obj_id, ObjectId(subobj.obj_id.0 - 1));
+                                    } else {
+                                        id_map.insert(subobj.obj_id, subobj.obj_id);
+                                    }
+                                }
+                                reset_id = reset_id.map(|id| id_map[&id]);
+
+                                // listen man these changes are just way too annoying to just undo,
+                                // its fine to just copy them and store them for each undo operation, theyre not that big
+                                let mut header = self.model.header.clone();
+                                let mut glow_banks = self.model.glow_banks.clone();
+                                let mut turrets = self.model.turrets.clone();
+                                let mut eye_points = self.model.eye_points.clone();
+                                let mut docking_bays = self.model.docking_bays.clone();
+                                let mut paths = self.model.paths.clone();
+
+                                self.model.header.num_subobjects -= 1;
+                                let mut removed_detail = false;
+                                // truncate if a detail level was deleted
+                                self.model.header.detail_levels.retain_mut(|id| {
+                                    if *id == deleted_id {
+                                        removed_detail = true;
+                                        false
+                                    } else if removed_detail {
+                                        false
+                                    } else {
+                                        *id = id_map[id];
+                                        true
+                                    }
+                                });
+
+                                // set any glow banks to the deleted object's parent, if it exists, otherwise delete
+                                self.model.pof_model.glow_banks.retain_mut(|bank| {
+                                    if bank.obj_parent == deleted_id {
+                                        if self.model.pof_model.sub_objects[bank.obj_parent].parent().is_some() {
+                                            bank.obj_parent = self.model.pof_model.sub_objects[deleted_id].parent.unwrap();
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    } else {
+                                        bank.obj_parent = id_map[&bank.obj_parent];
+                                        true
+                                    }
+                                });
+
+                                self.model.turrets.retain_mut(|turret| {
+                                    if turret.gun_obj == deleted_id {
+                                        turret.gun_obj = id_map[&turret.base_obj];
+                                    } else {
+                                        turret.gun_obj = id_map[&turret.gun_obj];
+                                        turret.base_obj = id_map[&turret.base_obj];
+                                    }
+                                    turret.base_obj != deleted_id
+                                });
+
+                                self.model.eye_points.iter_mut().for_each(|eye| {
+                                    if eye.attached_subobj == Some(deleted_id) {
+                                        eye.attached_subobj = None
+                                    } else if let Some(id) = eye.attached_subobj.as_mut() {
+                                        *id = id_map[id];
+                                    }
+                                });
+
+                                self.model.pof_model.docking_bays.retain_mut(|bay| {
+                                    let str = pof::properties_get_field(&bay.properties, "$parent_submodel");
+                                    str.is_none() || str.unwrap() != self.model.pof_model.sub_objects[deleted_id].name
+                                });
+
+                                self.model
+                                    .pof_model
+                                    .paths
+                                    .retain(|path| format!("${}", self.model.pof_model.sub_objects[deleted_id].name) != path.name);
+
+                                let mut buffer_obj = Some(self.model.buffer_objects.remove(index));
+                                let mut matrix = Some(self.model.subobject_transform_matrix.remove(index));
+                                let (x, child_list_idx) = self.model.delete_subobject_only(id);
+                                let mut subobj = Some(x);
+
+                                let mut undo = true;
+                                let mut first_time = true;
+
+                                model_action(
+                                    undo_history,
+                                    &mut self.model,
+                                    undo_func(move |model| {
+                                        if !first_time {
+                                            if undo {
+                                                model.insert_subobject_only(subobj.take().unwrap(), child_list_idx);
+
+                                                model.subobject_transform_matrix.insert(index, matrix.take().unwrap());
+                                                model.buffer_objects.insert(index, buffer_obj.take().unwrap());
+                                            } else {
+                                                subobj = Some(model.delete_subobject_only(deleted_id).0);
+
+                                                matrix = Some(model.subobject_transform_matrix.remove(index));
+                                                buffer_obj = Some(model.buffer_objects.remove(index));
+                                            }
+
+                                            swap(&mut model.header, &mut header);
+                                            swap(&mut model.glow_banks, &mut glow_banks);
+                                            swap(&mut model.turrets, &mut turrets);
+                                            swap(&mut model.eye_points, &mut eye_points);
+                                            swap(&mut model.paths, &mut paths);
+                                            swap(&mut model.docking_bays, &mut docking_bays);
+
+                                            undo = !undo;
+                                        } else {
+                                            first_time = false;
+                                        }
+                                    }),
+                                );
+
+                                selected_id = reset_id;
+                                self.ui_state.tree_view_selection = TreeValue::SubObjects(SubObjectTreeValue::subobj(reset_id));
+                                self.ui_state.last_selected_subobj = reset_id;
+
+                                ui.close_menu();
+                            }
+                        });
+                    }
+                });
+
+                // Transform stuff (the button to do this is above) ===========================================
+
+                let mut text = LayoutJob::default();
+                text.append(
+                    "This will affect all child subobjects of this one, its turret firepoints if any and ",
+                    0.0,
+                    TextFormat {
+                        font_id: TextStyle::Body.resolve(ui.style()),
+                        ..Default::default()
+                    },
+                );
+                text.append(
+                    "can't be undone.",
+                    0.0,
+                    TextFormat {
+                        font_id: TextStyle::Body.resolve(ui.style()),
+                        color: WARNING_YELLOW,
+                        ..Default::default()
+                    },
+                );
+
+                if let Some(matrix) = UiState::show_transform_window(ctx, transform_window, Some(text)) {
+                    if let Some(id) = selected_id {
+                        // even though the header version of this actually modifies the mesh, this just modifies the transform matrix
+                        // ideally this would allow it to be undoable, but that's still really complicated...
+                        pub fn transform_subobj(model: &mut Model, id: ObjectId, matrix: &TMat4<f32>, transform_offset: bool) {
+                            let no_trans_matrix = glm::set_row(matrix, 3, &glm::vec4(0.0, 0.0, 0.0, 1.0));
+                            let rot_matrix = no_trans_matrix.normalize();
+
+                            if !transform_offset {
+                                model.subobject_transform_matrix[id] *= matrix;
+                            } else {
+                                model.subobject_transform_matrix[id] *= no_trans_matrix;
+                            }
+
+                            for turret in &mut model.turrets {
+                                if id == turret.base_obj {
+                                    for firepoint in &mut turret.fire_points {
+                                        *firepoint = &no_trans_matrix * *firepoint;
+                                    }
+                                    turret.normal.0 = &rot_matrix * turret.normal.0;
+                                }
+                            }
+
+                            if let Some((mut uvec, mut fvec)) = model.sub_objects[id].uvec_fvec() {
+                                uvec = &rot_matrix * uvec;
+                                fvec = &rot_matrix * fvec;
+                                pof::properties_update_field(&mut model.sub_objects[id].properties, "$uvec", &uvec.to_string());
+                                pof::properties_update_field(&mut model.sub_objects[id].properties, "$fvec", &fvec.to_string());
+                            }
+
+                            let children: Vec<_> = model.sub_objects[id].children().copied().collect();
+                            for child_id in children {
+                                transform_subobj(model, child_id, &no_trans_matrix, true)
+                            }
+                        }
+
+                        transform_subobj(&mut self.model, id, &matrix, false);
+
+                        transform_window.open = false;
+                    }
+                }
+
+                ui.separator();
 
                 // Name edit ================================================================
 
@@ -1686,72 +1984,6 @@ impl PofToolsGui {
                 self.ui_state.display_radius = self.always_show_radius || display_radius;
 
                 ui.separator();
-
-                // Transform button ================================================================
-
-                if ui.add_enabled(selected_id.is_some(), egui::Button::new("Transform")).clicked() {
-                    transform_window.open = true;
-                }
-                let mut text = LayoutJob::default();
-                text.append(
-                    "This will affect all child subobjects of this one, its turret firepoints if any and ",
-                    0.0,
-                    TextFormat {
-                        font_id: TextStyle::Body.resolve(ui.style()),
-                        ..Default::default()
-                    },
-                );
-                text.append(
-                    "can't be undone.",
-                    0.0,
-                    TextFormat {
-                        font_id: TextStyle::Body.resolve(ui.style()),
-                        color: WARNING_YELLOW,
-                        ..Default::default()
-                    },
-                );
-
-                if let Some(matrix) = UiState::show_transform_window(ctx, transform_window, Some(text)) {
-                    if let Some(id) = selected_id {
-                        // even though the header version of this actually modifies the mesh, this just modifies the transform matrix
-                        // ideally this would allow it to be undoable, but that's still really complicated...
-                        pub fn transform_subobj(model: &mut Model, id: ObjectId, matrix: &TMat4<f32>, transform_offset: bool) {
-                            let no_trans_matrix = glm::set_row(matrix, 3, &glm::vec4(0.0, 0.0, 0.0, 1.0));
-                            let rot_matrix = no_trans_matrix.normalize();
-
-                            if !transform_offset {
-                                model.subobject_transform_matrix[id] *= matrix;
-                            } else {
-                                model.subobject_transform_matrix[id] *= no_trans_matrix;
-                            }
-
-                            for turret in &mut model.turrets {
-                                if id == turret.base_obj {
-                                    for firepoint in &mut turret.fire_points {
-                                        *firepoint = &no_trans_matrix * *firepoint;
-                                    }
-                                    turret.normal.0 = &rot_matrix * turret.normal.0;
-                                }
-                            }
-
-                            if let Some((mut uvec, mut fvec)) = model.sub_objects[id].uvec_fvec() {
-                                uvec = &rot_matrix * uvec;
-                                fvec = &rot_matrix * fvec;
-                                pof::properties_update_field(&mut model.sub_objects[id].properties, "$uvec", &uvec.to_string());
-                                pof::properties_update_field(&mut model.sub_objects[id].properties, "$fvec", &fvec.to_string());
-                            }
-
-                            let children: Vec<_> = model.sub_objects[id].children().copied().collect();
-                            for child_id in children {
-                                transform_subobj(model, child_id, &no_trans_matrix, true)
-                            }
-                        }
-
-                        transform_subobj(&mut self.model, id, &matrix, false);
-
-                        transform_window.open = false;
-                    }
-                }
 
                 // Parent subobject combo box ================================================================
 
@@ -3307,16 +3539,19 @@ impl PofToolsGui {
                 ui.add_enabled_ui(eye_num.is_some(), |ui| {
                     if let Some(num) = eye_num {
                         let mut name_list = self.model.get_subobj_names();
-                        if self.model.eye_points[num].attached_subobj.is_none() {
-                            name_list.push("None".to_string());
-                        }
+                        name_list.push("None".to_string());
 
                         let changed = egui::ComboBox::from_label("Attached submodel")
                             .show_index(ui, attached_subobj_idx, name_list.len(), |i| name_list[i].to_owned())
                             .changed();
 
-                        if changed && *attached_subobj_idx < self.model.sub_objects.len() {
-                            let mut new_val = Some(ObjectId(*attached_subobj_idx as u32));
+                        if changed {
+                            let mut new_val = if *attached_subobj_idx < self.model.sub_objects.len() {
+                                Some(ObjectId(*attached_subobj_idx as u32))
+                            } else {
+                                None
+                            };
+
                             model_action(
                                 undo_history,
                                 &mut self.model,
@@ -3456,14 +3691,6 @@ impl PofToolsGui {
             self.sanitize_ui_state();
             self.ui_state.refresh_properties_panel(&self.model);
             self.ui_state.properties_panel_dirty = false;
-        }
-
-        if rebuild_all_buffers {
-            self.rebuild_all_subobj_buffers(display);
-            self.rebuild_all_insignia_buffers(display);
-            self.rebuild_shield_buffer(display);
-        } else {
-            self.rebuild_subobj_buffers(display, buffer_ids_to_rebuild);
         }
     }
 }

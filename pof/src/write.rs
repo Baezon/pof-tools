@@ -16,8 +16,8 @@ use json::Index;
 extern crate nalgebra_glm as glm;
 
 use crate::{
-    BoundingBox, BspData, BspNode, Dock, EyePoint, GlowPointBank, Insignia, Model, ObjVec, ObjectId, Path, ShieldData, ShieldNode, SpecialPoint,
-    SubObject, ThrusterBank, Turret, Vec3d, Version, WeaponHardpoint,
+    BoundingBox, BspData, BspNode, Dock, EyePoint, GlowPointBank, Insignia, Model, Path, ShieldData, ShieldNode, SpecialPoint, Submodel, SubmodelId,
+    SubmodelVec, ThrusterBank, Turret, Vec3d, Version, WeaponHardpoint,
 };
 
 pub(crate) trait Serialize {
@@ -353,23 +353,23 @@ fn write_chunk_vec<T: Serialize>(w: &mut impl Write, chunk_name: &[u8; 4], data:
     Ok(())
 }
 
-fn write_subobjects(w: &mut impl Write, chunk_name: &[u8; 4], objects: &[SubObject]) -> io::Result<()> {
-    fn write_subobject(w: &mut impl Write, chunk_name: [u8; 4], objects: &[SubObject], written: &mut [bool], id: ObjectId) -> io::Result<()> {
+fn write_submodels(w: &mut impl Write, chunk_name: &[u8; 4], submodels: &[Submodel]) -> io::Result<()> {
+    fn write_submodel(w: &mut impl Write, chunk_name: [u8; 4], submodels: &[Submodel], written: &mut [bool], id: SubmodelId) -> io::Result<()> {
         if !written[id.0 as usize] {
-            let obj = &objects[id.0 as usize];
+            let smodel = &submodels[id.0 as usize];
             // ensure parents are written before children
-            if let Some(parent) = obj.parent {
-                write_subobject(w, chunk_name, objects, written, parent)?;
+            if let Some(parent) = smodel.parent {
+                write_submodel(w, chunk_name, submodels, written, parent)?;
             }
-            write_chunk(w, &chunk_name, Some(obj))?;
+            write_chunk(w, &chunk_name, Some(smodel))?;
             written[id.0 as usize] = true;
         }
         Ok(())
     }
 
-    let mut written = vec![false; objects.len()];
-    for i in 0..objects.len() as u32 {
-        write_subobject(w, *chunk_name, objects, &mut written, ObjectId(i))?;
+    let mut written = vec![false; submodels.len()];
+    for i in 0..submodels.len() as u32 {
+        write_submodel(w, *chunk_name, submodels, &mut written, SubmodelId(i))?;
     }
     Ok(())
 }
@@ -388,18 +388,18 @@ impl Model {
             if self.version >= Version::V21_16 {
                 self.header.max_radius.write_to(w)?;
                 self.header.obj_flags.write_to(w)?;
-                self.header.num_subobjects.write_to(w)?;
+                self.header.num_submodels.write_to(w)?;
             } else {
-                self.header.num_subobjects.write_to(w)?;
+                self.header.num_submodels.write_to(w)?;
                 self.header.max_radius.write_to(w)?;
                 self.header.obj_flags.write_to(w)?;
             }
             self.header.bbox.write_to(w)?;
             self.header.detail_levels.write_to(w)?;
-            self.sub_objects
+            self.submodels
                 .iter()
-                .filter(|obj| obj.is_debris_model)
-                .map(|obj| obj.obj_id)
+                .filter(|smodel| smodel.is_debris_model)
+                .map(|smodel| smodel.id)
                 .collect::<Vec<_>>()
                 .write_to(w)?;
             if self.version >= Version::V20_09 {
@@ -422,7 +422,7 @@ impl Model {
             }
             Ok(())
         })?;
-        write_subobjects(w, if self.version >= Version::V21_16 { b"OBJ2" } else { b"SOBJ" }, &self.sub_objects)?;
+        write_submodels(w, if self.version >= Version::V21_16 { b"OBJ2" } else { b"SOBJ" }, &self.submodels)?;
         write_chunk_vec(w, b"TXTR", &self.textures)?;
         write_chunk_vec(w, b"PATH", &self.paths)?;
         write_chunk_vec(w, b"SPCL", &self.special_points)?;
@@ -693,7 +693,7 @@ fn make_glows_node<N: Node>(ctx: &mut N::Ctx, glows: &[GlowPointBank], up: UpAxi
         bank_node.children().extend([
             N::from_name(format!("#g{}-type", i), format!("#g{}-type:{}", i, glow_bank.glow_type)).build(ctx),
             N::from_name(format!("#g{}-lod", i), format!("#g{}-lod:{}", i, glow_bank.lod)).build(ctx),
-            N::from_name(format!("#g{}-parent", i), format!("#g{}-parent:{}", i, glow_bank.obj_parent.0)).build(ctx),
+            N::from_name(format!("#g{}-parent", i), format!("#g{}-parent:{}", i, glow_bank.model_parent.0)).build(ctx),
             N::from_name(format!("#g{}-ontime", i), format!("#g{}-ontime:{}", i, glow_bank.on_time)).build(ctx),
             N::from_name(format!("#g{}-offtime", i), format!("#g{}-offtime:{}", i, glow_bank.off_time)).build(ctx),
             N::from_name(format!("#g{}-disptime", i), format!("#g{}-disptime:{}", i, glow_bank.disp_time)).build(ctx),
@@ -744,7 +744,7 @@ fn make_eyes_node<N: Node>(ctx: &mut N::Ctx, eye_points: &[EyePoint], up: UpAxis
         point_node.translate(pos.into());
         point_node.rotate(vec_to_rotation(&point.normal.0, up));
 
-        if let Some(id) = point.attached_subobj {
+        if let Some(id) = point.attached_submodel {
             point_node
                 .children()
                 .push(N::from_name(format!("#e{}-parent", i), format!("#e{}-parent:{}", i, id.0)).build(ctx));
@@ -879,25 +879,25 @@ fn make_shield_node(shield: &ShieldData, geometries: &mut Vec<Geometry>, up: UpA
     node
 }
 
-fn make_subobj_node(
-    up: UpAxis, subobjs: &ObjVec<SubObject>, subobj: &SubObject, turrets: &[Turret], geometries: &mut Vec<Geometry>, materials: &[String],
+fn make_submodel_node(
+    up: UpAxis, submodels: &SubmodelVec<Submodel>, submodel: &Submodel, turrets: &[Turret], geometries: &mut Vec<Geometry>, materials: &[String],
 ) -> DaeNode {
-    let geo_id = format!("{}-geometry", subobj.name);
-    let pos_id = format!("{}-geometry-position", subobj.name);
-    let vert_id = format!("{}-geometry-vertex", subobj.name);
+    let geo_id = format!("{}-geometry", submodel.name);
+    let pos_id = format!("{}-geometry-position", submodel.name);
+    let vert_id = format!("{}-geometry-vertex", submodel.name);
     let pos_array_id = format!("{}-array", pos_id);
-    let norm_id = format!("{}-geometry-normal", subobj.name);
+    let norm_id = format!("{}-geometry-normal", submodel.name);
     let norm_array_id = format!("{}-array", norm_id);
-    let uv_id = format!("{}-geometry-uv", subobj.name);
+    let uv_id = format!("{}-geometry-uv", submodel.name);
     let uv_array_id = format!("{}-array", uv_id);
 
     let mut positions = vec![];
-    for vert in &subobj.bsp_data.verts {
+    for vert in &submodel.bsp_data.verts {
         positions.extend_from_slice(&<[_; 3]>::from(vert.to_coord(up)));
     }
 
     let mut normals = vec![];
-    for norm in &subobj.bsp_data.norms {
+    for norm in &submodel.bsp_data.norms {
         normals.extend_from_slice(&<[_; 3]>::from(norm.to_coord(up)));
     }
 
@@ -905,7 +905,7 @@ fn make_subobj_node(
     let mut uv_len = 0;
     let mut prim_elems = vec![(vec![], vec![]); materials.len() + 1];
 
-    for (_, poly) in subobj.bsp_data.collision_tree.leaves() {
+    for (_, poly) in submodel.bsp_data.collision_tree.leaves() {
         let (vert_count, indices) = &mut prim_elems[poly.texture.0 as usize + 1];
         vert_count.push(poly.verts.len() as u32);
         for vert in poly.verts.iter().rev() {
@@ -961,14 +961,14 @@ fn make_subobj_node(
             .collect(),
     ));
 
-    let mut node = DaeNode::from_id(subobj.name.clone());
-    node.translate(subobj.offset.to_coord(up).into());
+    let mut node = DaeNode::from_id(submodel.name.clone());
+    node.translate(submodel.offset.to_coord(up).into());
 
-    // kind of expensive to do per subobj?
+    // kind of expensive to do per submodel?
     for (i, turret) in turrets.iter().enumerate() {
-        if turret.gun_obj == subobj.obj_id {
+        if turret.gun_model == submodel.id {
             for (j, point) in turret.fire_points.iter().enumerate() {
-                let name = if turret.base_obj == subobj.obj_id {
+                let name = if turret.base_model == submodel.id {
                     format!("#t{}-point{}", i, j)
                 } else {
                     format!("#t{}-gun-point{}", i, j)
@@ -982,37 +982,45 @@ fn make_subobj_node(
         }
     }
 
-    if !subobj.properties.is_empty() {
+    if !submodel.properties.is_empty() {
         node.children
-            .push(make_properties_node(&mut (), &subobj.properties, format!("{}-", subobj.name)));
+            .push(make_properties_node(&mut (), &submodel.properties, format!("{}-", submodel.name)));
     }
 
-    if subobj.rotation_type != Default::default() {
-        node.children
-            .push(DaeNode::new(format!("{}-mov-type", subobj.name), Some(format!("#{}-mov-type:{}", subobj.name, subobj.rotation_type as i32))));
+    if submodel.rotation_type != Default::default() {
+        node.children.push(DaeNode::new(
+            format!("{}-mov-type", submodel.name),
+            Some(format!("#{}-mov-type:{}", submodel.name, submodel.rotation_type as i32)),
+        ));
     }
 
-    if subobj.rotation_axis != Default::default() {
-        node.children
-            .push(DaeNode::new(format!("{}-mov-axis", subobj.name), Some(format!("#{}-mov-axis:{}", subobj.name, subobj.rotation_axis as i32))));
+    if submodel.rotation_axis != Default::default() {
+        node.children.push(DaeNode::new(
+            format!("{}-mov-axis", submodel.name),
+            Some(format!("#{}-mov-axis:{}", submodel.name, submodel.rotation_axis as i32)),
+        ));
     }
 
-    if subobj.translation_type != Default::default() {
-        node.children
-            .push(DaeNode::new(format!("{}-mov-type", subobj.name), Some(format!("#{}-trans-type:{}", subobj.name, subobj.translation_type as i32))));
+    if submodel.translation_type != Default::default() {
+        node.children.push(DaeNode::new(
+            format!("{}-mov-type", submodel.name),
+            Some(format!("#{}-trans-type:{}", submodel.name, submodel.translation_type as i32)),
+        ));
     }
 
-    if subobj.translation_axis != Default::default() {
-        node.children
-            .push(DaeNode::new(format!("{}-mov-axis", subobj.name), Some(format!("#{}-trans-axis:{}", subobj.name, subobj.translation_axis as i32))));
+    if submodel.translation_axis != Default::default() {
+        node.children.push(DaeNode::new(
+            format!("{}-mov-axis", submodel.name),
+            Some(format!("#{}-trans-axis:{}", submodel.name, submodel.translation_axis as i32)),
+        ));
     }
 
     node.instance_geometry.push(instance);
     node.children.extend(
-        subobj
+        submodel
             .children
             .iter()
-            .map(|&id| make_subobj_node(up, subobjs, &subobjs[id], turrets, geometries, materials)),
+            .map(|&id| make_submodel_node(up, submodels, &submodels[id], turrets, geometries, materials)),
     );
 
     node
@@ -1027,12 +1035,12 @@ impl Model {
 
         let up = UpAxis::YUp;
 
-        for subobj in &self.sub_objects {
-            if subobj.parent.is_none() {
-                let mut top_level_node = make_subobj_node(up, &self.sub_objects, subobj, &self.turrets, &mut geometries, &materials);
+        for submodel in &self.submodels {
+            if submodel.parent.is_none() {
+                let mut top_level_node = make_submodel_node(up, &self.submodels, submodel, &self.turrets, &mut geometries, &materials);
 
                 for (i, insignia) in self.insignias.iter().enumerate() {
-                    if self.get_sobj_detail_level(subobj.obj_id) == Some(insignia.detail_level) {
+                    if self.get_smodel_detail_level(submodel.id) == Some(insignia.detail_level) {
                         top_level_node.children.push(make_insignia_node(insignia, &mut geometries, i, up))
                     }
                 }
@@ -1324,9 +1332,9 @@ impl GltfBuilder {
         node.build(&mut self.root.nodes)
     }
 
-    fn make_subobj_node(&mut self, subobjs: &ObjVec<SubObject>, subobj: &SubObject, turrets: &[Turret], materials: usize) -> json::Node {
+    fn make_submodel_node(&mut self, submodels: &SubmodelVec<Submodel>, submodel: &Submodel, turrets: &[Turret], materials: usize) -> json::Node {
         let mut prim_elems = vec![vec![]; materials];
-        for (_, poly) in subobj.bsp_data.collision_tree.leaves() {
+        for (_, poly) in submodel.bsp_data.collision_tree.leaves() {
             if let [vert1, rest @ ..] = &*poly.verts {
                 let tris = &mut prim_elems[poly.texture.0 as usize];
                 for verts in rest.windows(2) {
@@ -1346,8 +1354,8 @@ impl GltfBuilder {
                 let view = self.push_buffer_view(start, size_of::<(Vec3d, Vec3d, [f32; 2])>(), false, count, Target::ArrayBuffer);
                 let mut bbox_pos = BoundingBox::EMPTY;
                 for vert in prim_elem.into_iter().flatten() {
-                    let position = subobj.bsp_data.verts[vert.vertex_id.0 as usize].to_coord(up);
-                    let normal = subobj.bsp_data.norms[vert.normal_id.0 as usize].to_coord(up);
+                    let position = submodel.bsp_data.verts[vert.vertex_id.0 as usize].to_coord(up);
+                    let normal = submodel.bsp_data.norms[vert.normal_id.0 as usize].to_coord(up);
                     bbox_pos.expand_vec(position);
                     (position, normal, vert.uv).write_to(&mut self.buffer).unwrap();
                 }
@@ -1379,14 +1387,14 @@ impl GltfBuilder {
 
         let geo_id = self.push_mesh(primitives);
 
-        let mut node = NodeIndex::from_id(subobj.name.clone());
-        node.translate(subobj.offset.to_coord(up).into());
+        let mut node = NodeIndex::from_id(submodel.name.clone());
+        node.translate(submodel.offset.to_coord(up).into());
 
-        // kind of expensive to do per subobj?
+        // kind of expensive to do per submodel?
         for (i, turret) in turrets.iter().enumerate() {
-            if turret.gun_obj == subobj.obj_id {
+            if turret.gun_model == submodel.id {
                 for (j, point) in turret.fire_points.iter().enumerate() {
-                    let name = if turret.base_obj == subobj.obj_id {
+                    let name = if turret.base_model == submodel.id {
                         format!("#t{}-point{}", i, j)
                     } else {
                         format!("#t{}-gun-point{}", i, j)
@@ -1400,25 +1408,25 @@ impl GltfBuilder {
             }
         }
 
-        if !subobj.properties.is_empty() {
+        if !submodel.properties.is_empty() {
             node.children()
-                .push(make_properties_node(&mut self.root.nodes, &subobj.properties, format!("{}-", subobj.name)));
+                .push(make_properties_node(&mut self.root.nodes, &submodel.properties, format!("{}-", submodel.name)));
         }
 
-        if subobj.rotation_type != Default::default() {
+        if submodel.rotation_type != Default::default() {
             node.children()
-                .push(NodeIndex::from_id(format!("#{}-mov-type:{}", subobj.name, subobj.rotation_type as i32)).build(&mut self.root.nodes));
+                .push(NodeIndex::from_id(format!("#{}-mov-type:{}", submodel.name, submodel.rotation_type as i32)).build(&mut self.root.nodes));
         }
 
-        if subobj.rotation_axis != Default::default() {
+        if submodel.rotation_axis != Default::default() {
             node.children()
-                .push(NodeIndex::from_id(format!("#{}-mov-axis:{}", subobj.name, subobj.rotation_axis as i32)).build(&mut self.root.nodes));
+                .push(NodeIndex::from_id(format!("#{}-mov-axis:{}", submodel.name, submodel.rotation_axis as i32)).build(&mut self.root.nodes));
         }
 
         node.mesh = Some(geo_id);
-        for &id in &subobj.children {
+        for &id in &submodel.children {
             node.children().push(
-                self.make_subobj_node(subobjs, &subobjs[id], turrets, materials)
+                self.make_submodel_node(submodels, &submodels[id], turrets, materials)
                     .build(&mut self.root.nodes),
             );
         }
@@ -1461,12 +1469,12 @@ impl GltfBuilder {
 
         let mut nodes = vec![];
 
-        for subobj in &model.sub_objects {
-            if subobj.parent.is_none() {
-                let mut top_level_node = self.make_subobj_node(&model.sub_objects, subobj, &model.turrets, model.textures.len());
+        for submodel in &model.submodels {
+            if submodel.parent.is_none() {
+                let mut top_level_node = self.make_submodel_node(&model.submodels, submodel, &model.turrets, model.textures.len());
 
                 for (i, insignia) in model.insignias.iter().enumerate() {
-                    if model.get_sobj_detail_level(subobj.obj_id) == Some(insignia.detail_level) {
+                    if model.get_smodel_detail_level(submodel.id) == Some(insignia.detail_level) {
                         top_level_node.children().push(self.make_insignia_node(insignia, i, up))
                     }
                 }

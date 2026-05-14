@@ -16,8 +16,8 @@ impl Model {
         // remove unused textures
         // tally up used texture ids
         let mut used_tex_ids = HashSet::new();
-        for subobj in &self.sub_objects {
-            for (_, poly) in subobj.bsp_data.collision_tree.leaves() {
+        for smodel in &self.submodels {
+            for (_, poly) in smodel.bsp_data.collision_tree.leaves() {
                 used_tex_ids.insert(poly.texture);
             }
         }
@@ -32,8 +32,8 @@ impl Model {
         }
 
         // apply the mapping
-        for subobj in self.sub_objects.iter_mut() {
-            for (_, poly) in subobj.bsp_data.collision_tree.leaves_mut() {
+        for smodel in self.submodels.iter_mut() {
+            for (_, poly) in smodel.bsp_data.collision_tree.leaves_mut() {
                 poly.texture = tex_map[&poly.texture];
             }
         }
@@ -58,7 +58,7 @@ impl<R: Read + Seek> Parser<R> {
     pub fn parse(&mut self, path: PathBuf) -> io::Result<Model> {
         // println!("parsing new model!");
         let mut header = None;
-        let mut sub_objects = vec![];
+        let mut submodels = vec![];
         let mut textures = None;
         let mut paths = None;
         let mut special_points = None;
@@ -75,7 +75,7 @@ impl<R: Read + Seek> Parser<R> {
         let mut shield_data = None;
 
         let mut shield_tree_chunk = None;
-        let mut debris_objs = vec![];
+        let mut debris_models = vec![];
 
         loop {
             let id = &match self.read_bytes() {
@@ -91,23 +91,23 @@ impl<R: Read + Seek> Parser<R> {
                     assert!(header.is_none());
                     assert_eq!(self.version >= Version::V21_16, id == b"HDR2");
 
-                    let (max_radius, obj_flags, num_subobjects);
+                    let (max_radius, obj_flags, num_submodels);
                     if self.version >= Version::V21_16 {
                         max_radius = self.read_f32()?;
                         obj_flags = self.read_u32()?;
-                        num_subobjects = self.read_u32()?;
+                        num_submodels = self.read_u32()?;
                     } else {
-                        num_subobjects = self.read_u32()?;
+                        num_submodels = self.read_u32()?;
                         max_radius = self.read_f32()?;
                         obj_flags = self.read_u32()?;
                     }
 
-                    sub_objects = vec![None; num_subobjects as usize];
+                    submodels = vec![None; num_submodels as usize];
 
                     let bounding_box = self.read_bbox()?;
 
-                    let detail_levels = self.read_list(|this| Ok(ObjectId(this.read_u32()?)))?;
-                    debris_objs = self.read_list(|this| Ok(ObjectId(this.read_u32()?)))?;
+                    let detail_levels = self.read_list(|this| Ok(SubmodelId(this.read_u32()?)))?;
+                    debris_models = self.read_list(|this| Ok(SubmodelId(this.read_u32()?)))?;
 
                     let (mut mass, center_of_mass, mut moment_of_inertia);
                     if self.version >= Version::V19_03 {
@@ -156,8 +156,8 @@ impl<R: Read + Seek> Parser<R> {
                         vec![]
                     };
 
-                    header = Some(ObjHeader {
-                        num_subobjects,
+                    header = Some(ModelHeader {
+                        num_submodels,
                         max_radius,
                         obj_flags,
                         bbox: bounding_box,
@@ -174,7 +174,7 @@ impl<R: Read + Seek> Parser<R> {
                     assert!(header.is_some());
                     assert_eq!(self.version >= Version::V21_16, id == b"OBJ2");
 
-                    let obj_id = ObjectId(self.read_u32()?); //id
+                    let model_id = SubmodelId(self.read_u32()?); //id
 
                     let (radius, parent, offset);
                     if self.version >= Version::V21_16 {
@@ -189,8 +189,8 @@ impl<R: Read + Seek> Parser<R> {
                     let parent = if parent == u32::MAX {
                         None
                     } else {
-                        // assert!(sub_objects[parent as usize].is_some(), "parent out of order");
-                        Some(ObjectId(parent))
+                        // assert!(submodels[parent as usize].is_some(), "parent out of order");
+                        Some(SubmodelId(parent))
                     };
 
                     let geo_center = self.read_vec3d()?;
@@ -217,11 +217,11 @@ impl<R: Read + Seek> Parser<R> {
                     assert!(self.read_i32()? == 0, "chunked models unimplemented in FSO");
                     let bsp_data_buffer = self.read_byte_buffer()?;
                     let bsp_data = parse_bsp_data(&bsp_data_buffer, self.version)?;
-                    //println!("parsed subobject {}", name);
+                    //println!("parsed submodel {}", name);
 
-                    assert!(sub_objects[obj_id.0 as usize].is_none());
-                    sub_objects[obj_id.0 as usize] = Some(SubObject {
-                        obj_id,
+                    assert!(submodels[model_id.0 as usize].is_none());
+                    submodels[model_id.0 as usize] = Some(Submodel {
+                        id: model_id,
                         radius,
                         parent,
                         offset,
@@ -234,10 +234,10 @@ impl<R: Read + Seek> Parser<R> {
                         translation_type,
                         translation_axis,
                         bsp_data,
-                        // these rest are to be filled later once we've parsed all the subobjects
+                        // these rest are to be filled later once we've parsed all the submodels
                         ..Default::default()
                     });
-                    //println!("parsed subobject {:#?}", sub_objects[obj_id.0 as usize]);
+                    //println!("parsed submodel {:#?}", submodels[model_id.0 as usize]);
                 }
                 b"TXTR" => {
                     assert!(textures.is_none());
@@ -260,7 +260,7 @@ impl<R: Read + Seek> Parser<R> {
                                 Ok(PathPoint {
                                     position: this.read_vec3d()?,
                                     radius: this.read_f32()?,
-                                    turrets: this.read_list(|this| Ok(ObjectId(this.read_u32()?)))?,
+                                    turrets: this.read_list(|this| Ok(SubmodelId(this.read_u32()?)))?,
                                 })
                             })?,
                         })
@@ -283,12 +283,12 @@ impl<R: Read + Seek> Parser<R> {
                 b"EYE " => {
                     eye_points = Some(self.read_list(|this| {
                         Ok(EyePoint {
-                            attached_subobj: {
+                            attached_submodel: {
                                 let id = this.read_u32()?;
                                 if id == u32::MAX {
                                     None
                                 } else {
-                                    Some(ObjectId(id))
+                                    Some(SubmodelId(id))
                                 }
                             },
                             position: this.read_vec3d()?,
@@ -318,13 +318,13 @@ impl<R: Read + Seek> Parser<R> {
                 }
                 b"TGUN" | b"TMIS" => {
                     turrets.extend(self.read_list(|this| {
-                        let base_obj = ObjectId(this.read_u32()?);
-                        let gun_obj = ObjectId(this.read_u32()?);
-                        assert!(sub_objects[base_obj.0 as usize].is_some(), "turret precedes base object");
-                        assert!(sub_objects[gun_obj.0 as usize].is_some(), "turret precedes gun object");
+                        let base_model = SubmodelId(this.read_u32()?);
+                        let gun_model = SubmodelId(this.read_u32()?);
+                        assert!(submodels[base_model.0 as usize].is_some(), "turret precedes base model");
+                        assert!(submodels[gun_model.0 as usize].is_some(), "turret precedes gun model");
                         Ok(Turret {
-                            base_obj,
-                            gun_obj,
+                            base_model,
+                            gun_model,
                             normal: this.read_vec3d()?.try_into().unwrap_or_default(),
                             fire_points: this.read_list(|this| this.read_vec3d())?,
                         })
@@ -361,7 +361,7 @@ impl<R: Read + Seek> Parser<R> {
                             disp_time: this.read_i32()?,
                             on_time: this.read_u32()?,
                             off_time: this.read_u32()?,
-                            obj_parent: ObjectId(this.read_u32()?),
+                            model_parent: SubmodelId(this.read_u32()?),
                             lod: this.read_u32()?,
                             glow_type: this.read_u32()?,
                             properties: {
@@ -476,25 +476,25 @@ impl<R: Read + Seek> Parser<R> {
             _ => None,
         };
 
-        // now that all the subobjects shouldve have been slotted in, assert that they all exist
-        let mut sub_objects = ObjVec(sub_objects.into_iter().map(|subobj_opt| subobj_opt.unwrap()).collect());
+        // now that all the submodels shouldve have been slotted in, assert that they all exist
+        let mut submodels = SubmodelVec(submodels.into_iter().map(|smodel_opt| smodel_opt.unwrap()).collect());
 
-        debris_objs.retain(|id| {
-            if id.0 < sub_objects.len() as u32 {
-                sub_objects[*id].is_debris_model = true;
+        debris_models.retain(|id| {
+            if id.0 < submodels.len() as u32 {
+                submodels[*id].is_debris_model = true;
                 true
             } else {
-                warn!("Invalid debris object {} discarded", id.0);
+                warn!("Invalid debris model {} discarded", id.0);
                 false
             }
         });
 
         let mut header = header.expect("No header chunk found???");
         header.detail_levels.retain(|id| {
-            if id.0 < sub_objects.len() as u32 {
+            if id.0 < submodels.len() as u32 {
                 true
             } else {
-                warn!("Invalid detail level object {} discarded", id.0);
+                warn!("Invalid detail level model {} discarded", id.0);
                 false
             }
         });
@@ -509,23 +509,23 @@ impl<R: Read + Seek> Parser<R> {
             }
         }
 
-        // sanitize eye point subobjs
+        // sanitize eye point submodels
         if let Some(points) = eye_points.as_deref_mut() {
             for (i, eye) in points.iter_mut().enumerate() {
-                if eye.attached_subobj.map_or(false, |id| id.0 >= sub_objects.len() as u32) {
-                    eye.attached_subobj = None;
+                if eye.attached_submodel.map_or(false, |id| id.0 >= submodels.len() as u32) {
+                    eye.attached_submodel = None;
                     warn!("Invalid eye point {} reset", i);
                 }
             }
         }
 
         let mut textures = textures.unwrap_or_default();
-        let untextured_idx = post_parse_fill_untextured_slot(&mut sub_objects, &mut textures);
+        let untextured_idx = post_parse_fill_untextured_slot(&mut submodels, &mut textures);
 
         let mut model = Model {
             version: self.version,
             header,
-            sub_objects,
+            submodels,
             textures,
             paths: paths.unwrap_or_default(),
             special_points: special_points.unwrap_or_default(),
@@ -934,14 +934,14 @@ fn mk_insignia(detail_level: Option<u32>, offset: Vec3d, vertices: Vec<Vec3d>, p
     }
 }
 
-fn push_subobj(
-    sub_objects: &mut Vec<SubObject>, offset: Vec3d, parent: Option<ObjectId>, name: &str, is_debris_model: bool, verts: Vec<Vec3d>,
+fn push_submodel(
+    submodels: &mut Vec<Submodel>, offset: Vec3d, parent: Option<SubmodelId>, name: &str, is_debris_model: bool, verts: Vec<Vec3d>,
     norms: Vec<Vec3d>, polygons: Vec<(TextureId, Vec<PolyVertex>)>,
-) -> ObjectId {
-    let obj_id = ObjectId(sub_objects.len() as _);
+) -> SubmodelId {
+    let model_id = SubmodelId(submodels.len() as _);
 
-    let mut new_subobj = SubObject {
-        obj_id,
+    let mut new_submodel = Submodel {
+        id: model_id,
         radius: Default::default(),
         parent,
         offset,
@@ -968,11 +968,11 @@ fn push_subobj(
         ..Default::default()
     };
 
-    new_subobj.bbox = new_subobj.recalc_bbox();
-    new_subobj.radius = new_subobj.recalc_radius();
+    new_submodel.bbox = new_submodel.recalc_bbox();
+    new_submodel.radius = new_submodel.recalc_radius();
 
-    sub_objects.push(new_subobj);
-    obj_id
+    submodels.push(new_submodel);
+    model_id
 }
 
 trait ParseCtx<'a> {
@@ -983,9 +983,11 @@ trait ParseCtx<'a> {
 
     fn parse_geometry(&self, node: &Self::Node, transform: &Mat4x4) -> (Vec<Vec3d>, Vec<Vec3d>, Vec<(TextureId, Vec<PolyVertex>)>);
 
-    fn parse_subobject_recursive(&self, model: &mut Model, node: Self::Node, parent: ObjectId, detail_level: Option<u32>, parent_transform: &Mat4x4) {
+    fn parse_submodel_recursive(
+        &self, model: &mut Model, node: Self::Node, parent: SubmodelId, detail_level: Option<u32>, parent_transform: &Mat4x4,
+    ) {
         let name = match node.name() {
-            None => return, // subobjects must have names!
+            None => return, // submodels must have names!
             Some(name) => name,
         };
         let mut transform = parent_transform * node.transform();
@@ -997,9 +999,9 @@ trait ParseCtx<'a> {
 
         let (vertices_out, normals_out, polygons_out) = self.parse_geometry(&node, &transform);
 
-        // ignore subobjects with no geo
+        // ignore submodels with no geo
         // metadata (empties with names like #properties) are handled below directly
-        // this function must *start* with a proper subobject
+        // this function must *start* with a proper submodel
         if polygons_out.is_empty() {
             return;
         }
@@ -1012,19 +1014,19 @@ trait ParseCtx<'a> {
                 return;
             }
 
-            let obj_id = push_subobj(&mut model.sub_objects, offset, Some(parent), name, false, vertices_out, normals_out, polygons_out);
+            let model_id = push_submodel(&mut model.submodels, offset, Some(parent), name, false, vertices_out, normals_out, polygons_out);
 
             for node in node.children() {
-                // make a pointer to the subobj we just pushed
-                // annoying, but the node children could be properties that modify it, or proper subobject children
-                // which will require that this subobject be already pushed into the list
-                let len = model.sub_objects.len() - 1;
-                let subobj = &mut model.sub_objects.0[len];
+                // make a pointer to the submodel we just pushed
+                // annoying, but the node children could be properties that modify it, or proper submodel children
+                // which will require that this submodel be already pushed into the list
+                let len = model.submodels.len() - 1;
+                let smodel = &mut model.submodels.0[len];
 
                 if let Some(name) = node.name() {
                     if name.starts_with('#') && name.contains("point") {
                         let turret = {
-                            match model.turrets.iter().position(|turret| turret.gun_obj == obj_id) {
+                            match model.turrets.iter().position(|turret| turret.gun_model == model_id) {
                                 Some(idx) => &mut model.turrets[idx],
                                 None => {
                                     model.turrets.push(Turret::default());
@@ -1034,48 +1036,48 @@ trait ParseCtx<'a> {
                             }
                         };
 
-                        turret.gun_obj = obj_id;
-                        turret.base_obj = if name.contains("gun") { parent } else { obj_id };
+                        turret.gun_model = model_id;
+                        turret.base_model = if name.contains("gun") { parent } else { model_id };
 
                         let (pos, norm, _) = node.parse_point(&transform, up);
                         turret.fire_points.push(pos);
                         turret.normal = norm.try_into().unwrap_or_default();
                         continue;
                     } else if name.starts_with('#') && name.contains("properties") {
-                        node.parse_properties(&mut subobj.properties);
+                        node.parse_properties(&mut smodel.properties);
                         continue;
                     } else if name.starts_with('#') && name.contains("mov-type") {
                         if let Some(idx) = name.find(':') {
                             if let Ok(val) = name[(idx + 1)..].parse::<i32>() {
-                                subobj.rotation_type = val.try_into().unwrap_or_default();
+                                smodel.rotation_type = val.try_into().unwrap_or_default();
                             }
                         }
                         continue;
                     } else if name.starts_with('#') && name.contains("mov-axis") {
                         if let Some(idx) = name.find(':') {
                             if let Ok(val) = name[(idx + 1)..].parse::<i32>() {
-                                subobj.rotation_axis = val.try_into().unwrap_or_default();
+                                smodel.rotation_axis = val.try_into().unwrap_or_default();
                             }
                         }
                         continue;
                     } else if name.starts_with('#') && name.contains("trans-type") {
                         if let Some(idx) = name.find(':') {
                             if let Ok(val) = name[(idx + 1)..].parse::<i32>() {
-                                subobj.translation_type = val.try_into().unwrap_or_default();
+                                smodel.translation_type = val.try_into().unwrap_or_default();
                             }
                         }
                         continue;
                     } else if name.starts_with('#') && name.contains("trans-axis") {
                         if let Some(idx) = name.find(':') {
                             if let Ok(val) = name[(idx + 1)..].parse::<i32>() {
-                                subobj.translation_axis = val.try_into().unwrap_or_default();
+                                smodel.translation_axis = val.try_into().unwrap_or_default();
                             }
                         }
                         continue;
                     }
                 }
 
-                self.parse_subobject_recursive(model, node, obj_id, detail_level, &transform);
+                self.parse_submodel_recursive(model, node, model_id, detail_level, &transform);
             }
         }
     }
@@ -1142,30 +1144,30 @@ trait ParseCtx<'a> {
                 } else if name.to_lowercase().contains("insig") {
                     model.insignias.push(mk_insignia(None, offset, vertices_out, polygons_out));
                 } else {
-                    // must be a subobject
+                    // must be a submodel
 
                     // this should probably be warned about...
                     if vertices_out.is_empty() || normals_out.is_empty() {
                         continue;
                     }
 
-                    let obj_id =
-                        push_subobj(&mut model.sub_objects, offset, None, name, name.starts_with("debris"), vertices_out, normals_out, polygons_out);
+                    let model_id =
+                        push_submodel(&mut model.submodels, offset, None, name, name.starts_with("debris"), vertices_out, normals_out, polygons_out);
 
                     let mut detail_level: Option<u32> = None;
                     if let Some(idx) = name.to_lowercase().find("detail") {
                         if let Ok(level) = name[(idx + 6)..].parse::<usize>() {
                             if level >= model.header.detail_levels.len() {
-                                model.header.detail_levels.resize(level + 1, obj_id);
+                                model.header.detail_levels.resize(level + 1, model_id);
                             } else {
-                                model.header.detail_levels[level] = obj_id;
+                                model.header.detail_levels[level] = model_id;
                             }
                             detail_level = Some(level as u32);
                         }
                     }
 
                     for node in node.children() {
-                        self.parse_subobject_recursive(model, node, obj_id, detail_level, &transform);
+                        self.parse_submodel_recursive(model, node, model_id, detail_level, &transform);
                     }
                 }
             } else if name == "#thrusters" {
@@ -1291,7 +1293,7 @@ trait ParseCtx<'a> {
                         } else if name.contains("parent") {
                             if let Some(idx) = name.find(":") {
                                 if let Ok(val) = &name[(idx + 1)..].parse() {
-                                    new_bank.obj_parent = ObjectId(*val);
+                                    new_bank.model_parent = SubmodelId(*val);
                                 }
                             }
                         } else if name.contains("ontime") {
@@ -1357,7 +1359,7 @@ trait ParseCtx<'a> {
                     for (_, name) in node_children_with_keyword(node, "parent") {
                         if let Some(idx) = name.find(":") {
                             if let Ok(val) = &name[(idx + 1)..].parse() {
-                                new_point.attached_subobj = Some(ObjectId(*val));
+                                new_point.attached_submodel = Some(SubmodelId(*val));
                                 break;
                             }
                         }
@@ -1371,21 +1373,21 @@ trait ParseCtx<'a> {
             }
         }
 
-        for i in 0..model.sub_objects.len() {
-            if let Some(parent) = model.sub_objects[ObjectId(i as u32)].parent {
-                let id = model.sub_objects[ObjectId(i as u32)].obj_id;
-                model.sub_objects[parent].children.push(id);
+        for i in 0..model.submodels.len() {
+            if let Some(parent) = model.submodels[SubmodelId(i as u32)].parent {
+                let id = model.submodels[SubmodelId(i as u32)].id;
+                model.submodels[parent].children.push(id);
             }
         }
 
-        if model.header.detail_levels.is_empty() && !model.sub_objects.is_empty() {
-            model.header.detail_levels.push(ObjectId(0));
+        if model.header.detail_levels.is_empty() && !model.submodels.is_empty() {
+            model.header.detail_levels.push(SubmodelId(0));
             // this is pretty bad, but not having any detail levels is worse
         }
 
-        model.header.num_subobjects = model.sub_objects.len() as _;
+        model.header.num_submodels = model.submodels.len() as _;
 
-        model.untextured_idx = post_parse_fill_untextured_slot(&mut model.sub_objects, &mut model.textures);
+        model.untextured_idx = post_parse_fill_untextured_slot(&mut model.submodels, &mut model.textures);
 
         model.header.max_radius = model.recalc_radius();
         model.header.bbox = model.recalc_bbox();

@@ -13,7 +13,7 @@ use crate::{
     primitives::OCTAHEDRON_VERTS,
     ui::{
         DisplayMode, DockingTreeValue, DragAxis, EyeTreeValue, GlowTreeValue, InsigniaTreeValue, PathTreeValue, SpecialPointTreeValue,
-        SubObjectTreeValue, TextureTreeValue, ThrusterTreeValue, TurretTreeValue, UndoAction, WeaponTreeValue,
+        SubmodelTreeValue, TextureTreeValue, ThrusterTreeValue, TurretTreeValue, UndoAction, WeaponTreeValue,
     },
 };
 use eframe::egui::PointerButton;
@@ -22,8 +22,8 @@ use glium::{glutin::surface::WindowSurface, texture::SrgbTexture2d, BlendingFunc
 use glm::{Mat4x4, TMat4};
 use native_dialog::FileDialog;
 use pof::{
-    properties_get_field, BspData, Insignia, NameLink, NormalId, NormalVec3, ObjVec, ObjectId, Parser, PolyVertex, Polygon, Set, ShieldData,
-    SubObject, TextureId, Vec3d, VertexId,
+    properties_get_field, BspData, Insignia, NameLink, NormalId, NormalVec3, Parser, PolyVertex, Polygon, Set, ShieldData, Submodel, SubmodelId,
+    SubmodelVec, TextureId, Vec3d, VertexId,
 };
 use simplelog::*;
 use std::{
@@ -209,13 +209,13 @@ impl GlBufferedInsignia {
 }
 
 #[derive(Default)]
-struct GlObjectBuilder {
+struct GlMeshBuilder {
     vertices: Vec<Vertex>,
     normals: Vec<Normal>,
     map: HashMap<(VertexId, NormalId, u32, u32), u32>,
 }
 
-impl GlObjectBuilder {
+impl GlMeshBuilder {
     fn get_index(&mut self, bsp_data: &BspData, vert: &PolyVertex) -> u32 {
         *self
             .map
@@ -233,13 +233,13 @@ impl GlObjectBuilder {
 }
 
 #[derive(Default)]
-struct GlObjectsBuilder {
-    inner: GlObjectBuilder,
+struct GlMeshesBuilder {
+    inner: GlMeshBuilder,
     indices: Vec<u32>,
     wireframe_indices: Vec<u32>,
 }
 
-impl GlObjectsBuilder {
+impl GlMeshesBuilder {
     fn push(&mut self, bsp_data: &BspData, poly: &Polygon) {
         // need to triangulate possibly
         // we'll make tris like this 0,1,2 .. 0,2,3 .. 0,3,4... etc
@@ -286,10 +286,10 @@ impl GlObjectsBuilder {
         }
     }
 
-    fn finish(self, display: &Display<WindowSurface>, object: &SubObject, texture_id: Option<TextureId>, out: &mut Vec<GlObjectBuffer>) {
+    fn finish(self, display: &Display<WindowSurface>, smodel: &Submodel, texture_id: Option<TextureId>, out: &mut Vec<GlMeshBuffer>) {
         if !self.indices.is_empty() {
-            info!("Built buffer for subobj {}", object.name);
-            out.push(GlObjectBuffer {
+            info!("Built buffer for submodel {}", smodel.name);
+            out.push(GlMeshBuffer {
                 texture_id,
                 vertices: glium::VertexBuffer::new(display, &self.inner.vertices).unwrap(),
                 normals: glium::VertexBuffer::new(display, &self.inner.normals).unwrap(),
@@ -305,7 +305,7 @@ impl GlObjectsBuilder {
     }
 }
 
-struct GlObjectBuffer {
+struct GlMeshBuffer {
     texture_id: Option<TextureId>,
     vertices: VertexBuffer<Vertex>,
     normals: VertexBuffer<Normal>,
@@ -314,15 +314,15 @@ struct GlObjectBuffer {
     tint_val: f32,
 }
 
-struct GlObjectBuffers {
-    buffers: Vec<GlObjectBuffer>,
+struct GlMeshBuffers {
+    buffers: Vec<GlMeshBuffer>,
 }
 
-impl GlObjectBuffers {
-    fn new(display: &Display<WindowSurface>, object: &SubObject, num_textures: usize) -> Self {
-        let mut textures = Vec::from_iter(std::iter::repeat_with(GlObjectsBuilder::default).take(num_textures));
+impl GlMeshBuffers {
+    fn new(display: &Display<WindowSurface>, smodel: &Submodel, num_textures: usize) -> Self {
+        let mut textures = Vec::from_iter(std::iter::repeat_with(GlMeshesBuilder::default).take(num_textures));
 
-        let bsp_data = &object.bsp_data;
+        let bsp_data = &smodel.bsp_data;
 
         for (_, poly) in bsp_data.collision_tree.leaves() {
             textures[poly.texture.0 as usize].push(bsp_data, poly);
@@ -330,13 +330,13 @@ impl GlObjectBuffers {
 
         let mut buffers = vec![];
         for (i, builder) in textures.into_iter().enumerate() {
-            builder.finish(display, object, Some(TextureId(i as u32)), &mut buffers)
+            builder.finish(display, smodel, Some(TextureId(i as u32)), &mut buffers)
         }
         Self { buffers }
     }
 
     fn clone(&self, display: &Display<WindowSurface>) -> Self {
-        let mut new_bufs = GlObjectBuffers { buffers: vec![] };
+        let mut new_bufs = GlMeshBuffers { buffers: vec![] };
         for buf in &self.buffers {
             let vertices = glium::VertexBuffer::empty(display, buf.vertices.len()).unwrap();
             buf.vertices.copy_to(vertices.as_slice()).unwrap();
@@ -353,7 +353,7 @@ impl GlObjectBuffers {
                 wireframe_indices = Some(new_buf);
             }
 
-            new_bufs.buffers.push(GlObjectBuffer {
+            new_bufs.buffers.push(GlMeshBuffer {
                 texture_id: buf.texture_id,
                 vertices,
                 normals,
@@ -395,8 +395,9 @@ pub struct Model {
     /// Annoying, but 'merge' textures is best handled as simply filling this map and deferring the actual task
     /// of merging textures until write
     texture_map: HashMap<TextureId, TextureId>,
-    subobject_transform_matrix: ObjVec<TMat4<f32>>,
-    buffer_objects: ObjVec<GlObjectBuffers>, // all the subobjects, conditionally rendered based on the current tree selection
+    submodel_transform_matrix: SubmodelVec<TMat4<f32>>,
+    submodel_duplicated: SubmodelVec<bool>,
+    buffer_meshes: SubmodelVec<GlMeshBuffers>, // all the submodels, conditionally rendered based on the current tree selection
 }
 impl Deref for Model {
     type Target = pof::Model;
@@ -413,15 +414,15 @@ impl DerefMut for Model {
 impl Model {
     pub fn clean_up(&mut self) {
         // apply changes form the texture map
-        for subobj in self.pof_model.sub_objects.iter_mut() {
-            for (_, poly) in subobj.bsp_data.collision_tree.leaves_mut() {
+        for smodel in self.pof_model.submodels.iter_mut() {
+            for (_, poly) in smodel.bsp_data.collision_tree.leaves_mut() {
                 poly.texture = self.texture_map[&poly.texture];
             }
         }
 
-        for id in 0..self.pof_model.sub_objects.len() {
-            let id = ObjectId(id as u32);
-            self.pof_model.apply_subobj_transform_mesh(id, &self.subobject_transform_matrix[id]);
+        for id in 0..self.pof_model.submodels.len() {
+            let id = SubmodelId(id as u32);
+            self.pof_model.apply_submodel_transform_mesh(id, &self.submodel_transform_matrix[id]);
         }
 
         self.pof_model.clean_up();
@@ -535,8 +536,9 @@ impl PofToolsGui {
                     self.model = Box::new(Model {
                         pof_model: *data,
                         texture_map: HashMap::new(),
-                        subobject_transform_matrix: Default::default(),
-                        buffer_objects: Default::default(),
+                        submodel_transform_matrix: Default::default(),
+                        submodel_duplicated: Default::default(),
+                        buffer_meshes: Default::default(),
                     });
                     self.finish_loading_model(window, display);
 
@@ -556,14 +558,14 @@ impl PofToolsGui {
 
     // after the above thread has returned, stuffs the new model in
     fn finish_loading_model(&mut self, window: &Window, display: &Display<WindowSurface>) {
-        self.model.buffer_objects.clear();
+        self.model.buffer_meshes.clear();
         self.buffer_shield = None;
         self.buffer_insignias.clear();
 
-        for subobject in &self.model.pof_model.sub_objects {
+        for submodel in &self.model.pof_model.submodels {
             self.model
-                .buffer_objects
-                .push(GlObjectBuffers::new(display, subobject, self.model.pof_model.textures.len()));
+                .buffer_meshes
+                .push(GlMeshBuffers::new(display, submodel, self.model.pof_model.textures.len()));
         }
 
         for insignia in &self.model.insignias {
@@ -574,8 +576,9 @@ impl PofToolsGui {
             self.buffer_shield = Some(GlBufferedShield::new(display, shield));
         }
 
-        for _ in 0..self.model.sub_objects.len() {
-            self.model.subobject_transform_matrix.push(glm::identity());
+        for _ in 0..self.model.submodels.len() {
+            self.model.submodel_transform_matrix.push(glm::identity());
+            self.model.submodel_duplicated.push(false);
         }
         self.model.recheck_warnings(pof::Set::All);
         self.model.recheck_errors(pof::Set::All);
@@ -589,7 +592,7 @@ impl PofToolsGui {
         self.camera_pitch = -0.4;
         self.camera_offset = Vec3d::ZERO;
         self.camera_scale = self.model.header.max_radius * 1.5;
-        self.ui_state.last_selected_subobj = self.model.header.detail_levels.first().copied();
+        self.ui_state.last_selected_smodel = self.model.header.detail_levels.first().copied();
         self.ui_state.tree_view_selection = TreeValue::Header;
 
         self.maybe_recalculate_3d_helpers(display);
@@ -766,10 +769,10 @@ fn main() {
                         pt_gui.ui_state.refresh_properties_panel(&pt_gui.model);
                         if pt_gui
                             .ui_state
-                            .last_selected_subobj
-                            .is_some_and(|id| id.0 as usize >= pt_gui.model.sub_objects.len())
+                            .last_selected_smodel
+                            .is_some_and(|id| id.0 as usize >= pt_gui.model.submodels.len())
                         {
-                            pt_gui.ui_state.last_selected_subobj = pt_gui.model.header.detail_levels.first().copied();
+                            pt_gui.ui_state.last_selected_smodel = pt_gui.model.header.detail_levels.first().copied();
                         }
                     }
 
@@ -890,7 +893,7 @@ fn main() {
                                     };
                                     pt_gui.drag_start = *lollipop.get_position_ref(&mut pt_gui.model).unwrap();
                                     if let TreeValue::Turrets(TurretTreeValue::TurretPoint(i, _)) = lollipop {
-                                        pt_gui.drag_start += pt_gui.model.get_total_subobj_offset(pt_gui.model.turrets[i].gun_obj);
+                                        pt_gui.drag_start += pt_gui.model.get_total_submodel_offset(pt_gui.model.turrets[i].gun_model);
                                     }
 
                                     pt_gui.select_new_tree_val(lollipop);
@@ -918,7 +921,7 @@ fn main() {
                             // take into account turret offset
                             let mut maybe_turret_offset = Vec3d::ZERO;
                             if let Some(TreeValue::Turrets(TurretTreeValue::TurretPoint(i, _))) = pt_gui.drag_lollipop {
-                                maybe_turret_offset = pt_gui.model.get_total_subobj_offset(pt_gui.model.turrets[i].gun_obj);
+                                maybe_turret_offset = pt_gui.model.get_total_submodel_offset(pt_gui.model.turrets[i].gun_model);
                             }
 
                             let modifiers = egui.egui_ctx().input(|input| input.modifiers);
@@ -1065,29 +1068,29 @@ fn main() {
 
                     let light_vec = glm::vec3(0.5, 1.0, -1.0);
 
-                    let displayed_subobjects =
-                        get_list_of_display_subobjects(model, pt_gui.ui_state.tree_view_selection, pt_gui.ui_state.last_selected_subobj);
+                    let displayed_submodels =
+                        get_list_of_display_submodels(model, pt_gui.ui_state.tree_view_selection, pt_gui.ui_state.last_selected_smodel);
 
-                    // draw the actual subobjects of the model
-                    for (i, buffer_objs) in pt_gui.model.buffer_objects.iter().enumerate() {
-                        let id = ObjectId(i as u32);
+                    // draw the actual submodels of the model
+                    for (i, buffer_meshes) in pt_gui.model.buffer_meshes.iter().enumerate() {
+                        let id = SubmodelId(i as u32);
                         // only render if its currently being displayed
-                        if displayed_subobjects.0.get(i).is_some_and(|val| *val) {
-                            let mut mat = pt_gui.model.subobject_transform_matrix[id];
-                            mat.append_translation_mut(&pt_gui.model.get_total_subobj_offset(id).into());
+                        if displayed_submodels.0.get(i).is_some_and(|val| *val) {
+                            let mut mat = pt_gui.model.submodel_transform_matrix[id];
+                            mat.append_translation_mut(&pt_gui.model.get_total_submodel_offset(id).into());
 
                             let matrix = view_mat * mat;
                             let norm_matrix: [[f32; 3]; 3] = glm::mat4_to_mat3(&matrix).try_inverse().unwrap().transpose().into();
                             let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * matrix).into();
 
-                            for buffer_obj in &buffer_objs.buffers {
+                            for buffer_mesh in &buffer_meshes.buffers {
                                 let indices = if pt_gui.display_mode == DisplayMode::Wireframe {
-                                    buffer_obj.wireframe_indices.as_ref().unwrap_or(&buffer_obj.indices)
+                                    buffer_mesh.wireframe_indices.as_ref().unwrap_or(&buffer_mesh.indices)
                                 } else {
-                                    &buffer_obj.indices
+                                    &buffer_mesh.indices
                                 };
 
-                                if let Some(texture) = buffer_obj
+                                if let Some(texture) = buffer_mesh
                                     .texture_id
                                     // if the buffer has a tex id assigned...
                                     .filter(|_| pt_gui.display_mode == DisplayMode::Textured)
@@ -1103,13 +1106,13 @@ fn main() {
                                         dark_color: dark_color,
                                         light_color: light_color,
                                         tint_color: [0.0, 0.0, 1.0f32],
-                                        tint_val: buffer_obj.tint_val,
+                                        tint_val: buffer_mesh.tint_val,
                                         tex: texture,
                                     };
 
                                     target
                                         .draw(
-                                            (&buffer_obj.vertices, &buffer_obj.normals),
+                                            (&buffer_mesh.vertices, &buffer_mesh.normals),
                                             indices,
                                             &pt_gui.graphics.textured_material_shader,
                                             &uniforms,
@@ -1125,12 +1128,12 @@ fn main() {
                                         dark_color: dark_color,
                                         light_color: light_color,
                                         tint_color: [0.0, 0.0, 1.0f32],
-                                        tint_val: buffer_obj.tint_val,
+                                        tint_val: buffer_mesh.tint_val,
                                     };
 
                                     target
                                         .draw(
-                                            (&buffer_obj.vertices, &buffer_obj.normals),
+                                            (&buffer_mesh.vertices, &buffer_mesh.normals),
                                             indices,
                                             &pt_gui.graphics.default_material_shader,
                                             &uniforms,
@@ -1249,9 +1252,9 @@ fn main() {
                         }
                     }
 
-                    let mut obj_id = None; // None also indicates the header being possibly selected
-                    if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = pt_gui.tree_view_selection {
-                        obj_id = Some(id);
+                    let mut model_id = None; // None also indicates the header being possibly selected
+                    if let TreeValue::Submodels(SubmodelTreeValue::Submodel(id)) = pt_gui.tree_view_selection {
+                        model_id = Some(id);
 
                         //      DEBUG - Draw BSP node bounding boxes
                         //      This is quite useful but incredibly ineffcient
@@ -1288,15 +1291,15 @@ fn main() {
 
                     // draw wireframe bounding boxes
                     if pt_gui.display_bbox {
-                        let bbox = if let Some(id) = obj_id {
-                            &pt_gui.model.sub_objects[id].bbox
+                        let bbox = if let Some(id) = model_id {
+                            &pt_gui.model.submodels[id].bbox
                         } else {
                             &pt_gui.model.header.bbox
                         };
 
                         let mut mat = glm::scaling(&(bbox.max - bbox.min).into());
-                        let offset = if let Some(id) = obj_id {
-                            pt_gui.model.get_total_subobj_offset(id)
+                        let offset = if let Some(id) = model_id {
+                            pt_gui.model.get_total_submodel_offset(id)
                         } else {
                             Vec3d::ZERO
                         };
@@ -1323,8 +1326,8 @@ fn main() {
                     // draw wireframe 'sphere'
                     if pt_gui.display_radius {
                         for i in 0..3 {
-                            let rad = if let Some(id) = obj_id {
-                                pt_gui.model.sub_objects[id].radius
+                            let rad = if let Some(id) = model_id {
+                                pt_gui.model.submodels[id].radius
                             } else {
                                 pt_gui.model.header.max_radius
                             };
@@ -1336,8 +1339,8 @@ fn main() {
                                 mat *= glm::rotation(std::f32::consts::FRAC_PI_2, &glm::vec3(1.0, 0.0, 0.0));
                             }
 
-                            let offset = if let Some(id) = obj_id {
-                                pt_gui.model.get_total_subobj_offset(id)
+                            let offset = if let Some(id) = model_id {
+                                pt_gui.model.get_total_submodel_offset(id)
                             } else {
                                 Vec3d::ZERO
                             };
@@ -1425,10 +1428,10 @@ fn main() {
                             .unwrap();
                     }
 
-                    // don't display lollipops if you're in header or subobjects, unless display_origin is on, since that's the only lollipop they have
+                    // don't display lollipops if you're in header or submodels, unless display_origin is on, since that's the only lollipop they have
 
                     let display_lollipops = (!matches!(pt_gui.ui_state.tree_view_selection, TreeValue::Header)
-                        && !matches!(pt_gui.ui_state.tree_view_selection, TreeValue::SubObjects(_)))
+                        && !matches!(pt_gui.ui_state.tree_view_selection, TreeValue::Submodels(_)))
                         || pt_gui.display_origin
                         || pt_gui.display_uvec_fvec;
 
@@ -1526,18 +1529,18 @@ fn main() {
                     }
 
                     // draw the turret fov angular frustum thing
-                    if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = pt_gui.tree_view_selection {
-                        if let Some(val) = properties_get_field(&model.sub_objects[id].properties, "$fov").and_then(|str| str.parse::<f32>().ok()) {
-                            let max_fov = properties_get_field(&model.sub_objects[id].properties, "$max_fov")
+                    if let TreeValue::Submodels(SubmodelTreeValue::Submodel(id)) = pt_gui.tree_view_selection {
+                        if let Some(val) = properties_get_field(&model.submodels[id].properties, "$fov").and_then(|str| str.parse::<f32>().ok()) {
+                            let max_fov = properties_get_field(&model.submodels[id].properties, "$max_fov")
                                 .and_then(|str| str.parse::<f32>().ok())
                                 .unwrap_or(90.0);
-                            let base_fov = properties_get_field(&model.sub_objects[id].properties, "$base_fov")
+                            let base_fov = properties_get_field(&model.submodels[id].properties, "$base_fov")
                                 .and_then(|str| str.parse::<f32>().ok())
                                 .unwrap_or(360.0);
 
-                            if let Some((turret_idx, _)) = pt_gui.model.turrets.iter().enumerate().find(|(_, turret)| turret.base_obj == id) {
+                            if let Some((turret_idx, _)) = pt_gui.model.turrets.iter().enumerate().find(|(_, turret)| turret.base_model == id) {
                                 let mut turret_mat = pt_gui.model.turret_matrix(turret_idx);
-                                let offset = pt_gui.model.get_total_subobj_offset(id);
+                                let offset = pt_gui.model.get_total_submodel_offset(id);
                                 turret_mat.append_translation_mut(&offset.into());
                                 let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * view_mat * turret_mat).into();
                                 let uniforms = glium::uniform! {
@@ -1628,48 +1631,48 @@ fn main() {
 
 // based on the current selection which submodels should be displayed
 // TODO show destroyed models
-fn get_list_of_display_subobjects(model: &Model, tree_selection: TreeValue, last_selected_subobj: Option<ObjectId>) -> ObjVec<bool> {
-    let mut out = ObjVec(vec![false; model.sub_objects.len()]);
+fn get_list_of_display_submodels(model: &Model, tree_selection: TreeValue, last_selected_smodel: Option<SubmodelId>) -> SubmodelVec<bool> {
+    let mut out = SubmodelVec(vec![false; model.submodels.len()]);
 
-    if model.sub_objects.is_empty() {
+    if model.submodels.is_empty() {
         return out;
     }
 
     if let TreeValue::Insignia(InsigniaTreeValue::Insignia(idx)) = tree_selection {
         // show the LOD objects according to the detail level of the currently selected insignia
-        for (i, sub_object) in model.sub_objects.iter().enumerate() {
-            out.0[i] = model.is_obj_id_ancestor(sub_object.obj_id, model.header.detail_levels[model.insignias[idx].detail_level as usize])
-                && !sub_object.is_destroyed_model();
+        for (i, submodel) in model.submodels.iter().enumerate() {
+            out.0[i] = model.is_model_id_ancestor(submodel.id, model.header.detail_levels[model.insignias[idx].detail_level as usize])
+                && !submodel.is_destroyed_model();
         }
-    } else if let Some(last_selected_subobj) = last_selected_subobj {
-        //find the top level parent of the currently subobject
-        let mut top_level_parent = last_selected_subobj;
-        while let Some(id) = model.sub_objects[top_level_parent].parent() {
+    } else if let Some(id) = last_selected_smodel {
+        //find the top level parent of the currently submodel
+        let mut top_level_parent = id;
+        while let Some(id) = model.submodels[top_level_parent].parent() {
             top_level_parent = id;
         }
 
-        let displaying_destroyed_models = model.sub_objects[last_selected_subobj].is_destroyed_model();
+        let displaying_destroyed_models = model.submodels[id].is_destroyed_model();
 
-        model.do_for_recursive_subobj_children(top_level_parent, &mut |subobj| {
-            if let Some(id) = subobj.parent() {
-                let has_a_destroyed_version = subobj.name_links.iter().any(|link| matches!(link, NameLink::DestroyedVersion(_)));
-                let parent = &model.sub_objects[id];
+        model.do_for_recursive_smodel_children(top_level_parent, &mut |smodel| {
+            if let Some(id) = smodel.parent() {
+                let has_a_destroyed_version = smodel.name_links.iter().any(|link| matches!(link, NameLink::DestroyedVersion(_)));
+                let parent = &model.submodels[id];
                 let parent_has_a_destroyed_version = parent.name_links.iter().any(|link| matches!(link, NameLink::DestroyedVersion(_)));
 
                 if (!parent_has_a_destroyed_version || (displaying_destroyed_models == parent.is_destroyed_model()))
-                    && (!has_a_destroyed_version || (displaying_destroyed_models == subobj.is_destroyed_model()))
+                    && (!has_a_destroyed_version || (displaying_destroyed_models == smodel.is_destroyed_model()))
                 {
-                    out[subobj.obj_id] = true;
+                    out[smodel.id] = true;
                 }
             } else {
-                out[subobj.obj_id] = true;
+                out[smodel.id] = true;
             }
         });
 
         // if they have debris selected show all the debris
-        if model.sub_objects[last_selected_subobj].is_debris_model {
-            for (i, sub_object) in model.sub_objects.iter().enumerate() {
-                out.0[i] = sub_object.is_debris_model;
+        if model.submodels[id].is_debris_model {
+            for (i, submodel) in model.submodels.iter().enumerate() {
+                out.0[i] = submodel.is_debris_model;
             }
         }
     }
@@ -1749,7 +1752,7 @@ impl PofToolsGui {
             TreeValue::Turrets(_) => {
                 for (i, turret) in self.model.turrets.iter().enumerate() {
                     for (j, point) in turret.fire_points.iter().enumerate() {
-                        let point = *point + self.model.get_total_subobj_offset(turret.gun_obj);
+                        let point = *point + self.model.get_total_submodel_offset(turret.gun_model);
                         proximity_test(point, TreeValue::Turrets(TurretTreeValue::TurretPoint(i, j)));
                     }
                 }
@@ -1773,7 +1776,7 @@ impl PofToolsGui {
     }
 
     fn maybe_recalculate_3d_helpers(&mut self, display: &Display<WindowSurface>) {
-        if self.model.buffer_objects.is_empty() {
+        if self.model.buffer_meshes.is_empty() {
             return;
         }
 
@@ -1782,7 +1785,7 @@ impl PofToolsGui {
         //     return;
         // }
 
-        for buffers in self.model.buffer_objects.iter_mut() {
+        for buffers in self.model.buffer_meshes.iter_mut() {
             for buffer in &mut buffers.buffers {
                 buffer.tint_val = 0.0;
             }
@@ -1802,18 +1805,18 @@ impl PofToolsGui {
         // push the according lollipop positions/normals based on the points positions/normals
         // push into 3 separate vectors, for 3 separate colors depending on selection state
         match self.ui_state.tree_view_selection {
-            TreeValue::SubObjects(SubObjectTreeValue::SubObject(obj_id)) => {
-                for (i, buffers) in self.model.buffer_objects.iter_mut().enumerate() {
-                    if i as u32 == obj_id.0 {
+            TreeValue::Submodels(SubmodelTreeValue::Submodel(model_id)) => {
+                for (i, buffers) in self.model.buffer_meshes.iter_mut().enumerate() {
+                    if i as u32 == model_id.0 {
                         for buffer in &mut buffers.buffers {
                             buffer.tint_val = 0.2;
                         }
                     }
                 }
 
-                let radius = model.sub_objects[obj_id].radius;
+                let radius = model.submodels[model_id].radius;
                 let size = 0.05 * radius;
-                let pos = model.get_total_subobj_offset(obj_id);
+                let pos = model.get_total_submodel_offset(model_id);
 
                 let mut ball_origin = GlLollipopsBuilder::new(LOLLIPOP_SELECTED_POINT_COLOR);
                 // Origin lollipop (ball only)
@@ -1821,7 +1824,7 @@ impl PofToolsGui {
                 let ball_origin = ball_origin.finish(display);
                 self.lollipops = vec![ball_origin];
 
-                if let Some((uvec, fvec)) = model.sub_objects[obj_id].uvec_fvec() {
+                if let Some((uvec, fvec)) = model.submodels[model_id].uvec_fvec() {
                     // Set up arrowhead sticks
                     let stick_length = 2. * radius;
                     // Blue lollipop (stick only) for uvec
@@ -1854,7 +1857,7 @@ impl PofToolsGui {
                 }
             }
             TreeValue::Textures(TextureTreeValue::Texture(tex)) => {
-                for buffers in self.model.buffer_objects.iter_mut() {
+                for buffers in self.model.buffer_meshes.iter_mut() {
                     for buffer in &mut buffers.buffers {
                         if buffer.texture_id.map(|id| self.model.texture_map[&id]) == Some(tex) {
                             buffer.tint_val = 0.3;
@@ -2122,7 +2125,7 @@ impl PofToolsGui {
                     &COLORS,
                     display,
                     model.turrets.iter().enumerate().flat_map(|(turret_idx, turret)| {
-                        let offset = self.model.get_total_subobj_offset(turret.gun_obj);
+                        let offset = self.model.get_total_submodel_offset(turret.gun_model);
                         turret.fire_points.iter().enumerate().map(move |(point_idx, fire_point)| {
                             let position = *fire_point + offset;
                             let normal = turret.normal.0 * size * 2.0;

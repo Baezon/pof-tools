@@ -1,10 +1,10 @@
 use egui::{collapsing_header::CollapsingState, Button, Color32, Id, Response, RichText, TextEdit, TextStyle, Ui, WidgetText};
-use pof::{properties_delete_field, ObjectId, SubObject, TextureId};
+use pof::{properties_delete_field, Submodel, SubmodelId, TextureId};
 
 use crate::{
     start_loading_import_model,
     ui::{
-        DockingTreeValue, EyeTreeValue, GlowTreeValue, InsigniaTreeValue, PathTreeValue, PofToolsGui, SpecialPointTreeValue, SubObjectTreeValue,
+        DockingTreeValue, EyeTreeValue, GlowTreeValue, InsigniaTreeValue, PathTreeValue, PofToolsGui, SpecialPointTreeValue, SubmodelTreeValue,
         ThrusterTreeValue, TreeValue, TurretTreeValue, UiState, WeaponTreeValue, ERROR_RED, WARNING_YELLOW,
     },
     LoadingThread, Model,
@@ -27,7 +27,7 @@ enum SelectionType {
 
 #[derive(Default)]
 struct ImportOptions {
-    auto_select_subobj_children: bool,
+    auto_select_smodel_children: bool,
     auto_select_paths: bool,
     auto_select_turrets: bool,
 }
@@ -56,7 +56,7 @@ impl Default for ImportWindow {
             import_model_loading_thread: Default::default(),
             import_selection: BTreeSet::new(),
             import_options: ImportOptions {
-                auto_select_subobj_children: true,
+                auto_select_smodel_children: true,
                 auto_select_paths: true,
                 auto_select_turrets: true,
             },
@@ -77,7 +77,7 @@ impl UiState {
 
         window.show(ctx, |ui| {
             let selection = &self.import_window.import_selection;
-            let num_subobjects_selected = selection.iter().filter(|select| matches!(select, TreeValue::SubObjects(_))).count();
+            let num_submodels_selected = selection.iter().filter(|select| matches!(select, TreeValue::Submodels(_))).count();
             let num_pri_banks_selected = selection
                 .iter()
                 .filter(|select| matches!(select, TreeValue::Weapons(WeaponTreeValue::PriBank(_))))
@@ -105,8 +105,8 @@ impl UiState {
                     );
 
                     ui.checkbox(
-                        &mut self.import_window.import_options.auto_select_subobj_children,
-                        "Auto-select subobject children on subobject selection.",
+                        &mut self.import_window.import_options.auto_select_smodel_children,
+                        "Auto-select submodel children on submodel selection.",
                     );
                     ui.checkbox(&mut self.import_window.import_options.auto_select_paths, "Auto-select associated paths, if available.");
                     ui.checkbox(&mut self.import_window.import_options.auto_select_turrets, "Auto-select associated turret data, if available.");
@@ -177,27 +177,23 @@ impl UiState {
                             }
                         }
 
-                        if num_subobjects_selected > 0 {
-                            ui.label(format!(
-                                "{} SubObject{} selected.",
-                                num_subobjects_selected,
-                                if num_subobjects_selected == 1 { "" } else { "s" }
-                            ));
+                        if num_submodels_selected > 0 {
+                            ui.label(format!("{} Submodel{} selected.", num_submodels_selected, if num_submodels_selected == 1 { "" } else { "s" }));
 
                             let mut warnings = vec![];
 
                             if ImportType::MatchAndReplace == self.import_window.import_type {
-                                for tree_val in selection.iter().filter(|select| matches!(select, TreeValue::SubObjects(_))) {
-                                    if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = tree_val {
+                                for tree_val in selection.iter().filter(|select| matches!(select, TreeValue::Submodels(_))) {
+                                    if let TreeValue::Submodels(SubmodelTreeValue::Submodel(id)) = tree_val {
                                         if !model
-                                            .sub_objects
+                                            .submodels
                                             .iter()
-                                            .any(|subobj| subobj.name == import_model.as_ref().unwrap().sub_objects[*id].name)
+                                            .any(|smodel| smodel.name == import_model.as_ref().unwrap().submodels[*id].name)
                                         {
                                             warnings.push(
                                                 RichText::new(format!(
-                                                    "There is no match for subobject '{}' in the recieving model. It will be added instead.",
-                                                    import_model.as_ref().unwrap().sub_objects[*id].name
+                                                    "There is no match for submodel '{}' in the recieving model. It will be added instead.",
+                                                    import_model.as_ref().unwrap().submodels[*id].name
                                                 ))
                                                 .color(WARNING_YELLOW),
                                             );
@@ -207,7 +203,7 @@ impl UiState {
                             }
 
                             if !warnings.is_empty() {
-                                ui.indent("subobject warnings", |ui| {
+                                ui.indent("submodel warnings", |ui| {
                                     for warning in warnings {
                                         ui.label(warning);
                                     }
@@ -241,18 +237,18 @@ impl UiState {
                                     let dock = &import_model.as_ref().unwrap().docking_bays[*idx];
 
                                     if let Some(id) = dock
-                                        .get_parent_obj()
-                                        .and_then(|submodel_str| import_model.as_ref().unwrap().get_obj_id_by_name(submodel_str))
+                                        .get_parent_smodel()
+                                        .and_then(|submodel_str| import_model.as_ref().unwrap().get_model_id_by_name(submodel_str))
                                     {
                                         if !self
                                             .import_window
                                             .import_selection
-                                            .contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)))
+                                            .contains(&TreeValue::Submodels(SubmodelTreeValue::Submodel(id)))
                                         {
                                             warnings.push(
                                                 RichText::new(format!(
-                                                    "Docking bay '{}' has a parent object which is not being imported. \
-                                                         The parent object field will be removed.",
+                                                    "Docking bay '{}' has a parent submodel which is not being imported. \
+                                                         The parent submodel field will be removed.",
                                                     import_model.as_ref().unwrap().docking_bays[*idx]
                                                         .get_name()
                                                         .unwrap_or(&format!("Docking bay {}", idx)),
@@ -310,11 +306,11 @@ impl UiState {
                                 if let TreeValue::Thrusters(ThrusterTreeValue::Bank(idx)) = tree_val {
                                     let import_model = &import_model.as_ref().unwrap();
                                     if let Some(subsys_name) = import_model.thruster_banks[*idx].get_engine_subsys() {
-                                        let mut found_a_match = import_model.get_obj_id_by_name(subsys_name).is_some_and(|id| {
+                                        let mut found_a_match = import_model.get_model_id_by_name(subsys_name).is_some_and(|id| {
                                             !self
                                                 .import_window
                                                 .import_selection
-                                                .contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)))
+                                                .contains(&TreeValue::Submodels(SubmodelTreeValue::Submodel(id)))
                                         });
 
                                         found_a_match |= import_model
@@ -376,14 +372,14 @@ impl UiState {
                                     if !self
                                         .import_window
                                         .import_selection
-                                        .contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(glow_bank.obj_parent)))
+                                        .contains(&TreeValue::Submodels(SubmodelTreeValue::Submodel(glow_bank.model_parent)))
                                     {
                                         let was_already_on_detail0 =
-                                            import_model.as_ref().unwrap().header.detail_levels.first() == Some(&glow_bank.obj_parent);
+                                            import_model.as_ref().unwrap().header.detail_levels.first() == Some(&glow_bank.model_parent);
                                         if !was_already_on_detail0 {
                                             warnings.push(
                                                 RichText::new(format!(
-                                                    "Glow bank {}'s object parent is not being imported; \
+                                                    "Glow bank {}'s submodel parent is not being imported; \
                                                          it will be reset to the recieving model's detail0.",
                                                     idx + 1
                                                 ))
@@ -451,17 +447,17 @@ impl UiState {
 
                                     match self.import_window.import_type {
                                         ImportType::Add => {
-                                            if !selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(turret.base_obj)))
-                                                || !selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(turret.gun_obj)))
+                                            if !selection.contains(&TreeValue::Submodels(SubmodelTreeValue::Submodel(turret.base_model)))
+                                                || !selection.contains(&TreeValue::Submodels(SubmodelTreeValue::Submodel(turret.gun_model)))
                                             {
-                                                // parent objects were not imported, see if we can find parents...
+                                                // parent submodels were not imported, see if we can find parents...
                                                 let mut found_match = false;
-                                                for sobj in &model.sub_objects {
-                                                    let singlepart_valid = sobj.name == import_model.sub_objects[turret.gun_obj].name
-                                                        && turret.gun_obj == turret.base_obj;
-                                                    let multipart_valid = sobj.name == import_model.sub_objects[turret.gun_obj].name
-                                                        && sobj.parent().map(|id| &model.sub_objects[id].name)
-                                                            == Some(&import_model.sub_objects[turret.base_obj].name);
+                                                for smodel in &model.submodels {
+                                                    let singlepart_valid = smodel.name == import_model.submodels[turret.gun_model].name
+                                                        && turret.gun_model == turret.base_model;
+                                                    let multipart_valid = smodel.name == import_model.submodels[turret.gun_model].name
+                                                        && smodel.parent().map(|id| &model.submodels[id].name)
+                                                            == Some(&import_model.submodels[turret.base_model].name);
 
                                                     found_match = singlepart_valid || multipart_valid;
                                                     if found_match {
@@ -473,7 +469,7 @@ impl UiState {
                                                     warnings.push(
                                                         RichText::new(format!(
                                                             "There is no match for turret '{}' in the recieving model. It will not be added.",
-                                                            import_model.sub_objects[turret.base_obj].name
+                                                            import_model.submodels[turret.base_model].name
                                                         ))
                                                         .color(ERROR_RED),
                                                     );
@@ -482,13 +478,13 @@ impl UiState {
                                         }
                                         ImportType::MatchAndReplace => {
                                             if !model.turrets.iter().any(|other_turret| {
-                                                model.sub_objects[other_turret.base_obj].name == import_model.sub_objects[turret.base_obj].name
+                                                model.submodels[other_turret.base_model].name == import_model.submodels[turret.base_model].name
                                             }) {
-                                                if !selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(turret.base_obj))) {
+                                                if !selection.contains(&TreeValue::Submodels(SubmodelTreeValue::Submodel(turret.base_model))) {
                                                     warnings.push(
                                                         RichText::new(format!(
                                                             "There is no match for turret '{}' in the recieving model. It will not be added.",
-                                                            import_model.sub_objects[turret.base_obj].name
+                                                            import_model.submodels[turret.base_model].name
                                                         ))
                                                         .color(ERROR_RED),
                                                     );
@@ -496,7 +492,7 @@ impl UiState {
                                                     warnings.push(
                                                         RichText::new(format!(
                                                             "There is no match for turret '{}' in the recieving model. It will be added instead.",
-                                                            import_model.sub_objects[turret.base_obj].name
+                                                            import_model.submodels[turret.base_model].name
                                                         ))
                                                         .color(WARNING_YELLOW),
                                                     );
@@ -558,10 +554,10 @@ impl UiState {
                                     let point = &import_model.as_ref().unwrap().eye_points[*idx];
 
                                     if self.import_window.import_type == ImportType::MatchAndReplace {
-                                        let attached_obj = point.attached_subobj.map(|id| &import_model.as_ref().unwrap().sub_objects[id].name);
+                                        let attached_smodel = point.attached_submodel.map(|id| &import_model.as_ref().unwrap().submodels[id].name);
 
                                         if !model.eye_points.iter().any(|other_point| {
-                                            other_point.attached_subobj.map(|id| &model.pof_model.sub_objects[id].name) == attached_obj
+                                            other_point.attached_submodel.map(|id| &model.pof_model.submodels[id].name) == attached_smodel
                                         }) {
                                             warnings.push(
                                                 RichText::new(format!(
@@ -659,30 +655,30 @@ impl UiState {
                         toggle(&mut self.import_window.import_selection, TreeValue::Header);
                     }
 
-                    // SubObjects
-                    fn make_subobject_child_list(
-                        import_model: &pof::Model, selection: &mut BTreeSet<TreeValue>, object: &SubObject, ui: &mut Ui, bother_with_coloring: bool,
+                    // Submodels
+                    fn make_submodel_child_list(
+                        import_model: &pof::Model, selection: &mut BTreeSet<TreeValue>, smodel: &Submodel, ui: &mut Ui, bother_with_coloring: bool,
                         options: &ImportOptions,
                     ) {
-                        let tree_val = TreeValue::SubObjects(SubObjectTreeValue::SubObject(object.obj_id));
+                        let tree_val = TreeValue::Submodels(SubmodelTreeValue::Submodel(smodel.id));
                         let selection_status = {
                             if bother_with_coloring {
                                 if selection.contains(&tree_val) {
                                     SelectionType::Total
                                 } else {
-                                    let mut num_subobjects = 0;
-                                    let mut selected_subobjects = 0;
-                                    import_model.do_for_recursive_subobj_children(object.obj_id, &mut |obj| {
-                                        num_subobjects += 1;
-                                        if selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(obj.obj_id))) {
-                                            selected_subobjects += 1;
+                                    let mut num_submodels = 0;
+                                    let mut selected_submodels = 0;
+                                    import_model.do_for_recursive_smodel_children(smodel.id, &mut |smodel| {
+                                        num_submodels += 1;
+                                        if selection.contains(&TreeValue::Submodels(SubmodelTreeValue::Submodel(smodel.id))) {
+                                            selected_submodels += 1;
                                         }
                                     });
 
-                                    match (num_subobjects, selected_subobjects) {
+                                    match (num_submodels, selected_submodels) {
                                         (_, 0) => SelectionType::None,
-                                        (_, _) if selected_subobjects < num_subobjects => SelectionType::Partial,
-                                        (_, _) if selected_subobjects == num_subobjects => SelectionType::Total,
+                                        (_, _) if selected_submodels < num_submodels => SelectionType::Partial,
+                                        (_, _) if selected_submodels == num_submodels => SelectionType::Total,
                                         _ => unreachable!(),
                                     }
                                 }
@@ -691,20 +687,20 @@ impl UiState {
                             }
                         };
 
-                        if object.children().next().is_none() {
-                            if selectable_label(ui, selection_status, &object.name).clicked() {
+                        if smodel.children().next().is_none() {
+                            if selectable_label(ui, selection_status, &smodel.name).clicked() {
                                 toggle(selection, tree_val);
 
                                 if options.auto_select_turrets {
                                     for (i, turret) in import_model.turrets.iter().enumerate() {
-                                        if turret.base_obj == object.obj_id {
+                                        if turret.base_model == smodel.id {
                                             set(selection, selection.contains(&tree_val), TreeValue::Turrets(TurretTreeValue::Turret(i)));
                                         }
                                     }
                                 }
                                 if options.auto_select_paths {
                                     for (i, path) in import_model.paths.iter().enumerate() {
-                                        if path.parent.to_lowercase() == object.name.to_lowercase() {
+                                        if path.parent.to_lowercase() == smodel.name.to_lowercase() {
                                             set(selection, selection.contains(&tree_val), TreeValue::Paths(PathTreeValue::Path(i)));
                                         }
                                     }
@@ -715,27 +711,27 @@ impl UiState {
                             let header_is_open = state.is_open();
                             state
                                 .show_header(ui, |ui| {
-                                    if selectable_label(ui, selection_status, &object.name).clicked() {
+                                    if selectable_label(ui, selection_status, &smodel.name).clicked() {
                                         toggle(selection, tree_val);
 
-                                        if options.auto_select_subobj_children {
-                                            // a bit confusing, but do_for_recursive_subobj_children will also run on the subobject you call it on
+                                        if options.auto_select_smodel_children {
+                                            // a bit confusing, but do_for_recursive_smodel_children will also run on the submodel you call it on
                                             // so save its selection status now, rather than accidentally toggle it back to its old status
                                             let enable_disable = selection.contains(&tree_val);
-                                            import_model.do_for_recursive_subobj_children(object.obj_id, &mut |obj| {
-                                                set(selection, enable_disable, TreeValue::SubObjects(SubObjectTreeValue::SubObject(obj.obj_id)));
+                                            import_model.do_for_recursive_smodel_children(smodel.id, &mut |smodel| {
+                                                set(selection, enable_disable, TreeValue::Submodels(SubmodelTreeValue::Submodel(smodel.id)));
                                             });
                                         }
                                         if options.auto_select_turrets {
                                             for (i, turret) in import_model.turrets.iter().enumerate() {
-                                                if turret.base_obj == object.obj_id {
+                                                if turret.base_model == smodel.id {
                                                     set(selection, selection.contains(&tree_val), TreeValue::Turrets(TurretTreeValue::Turret(i)));
                                                 }
                                             }
                                         }
                                         if options.auto_select_paths {
                                             for (i, path) in import_model.paths.iter().enumerate() {
-                                                if path.parent.to_lowercase() == object.name.to_lowercase() {
+                                                if path.parent.to_lowercase() == smodel.name.to_lowercase() {
                                                     set(selection, selection.contains(&tree_val), TreeValue::Paths(PathTreeValue::Path(i)));
                                                 }
                                             }
@@ -743,43 +739,43 @@ impl UiState {
                                     }
                                 })
                                 .body(|ui| {
-                                    for &i in object.children() {
-                                        make_subobject_child_list(import_model, selection, &import_model.sub_objects[i], ui, header_is_open, options)
+                                    for &i in smodel.children() {
+                                        make_submodel_child_list(import_model, selection, &import_model.submodels[i], ui, header_is_open, options)
                                     }
                                 });
                         }
                     }
 
-                    if !import_model.sub_objects.is_empty() {
-                        let state = CollapsingState::load_with_default_open(ui.ctx(), Id::new("import SubObjects"), false);
+                    if !import_model.submodels.is_empty() {
+                        let state = CollapsingState::load_with_default_open(ui.ctx(), Id::new("import Submodels"), false);
                         let header_is_open = state.is_open();
                         let selection_status =
-                            get_selection_status!(import_model.sub_objects, |i| TreeValue::SubObjects(SubObjectTreeValue::SubObject(i.1.obj_id)));
+                            get_selection_status!(import_model.submodels, |i| TreeValue::Submodels(SubmodelTreeValue::Submodel(i.1.id)));
                         state
                             .show_header(ui, |ui| {
-                                if selectable_label(ui, selection_status, format!("SubObjects ({})", import_model.sub_objects.len())).clicked() {
-                                    if num_subobjects_selected == import_model.sub_objects.len() {
-                                        for object in &import_model.sub_objects {
+                                if selectable_label(ui, selection_status, format!("Submodels ({})", import_model.submodels.len())).clicked() {
+                                    if num_submodels_selected == import_model.submodels.len() {
+                                        for smodel in &import_model.submodels {
                                             self.import_window
                                                 .import_selection
-                                                .remove(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(object.obj_id)));
+                                                .remove(&TreeValue::Submodels(SubmodelTreeValue::Submodel(smodel.id)));
                                         }
                                     } else {
-                                        for object in &import_model.sub_objects {
+                                        for smodel in &import_model.submodels {
                                             self.import_window
                                                 .import_selection
-                                                .insert(TreeValue::SubObjects(SubObjectTreeValue::SubObject(object.obj_id)));
+                                                .insert(TreeValue::Submodels(SubmodelTreeValue::Submodel(smodel.id)));
                                         }
                                     }
                                 }
                             })
                             .body(|ui| {
-                                for object in &import_model.sub_objects {
-                                    if object.parent().is_none() {
-                                        make_subobject_child_list(
+                                for smodel in &import_model.submodels {
+                                    if smodel.parent().is_none() {
+                                        make_submodel_child_list(
                                             import_model,
                                             &mut self.import_window.import_selection,
-                                            object,
+                                            smodel,
                                             ui,
                                             header_is_open,
                                             &self.import_window.import_options,
@@ -984,7 +980,7 @@ impl UiState {
                                     |i| TreeValue::Turrets(TurretTreeValue::Turret(i.0))
                                 ),
                             )
-                            .body(body_stuff!(turrets, |turret| format!("{}", import_model.sub_objects[turret.base_obj].name), |i| {
+                            .body(body_stuff!(turrets, |turret| format!("{}", import_model.submodels[turret.base_model].name), |i| {
                                 TreeValue::Turrets(TurretTreeValue::Turret(i))
                             }));
                     }
@@ -1103,21 +1099,21 @@ impl PofToolsGui {
         let selection = std::mem::take(&mut self.import_window.import_selection);
         let mut import_model = std::mem::take(&mut self.import_window.model).unwrap();
 
-        // make the object id map to translate old object ids to new object ids
-        let mut obj_id_map = HashMap::new();
-        let mut num_subobjects = self.model.sub_objects.len();
+        // make the model id map to translate old model ids to new model ids
+        let mut model_id_map = HashMap::new();
+        let mut num_submodels = self.model.submodels.len();
         for tree_val in &selection {
-            if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = *tree_val {
+            if let TreeValue::Submodels(SubmodelTreeValue::Submodel(id)) = *tree_val {
                 let new_id = match self.import_window.import_type {
                     ImportType::Add => {
-                        num_subobjects += 1;
-                        ObjectId((num_subobjects - 1) as u32)
+                        num_submodels += 1;
+                        SubmodelId((num_submodels - 1) as u32)
                     }
                     ImportType::MatchAndReplace => {
                         let mut replaced_id = None;
-                        for subobj in &self.model.sub_objects {
-                            if subobj.name == import_model.sub_objects[id].name {
-                                replaced_id = Some(subobj.obj_id);
+                        for smodel in &self.model.submodels {
+                            if smodel.name == import_model.submodels[id].name {
+                                replaced_id = Some(smodel.id);
                                 break;
                             }
                         }
@@ -1126,17 +1122,17 @@ impl PofToolsGui {
                             replaced_id
                         } else {
                             //uh oh, just add instead?
-                            num_subobjects += 1;
-                            ObjectId((num_subobjects - 1) as u32)
+                            num_submodels += 1;
+                            SubmodelId((num_submodels - 1) as u32)
                         }
                     }
                 };
-                obj_id_map.insert(id, new_id);
+                model_id_map.insert(id, new_id);
             }
         }
 
         // we're mangling the import_model as we go, so order is VERY IMPORTANT
-        // do the things which require the subobjects still be intact
+        // do the things which require the submode; still be intact
         for tree_val in &selection {
             match *tree_val {
                 TreeValue::Header => {
@@ -1148,12 +1144,12 @@ impl PofToolsGui {
                     self.model.header.moment_of_inertia = header.moment_of_inertia;
                 }
                 TreeValue::DockingBays(DockingTreeValue::Bay(idx)) => {
-                    // requires getting subobjects by name -> still have to be intact
+                    // requires getting submodels by name -> still have to be intact
                     let mut dock = std::mem::take(&mut import_model.docking_bays[idx]);
-                    if let Some(parent_name) = dock.get_parent_obj() {
+                    if let Some(parent_name) = dock.get_parent_smodel() {
                         if import_model
-                            .get_obj_id_by_name(parent_name)
-                            .is_some_and(|id| !obj_id_map.contains_key(&id))
+                            .get_model_id_by_name(parent_name)
+                            .is_some_and(|id| !model_id_map.contains_key(&id))
                         {
                             // parent submodel was not imported, lose it
                             properties_delete_field(&mut dock.properties, "$parent_submodel");
@@ -1184,12 +1180,12 @@ impl PofToolsGui {
                 }
                 TreeValue::DockingBays(_) => unreachable!(),
                 TreeValue::Thrusters(ThrusterTreeValue::Bank(idx)) => {
-                    // requires getting subobjects by name -> still have to be intact
+                    // requires getting submodels by name -> still have to be intact
                     let mut t_bank = std::mem::take(&mut import_model.thruster_banks[idx]);
                     if let Some(subsys_name) = t_bank.get_engine_subsys() {
                         let mut found_a_match = import_model
-                            .get_obj_id_by_name(subsys_name)
-                            .is_some_and(|id| !obj_id_map.contains_key(&id));
+                            .get_model_id_by_name(subsys_name)
+                            .is_some_and(|id| !model_id_map.contains_key(&id));
 
                         found_a_match |= import_model
                             .special_points
@@ -1229,18 +1225,18 @@ impl PofToolsGui {
                 TreeValue::Glows(GlowTreeValue::Bank(idx)) => {
                     let mut g_bank = std::mem::take(&mut import_model.glow_banks[idx]);
 
-                    if !obj_id_map.contains_key(&g_bank.obj_parent) {
+                    if !model_id_map.contains_key(&g_bank.model_parent) {
                         // reset it to detail0
-                        // ... if theres no detail0, just the first subobject
-                        // ... if theres no objects, skip it i guess
+                        // ... if theres no detail0, just the first submodel
+                        // ... if theres no models, skip it i guess
                         if let Some(id) = self
                             .model
                             .header
                             .detail_levels
                             .first()
-                            .or_else(|| self.model.sub_objects.first().map(|sobj| &sobj.obj_id))
+                            .or_else(|| self.model.submodels.first().map(|smodel| &smodel.id))
                         {
-                            g_bank.obj_parent = *id;
+                            g_bank.model_parent = *id;
                         } else {
                             continue;
                         }
@@ -1254,30 +1250,30 @@ impl PofToolsGui {
 
                     match self.import_window.import_type {
                         ImportType::Add => {
-                            if selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(turret.base_obj)))
-                                && selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(turret.gun_obj)))
+                            if selection.contains(&TreeValue::Submodels(SubmodelTreeValue::Submodel(turret.base_model)))
+                                && selection.contains(&TreeValue::Submodels(SubmodelTreeValue::Submodel(turret.gun_model)))
                             {
-                                // parent objects were imported too, cool
-                                turret.base_obj = obj_id_map[&turret.base_obj];
-                                turret.gun_obj = obj_id_map[&turret.gun_obj];
+                                // parent models were imported too, cool
+                                turret.base_model = model_id_map[&turret.base_model];
+                                turret.gun_model = model_id_map[&turret.gun_model];
                             } else {
-                                // parent objects were not imported, see if we can find parents...
+                                // parent models were not imported, see if we can find parents...
                                 let mut found_match = false;
-                                for sobj in &self.model.sub_objects {
+                                for smodel in &self.model.submodels {
                                     let singlepart_valid =
-                                        sobj.name == import_model.sub_objects[turret.gun_obj].name && turret.gun_obj == turret.base_obj;
-                                    let multipart_valid = sobj.name == import_model.sub_objects[turret.gun_obj].name
-                                        && sobj.parent().map(|id| &self.model.sub_objects[id].name)
-                                            == Some(&import_model.sub_objects[turret.base_obj].name);
+                                        smodel.name == import_model.submodels[turret.gun_model].name && turret.gun_model == turret.base_model;
+                                    let multipart_valid = smodel.name == import_model.submodels[turret.gun_model].name
+                                        && smodel.parent().map(|id| &self.model.submodels[id].name)
+                                            == Some(&import_model.submodels[turret.base_model].name);
 
                                     if singlepart_valid {
                                         found_match = true;
-                                        turret.gun_obj = sobj.obj_id;
-                                        turret.base_obj = sobj.obj_id;
+                                        turret.gun_model = smodel.id;
+                                        turret.base_model = smodel.id;
                                     } else if multipart_valid {
                                         found_match = true;
-                                        turret.gun_obj = sobj.obj_id;
-                                        turret.base_obj = sobj.parent().unwrap();
+                                        turret.gun_model = smodel.id;
+                                        turret.base_model = smodel.parent().unwrap();
                                     }
                                 }
 
@@ -1290,22 +1286,22 @@ impl PofToolsGui {
                         ImportType::MatchAndReplace => {
                             // find and replace
                             if let Some(replaced_turret) = self.model.pof_model.turrets.iter_mut().find(|replaced_turret| {
-                                self.model.pof_model.sub_objects[replaced_turret.base_obj].name == import_model.sub_objects[turret.base_obj].name
+                                self.model.pof_model.submodels[replaced_turret.base_model].name == import_model.submodels[turret.base_model].name
                             }) {
-                                turret.base_obj = replaced_turret.base_obj;
-                                turret.gun_obj = if obj_id_map.contains_key(&turret.gun_obj) {
-                                    obj_id_map[&turret.gun_obj] // prefer an imported gun obj, instead of the replace turret's
+                                turret.base_model = replaced_turret.base_model;
+                                turret.gun_model = if model_id_map.contains_key(&turret.gun_model) {
+                                    model_id_map[&turret.gun_model] // prefer an imported gun model, instead of the replace turret's
                                 } else {
-                                    replaced_turret.gun_obj
+                                    replaced_turret.gun_model
                                 };
                                 *replaced_turret = turret;
-                            } else if selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(turret.base_obj)))
-                                && selection.contains(&TreeValue::SubObjects(SubObjectTreeValue::SubObject(turret.gun_obj)))
+                            } else if selection.contains(&TreeValue::Submodels(SubmodelTreeValue::Submodel(turret.base_model)))
+                                && selection.contains(&TreeValue::Submodels(SubmodelTreeValue::Submodel(turret.gun_model)))
                             {
                                 // fall back, try to add it
-                                // parent objects were imported too, cool
-                                turret.base_obj = obj_id_map[&turret.base_obj];
-                                turret.gun_obj = obj_id_map[&turret.gun_obj];
+                                // parent models were imported too, cool
+                                turret.base_model = model_id_map[&turret.base_model];
+                                turret.gun_model = model_id_map[&turret.gun_model];
                                 self.model.turrets.push(turret);
                             }
                             // else just lose it
@@ -1321,12 +1317,12 @@ impl PofToolsGui {
                             self.model.eye_points.push(point);
                         }
                         ImportType::MatchAndReplace => {
-                            let attached_obj = point.attached_subobj.map(|id| &import_model.sub_objects[id].name);
+                            let attached_model = point.attached_submodel.map(|id| &import_model.submodels[id].name);
                             // find and replace
                             if let Some(replaced_point) = self.model.pof_model.eye_points.iter_mut().find(|replaced_point| {
-                                replaced_point.attached_subobj.map(|id| &self.model.pof_model.sub_objects[id].name) == attached_obj
+                                replaced_point.attached_submodel.map(|id| &self.model.pof_model.submodels[id].name) == attached_model
                             }) {
-                                point.attached_subobj = replaced_point.attached_subobj;
+                                point.attached_submodel = replaced_point.attached_submodel;
                                 *replaced_point = point;
                             } else {
                                 // fall back, just add it
@@ -1352,20 +1348,20 @@ impl PofToolsGui {
                 TreeValue::Insignia(_) => unreachable!(),
                 TreeValue::VisualCenter => unreachable!(), // should this be importable?
                 TreeValue::Comments => unreachable!(),     // should this be importable?
-                TreeValue::SubObjects(_) => (),
+                TreeValue::Submodels(_) => (),
                 TreeValue::Weapons(_) => (),
                 TreeValue::Textures(_) => unreachable!(),
                 _ => (),
             }
         }
 
-        let old_subobj_len = self.model.sub_objects.len();
+        let old_smodel_len = self.model.submodels.len();
         for tree_val in &selection {
             match *tree_val {
-                TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) => {
+                TreeValue::Submodels(SubmodelTreeValue::Submodel(id)) => {
                     // translate old texure ids to new one
                     let mut tex_id_map = HashMap::new();
-                    for (_, poly) in import_model.sub_objects[id].bsp_data.collision_tree.leaves_mut() {
+                    for (_, poly) in import_model.submodels[id].bsp_data.collision_tree.leaves_mut() {
                         if let Entry::Vacant(e) = tex_id_map.entry(poly.texture) {
                             // see if this texture already exists
                             if let Some(i) =
@@ -1382,26 +1378,26 @@ impl PofToolsGui {
                         poly.texture = tex_id_map[&poly.texture];
                     }
 
-                    let import_subobj = &mut import_model.sub_objects[id];
-                    import_subobj.obj_id = obj_id_map[&id];
+                    let import_submodel = &mut import_model.submodels[id];
+                    import_submodel.id = model_id_map[&id];
 
                     // make da swap (or addition)
-                    if import_subobj.obj_id.0 as usize >= old_subobj_len {
-                        if let Some(parent_id) = import_subobj.parent {
-                            import_subobj.parent = obj_id_map.get(&parent_id).copied();
+                    if import_submodel.id.0 as usize >= old_smodel_len {
+                        if let Some(parent_id) = import_submodel.parent {
+                            import_submodel.parent = model_id_map.get(&parent_id).copied();
                         }
 
-                        self.model.sub_objects.push(std::mem::take(import_subobj));
-                        self.model.header.num_subobjects += 1;
+                        self.model.submodels.push(std::mem::take(import_submodel));
+                        self.model.header.num_submodels += 1;
                     } else {
-                        let target_subobj = &mut self.model.sub_objects[import_subobj.obj_id];
-                        // if you're replacing a subobj, you inherit the parent of what you've replaced
-                        import_subobj.parent = target_subobj.parent;
+                        let target_submodel = &mut self.model.submodels[import_submodel.id];
+                        // if you're replacing a submodel, you inherit the parent of what you've replaced
+                        import_submodel.parent = target_submodel.parent;
 
                         // also inherit position
-                        import_subobj.offset = target_subobj.offset;
+                        import_submodel.offset = target_submodel.offset;
 
-                        *target_subobj = std::mem::take(import_subobj);
+                        *target_submodel = std::mem::take(import_submodel);
                     }
                 }
                 TreeValue::Weapons(WeaponTreeValue::PriBank(idx)) => {

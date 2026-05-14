@@ -11,7 +11,7 @@ use glium::glutin::surface::WindowSurface;
 use glium::Display;
 use nalgebra_glm::TMat4;
 use pof::{
-    Dock, Error, NormalVec3, ObjectId, PathId, Set::*, SubsysRotationAxis, SubsysRotationType, SubsysTranslationAxis, SubsysTranslationType, Vec3d,
+    Dock, Error, NormalVec3, PathId, Set::*, SubmodelId, SubsysRotationAxis, SubsysRotationType, SubsysTranslationAxis, SubsysTranslationType, Vec3d,
     Warning,
 };
 
@@ -19,7 +19,7 @@ use crate::Model;
 
 use crate::ui::{
     model_action, DockingTreeValue, EyeTreeValue, GlowTreeValue, InsigniaTreeValue, PathTreeValue, PofToolsGui, SpecialPointTreeValue,
-    SubObjectTreeValue, TextureTreeValue, ThrusterTreeValue, TreeValue, TurretTreeValue, UiState, UndoAction, WeaponTreeValue, ERROR_RED, LIGHT_BLUE,
+    SubmodelTreeValue, TextureTreeValue, ThrusterTreeValue, TreeValue, TurretTreeValue, UiState, UndoAction, WeaponTreeValue, ERROR_RED, LIGHT_BLUE,
     LIGHT_ORANGE, WARNING_YELLOW,
 };
 
@@ -329,9 +329,9 @@ impl UiState {
         ret
     }
 
-    // a combo box for subobjects
+    // a combo box for submodels
     // selector value is a convenience option to disable the combo box, since most properties panels work on a current selection of Option<something>
-    fn subobject_combo_box<T>(
+    fn submodel_combo_box<T>(
         ui: &mut Ui, name_list: &[String], mut_selection: &mut usize, selector_value: Option<T>, label: &str, active_error_idx: Option<usize>,
         active_warning_idx: Option<usize>,
     ) -> Option<usize> {
@@ -598,18 +598,18 @@ impl UiState {
                     transform_window: Default::default(),
                 }
             }
-            TreeValue::SubObjects(subobj_tree_select) => match subobj_tree_select {
-                SubObjectTreeValue::Header => self.properties_panel = PropertiesPanel::default_subobject(),
-                SubObjectTreeValue::SubObject(id) => {
-                    self.properties_panel = PropertiesPanel::SubObject {
-                        bbox_max_string: format!("{}", model.sub_objects[id].bbox.max),
-                        bbox_min_string: format!("{}", model.sub_objects[id].bbox.min),
-                        offset_string: format!("{}", model.sub_objects[id].offset),
-                        radius_string: format!("{}", model.sub_objects[id].radius),
-                        is_debris_check: model.sub_objects[id].is_debris_model,
-                        name: format!("{}", model.sub_objects[id].name),
-                        rot_axis: model.sub_objects[id].rotation_axis,
-                        trans_axis: model.sub_objects[id].translation_axis,
+            TreeValue::Submodels(submodel_tree_select) => match submodel_tree_select {
+                SubmodelTreeValue::Header => self.properties_panel = PropertiesPanel::default_submodel(),
+                SubmodelTreeValue::Submodel(id) => {
+                    self.properties_panel = PropertiesPanel::Submodel {
+                        bbox_max_string: format!("{}", model.submodels[id].bbox.max),
+                        bbox_min_string: format!("{}", model.submodels[id].bbox.min),
+                        offset_string: format!("{}", model.submodels[id].offset),
+                        radius_string: format!("{}", model.submodels[id].radius),
+                        is_debris_check: model.submodels[id].is_debris_model,
+                        name: format!("{}", model.submodels[id].name),
+                        rot_axis: model.submodels[id].rotation_axis,
+                        trans_axis: model.submodels[id].translation_axis,
                         transform_window: Default::default(),
                     }
                 }
@@ -683,7 +683,7 @@ impl UiState {
                         disp_time_string: format!("{}", model.glow_banks[bank].disp_time),
                         on_time_string: format!("{}", model.glow_banks[bank].on_time),
                         off_time_string: format!("{}", model.glow_banks[bank].off_time),
-                        attached_subobj_idx: model.glow_banks[bank].obj_parent.0 as usize,
+                        attached_submodel_idx: model.glow_banks[bank].model_parent.0 as usize,
                         lod_string: format!("{}", model.glow_banks[bank].lod),
                         glow_type_string: format!("{}", model.glow_banks[bank].glow_type),
                         glow_texture_string: format!(
@@ -700,7 +700,7 @@ impl UiState {
                         disp_time_string: format!("{}", model.glow_banks[bank].disp_time),
                         on_time_string: format!("{}", model.glow_banks[bank].on_time),
                         off_time_string: format!("{}", model.glow_banks[bank].off_time),
-                        attached_subobj_idx: model.glow_banks[bank].obj_parent.0 as usize,
+                        attached_submodel_idx: model.glow_banks[bank].model_parent.0 as usize,
                         lod_string: format!("{}", model.glow_banks[bank].lod),
                         glow_type_string: format!("{}", model.glow_banks[bank].glow_type),
                         glow_texture_string: format!(
@@ -728,14 +728,14 @@ impl UiState {
                 TurretTreeValue::TurretPoint(turret, point) => {
                     self.properties_panel = PropertiesPanel::Turret {
                         normal_string: format!("{}", model.turrets[turret].normal.0),
-                        base_idx: model.turrets[turret].base_obj.0 as usize,
+                        base_idx: model.turrets[turret].base_model.0 as usize,
                         position_string: format!("{}", model.turrets[turret].fire_points[point]),
                     }
                 }
                 TurretTreeValue::Turret(turret) => {
                     self.properties_panel = PropertiesPanel::Turret {
                         normal_string: format!("{}", model.turrets[turret].normal.0),
-                        base_idx: model.turrets[turret].base_obj.0 as usize,
+                        base_idx: model.turrets[turret].base_model.0 as usize,
                         position_string: Default::default(),
                     }
                 }
@@ -774,7 +774,7 @@ impl UiState {
                     self.properties_panel = PropertiesPanel::EyePoint {
                         position_string: format!("{}", model.eye_points[idx].position),
                         normal_string: format!("{}", model.eye_points[idx].normal.0),
-                        attached_subobj_idx: model.eye_points[idx].attached_subobj.map_or(model.sub_objects.len(), |id| id.0 as usize),
+                        attached_submodel_idx: model.eye_points[idx].attached_submodel.map_or(model.submodels.len(), |id| id.0 as usize),
                     }
                 }
                 _ => self.properties_panel = PropertiesPanel::default_eye(),
@@ -818,7 +818,7 @@ pub enum PropertiesPanel {
         moif_string: String,
         transform_window: TransformWindow,
     },
-    SubObject {
+    Submodel {
         bbox_min_string: String,
         bbox_max_string: String,
         name: String,
@@ -854,7 +854,7 @@ pub enum PropertiesPanel {
         disp_time_string: String,
         on_time_string: String,
         off_time_string: String,
-        attached_subobj_idx: usize,
+        attached_submodel_idx: usize,
         lod_string: String,
         glow_type_string: String,
         glow_texture_string: String,
@@ -886,7 +886,7 @@ pub enum PropertiesPanel {
     EyePoint {
         position_string: String,
         normal_string: String,
-        attached_subobj_idx: usize,
+        attached_submodel_idx: usize,
     },
     VisualCenter {
         position: String,
@@ -914,8 +914,8 @@ impl Default for PropertiesPanel {
     }
 }
 impl PropertiesPanel {
-    fn default_subobject() -> Self {
-        Self::SubObject {
+    fn default_submodel() -> Self {
+        Self::Submodel {
             bbox_min_string: Default::default(),
             bbox_max_string: Default::default(),
             name: Default::default(),
@@ -966,7 +966,7 @@ impl PropertiesPanel {
             disp_time_string: Default::default(),
             on_time_string: Default::default(),
             off_time_string: Default::default(),
-            attached_subobj_idx: Default::default(),
+            attached_submodel_idx: Default::default(),
             lod_string: Default::default(),
             glow_texture_string: Default::default(),
             glow_type_string: Default::default(),
@@ -1000,7 +1000,7 @@ impl PropertiesPanel {
         Self::EyePoint {
             position_string: Default::default(),
             normal_string: Default::default(),
-            attached_subobj_idx: 0,
+            attached_submodel_idx: 0,
         }
     }
     fn default_insignia() -> Self {
@@ -1214,27 +1214,27 @@ impl PofToolsGui {
 
                 for (i, &id) in self.model.header.detail_levels.iter().enumerate() {
                     let mut combo_idx = 0;
-                    let mut listed_objects = vec![];
+                    let mut listed_models = vec![];
                     let mut active_warning_idx = None;
 
-                    // add all the valid objects
-                    for subobj in &self.model.sub_objects {
-                        if subobj.parent().is_some() || subobj.is_debris_model {
+                    // add all the valid models
+                    for smodel in &self.model.submodels {
+                        if smodel.parent().is_some() || smodel.is_debris_model {
                             continue;
                         }
 
-                        if subobj.obj_id == id {
-                            combo_idx = listed_objects.len();
+                        if smodel.id == id {
+                            combo_idx = listed_models.len();
                         }
 
-                        listed_objects.push(subobj.name.clone());
+                        listed_models.push(smodel.name.clone());
                     }
 
                     // if we have an invalid one add that too
-                    if self.model.sub_objects[id].parent().is_some() {
-                        combo_idx = listed_objects.len();
+                    if self.model.submodels[id].parent().is_some() {
+                        combo_idx = listed_models.len();
                         active_warning_idx = Some(combo_idx);
-                        listed_objects.push(self.model.sub_objects[id].name.clone());
+                        listed_models.push(self.model.submodels[id].name.clone());
                     }
 
                     if self.model.warnings.contains(&Warning::DuplicateDetailLevel(id)) {
@@ -1242,44 +1242,44 @@ impl PofToolsGui {
                     }
 
                     //finally add a "None" option
-                    listed_objects.push(format!("None"));
+                    listed_models.push(format!("None"));
 
                     if let Some(new_idx) =
-                        UiState::subobject_combo_box(ui, &listed_objects, &mut combo_idx, Some(()), &format!("- {}", i), None, active_warning_idx)
+                        UiState::submodel_combo_box(ui, &listed_models, &mut combo_idx, Some(()), &format!("- {}", i), None, active_warning_idx)
                     {
-                        if new_idx == listed_objects.len() - 1 {
+                        if new_idx == listed_models.len() - 1 {
                             changed_detail = Some((i, None));
                         } else {
-                            changed_detail = Some((i, self.model.get_obj_id_by_name(&listed_objects[new_idx])));
+                            changed_detail = Some((i, self.model.get_model_id_by_name(&listed_models[new_idx])));
                         }
                     }
                 }
 
                 // add a special dummy detail level so that users can add new ones
                 {
-                    let mut listed_objects: Vec<String> = self
+                    let mut listed_models: Vec<String> = self
                         .model
-                        .sub_objects
+                        .submodels
                         .iter()
-                        .filter(|subobj| subobj.parent().is_none() && !subobj.is_debris_model)
-                        .map(|subobj| subobj.name.clone())
+                        .filter(|smodel| smodel.parent().is_none() && !smodel.is_debris_model)
+                        .map(|smodel| smodel.name.clone())
                         .collect();
-                    listed_objects.push(format!("None"));
+                    listed_models.push(format!("None"));
 
-                    let mut combo_idx = listed_objects.len() - 1;
-                    if let Some(new_idx) = UiState::subobject_combo_box(
+                    let mut combo_idx = listed_models.len() - 1;
+                    if let Some(new_idx) = UiState::submodel_combo_box(
                         ui,
-                        &listed_objects,
+                        &listed_models,
                         &mut combo_idx,
                         Some(()),
                         &format!("- {}", self.model.header.detail_levels.len()),
                         None,
                         None,
                     ) {
-                        if new_idx == listed_objects.len() - 1 {
+                        if new_idx == listed_models.len() - 1 {
                             changed_detail = Some((self.model.header.detail_levels.len(), None));
                         } else {
-                            changed_detail = Some((self.model.header.detail_levels.len(), self.model.get_obj_id_by_name(&listed_objects[new_idx])));
+                            changed_detail = Some((self.model.header.detail_levels.len(), self.model.get_model_id_by_name(&listed_models[new_idx])));
                         }
                     }
                 }
@@ -1323,7 +1323,7 @@ impl PofToolsGui {
 
                 let mut text = LayoutJob::default();
                 text.append(
-                    "This will affect all subobjects, all weapon points, docking points etc. and ",
+                    "This will affect all submodels, all weapon points, docking points etc. and ",
                     0.0,
                     TextFormat {
                         font_id: TextStyle::Body.resolve(ui.style()),
@@ -1352,14 +1352,14 @@ impl PofToolsGui {
 
                 let mut num_verts = 0;
                 let mut num_norms = 0;
-                for subobj in &self.model.sub_objects {
-                    num_verts += subobj.bsp_data.verts.len();
-                    num_norms += subobj.bsp_data.norms.len();
+                for smodel in &self.model.submodels {
+                    num_verts += smodel.bsp_data.verts.len();
+                    num_norms += smodel.bsp_data.norms.len();
                 }
                 ui.label(RichText::new(format!("Total vertices: {}", num_verts)).weak());
                 ui.label(RichText::new(format!("Total normals: {}", num_norms)).weak());
             }
-            PropertiesPanel::SubObject {
+            PropertiesPanel::Submodel {
                 bbox_min_string,
                 bbox_max_string,
                 name,
@@ -1370,14 +1370,14 @@ impl PofToolsGui {
                 trans_axis,
                 transform_window,
             } => {
-                let mut selected_id = if let TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)) = current_tree_selection {
+                let mut selected_id = if let TreeValue::Submodels(SubmodelTreeValue::Submodel(id)) = current_tree_selection {
                     Some(id)
                 } else {
                     None
                 };
 
                 ui.horizontal(|ui| {
-                    ui.heading("SubObject");
+                    ui.heading("Submodel");
                     ui.add_space(ui.available_width() - 70.0);
 
                     // Actions menu ===================================================================
@@ -1389,22 +1389,22 @@ impl PofToolsGui {
                             }
 
                             if ui.button("Duplicate").clicked() {
-                                let new_id = ObjectId(self.model.sub_objects.len() as u32);
-                                let mut new_subobj = self.model.sub_objects[id].clone();
-                                new_subobj.children.clear(); // we aren't duplicating the children
-                                new_subobj.obj_id = new_id;
+                                let new_id = SubmodelId(self.model.submodels.len() as u32);
+                                let mut new_smodel = self.model.submodels[id].clone();
+                                new_smodel.children.clear(); // we aren't duplicating the children
+                                new_smodel.id = new_id;
 
-                                new_subobj.name = format!("{} - Copy", new_subobj.name);
+                                new_smodel.name = format!("{} - Copy", new_smodel.name);
 
                                 // a lot of work for this gag
-                                let mut lowest_moron = 0;
+                                let mut lowest_moron = 1;
                                 let mut user_is_moronic = false;
-                                for subobj in &self.model.sub_objects {
-                                    if subobj.name == new_subobj.name {
+                                for smodel in &self.model.submodels {
+                                    if smodel.name == new_smodel.name && !self.model.submodel_duplicated[smodel.id] {
                                         user_is_moronic = true;
                                     }
-                                    if subobj.name.starts_with("U.R.A Moron ") {
-                                        let digits = subobj
+                                    if smodel.name.starts_with("U.R.A Moron ") {
+                                        let digits = smodel
                                             .name
                                             .trim_end()
                                             .chars()
@@ -1418,12 +1418,13 @@ impl PofToolsGui {
                                 }
 
                                 if user_is_moronic {
-                                    new_subobj.name = format!("U.R.A Moron {}", lowest_moron);
+                                    new_smodel.name = format!("U.R.A Moron {}", lowest_moron);
                                 }
 
-                                let mut new_bufs = Some(self.model.buffer_objects[id].clone(display));
-                                let mut mat = Some(self.model.subobject_transform_matrix[id]);
-                                let mut new_subobj = Some(new_subobj);
+                                let mut new_bufs = Some(self.model.buffer_meshes[id].clone(display));
+                                let mut mat = Some(self.model.submodel_transform_matrix[id]);
+                                let mut duped = Some(true);
+                                let mut new_smodel = Some(new_smodel);
 
                                 let mut undo = false;
 
@@ -1432,21 +1433,23 @@ impl PofToolsGui {
                                     &mut self.model,
                                     undo_func(move |model| {
                                         if undo {
-                                            if let Some(parent_id) = model.sub_objects[new_id].parent() {
-                                                let parent_children = &mut model.sub_objects[parent_id].children;
+                                            if let Some(parent_id) = model.submodels[new_id].parent() {
+                                                let parent_children = &mut model.submodels[parent_id].children;
                                                 parent_children.remove(parent_children.iter().position(|child_id| *child_id == new_id).unwrap());
                                             }
 
-                                            new_bufs = Some(model.buffer_objects.remove(new_id.0 as usize));
-                                            mat = Some(model.subobject_transform_matrix.remove(new_id.0 as usize));
-                                            new_subobj = Some(model.sub_objects.remove(new_id.0 as usize));
+                                            new_bufs = Some(model.buffer_meshes.remove(new_id.0 as usize));
+                                            mat = Some(model.submodel_transform_matrix.remove(new_id.0 as usize));
+                                            duped = Some(model.submodel_duplicated.remove(new_id.0 as usize));
+                                            new_smodel = Some(model.submodels.remove(new_id.0 as usize));
                                         } else {
-                                            model.buffer_objects.push(new_bufs.take().unwrap());
-                                            model.subobject_transform_matrix.push(mat.take().unwrap());
-                                            model.sub_objects.push(new_subobj.take().unwrap());
+                                            model.buffer_meshes.push(new_bufs.take().unwrap());
+                                            model.submodel_transform_matrix.push(mat.take().unwrap());
+                                            model.submodel_duplicated.push(duped.take().unwrap());
+                                            model.submodels.push(new_smodel.take().unwrap());
 
-                                            if let Some(parent_id) = model.sub_objects[new_id].parent() {
-                                                model.sub_objects[parent_id].children.push(new_id)
+                                            if let Some(parent_id) = model.submodels[new_id].parent() {
+                                                model.submodels[parent_id].children.push(new_id)
                                             }
                                         }
                                         undo = !undo;
@@ -1460,40 +1463,36 @@ impl PofToolsGui {
                                 let index = id.0 as usize;
                                 let deleted_id = id; // for clarity
 
-                                // the subobject we're going to select after having done the deletion
+                                // the submodel we're going to select after having done the deletion
                                 let mut reset_id = {
-                                    if let Some(parent_id) = self.model.sub_objects[deleted_id].parent {
+                                    if let Some(parent_id) = self.model.submodels[deleted_id].parent {
                                         // if it has a parent...
-                                        let list_idx = self.model.sub_objects[parent_id]
-                                            .children
-                                            .iter()
-                                            .position(|id| *id == deleted_id)
-                                            .unwrap();
+                                        let list_idx = self.model.submodels[parent_id].children.iter().position(|id| *id == deleted_id).unwrap();
                                         if list_idx > 0 {
                                             // use the next child
-                                            Some(self.model.sub_objects[parent_id].children[list_idx - 1])
+                                            Some(self.model.submodels[parent_id].children[list_idx - 1])
                                         } else {
                                             // else use the parent
                                             Some(parent_id)
                                         }
                                     } else {
-                                        // use the next top level object (if one exists)
+                                        // use the next top level model (if one exists)
                                         self.model
-                                            .sub_objects
+                                            .submodels
                                             .iter()
                                             .rev()
-                                            .filter(|subobj| subobj.parent.is_none() && subobj.obj_id < deleted_id)
-                                            .map(|subobj| subobj.obj_id)
+                                            .filter(|smodel| smodel.parent.is_none() && smodel.id < deleted_id)
+                                            .map(|smodel| smodel.id)
                                             .next()
                                     }
                                 };
 
                                 let mut id_map = HashMap::new();
-                                for subobj in &self.model.sub_objects {
-                                    if subobj.obj_id.0 > id.0 {
-                                        id_map.insert(subobj.obj_id, ObjectId(subobj.obj_id.0 - 1));
+                                for smodel in &self.model.submodels {
+                                    if smodel.id.0 > id.0 {
+                                        id_map.insert(smodel.id, SubmodelId(smodel.id.0 - 1));
                                     } else {
-                                        id_map.insert(subobj.obj_id, subobj.obj_id);
+                                        id_map.insert(smodel.id, smodel.id);
                                     }
                                 }
                                 reset_id = reset_id.map(|id| id_map[&id]);
@@ -1507,7 +1506,7 @@ impl PofToolsGui {
                                 let mut docking_bays = self.model.docking_bays.clone();
                                 let mut paths = self.model.paths.clone();
 
-                                self.model.header.num_subobjects -= 1;
+                                self.model.header.num_submodels -= 1;
                                 let mut removed_detail = false;
                                 // truncate if a detail level was deleted
                                 self.model.header.detail_levels.retain_mut(|id| {
@@ -1522,53 +1521,53 @@ impl PofToolsGui {
                                     }
                                 });
 
-                                // set any glow banks to the deleted object's parent, if it exists, otherwise delete
+                                // set any glow banks to the deleted model's parent, if it exists, otherwise delete
                                 self.model.pof_model.glow_banks.retain_mut(|bank| {
-                                    if bank.obj_parent == deleted_id {
-                                        if self.model.pof_model.sub_objects[bank.obj_parent].parent().is_some() {
-                                            bank.obj_parent = self.model.pof_model.sub_objects[deleted_id].parent.unwrap();
+                                    if bank.model_parent == deleted_id {
+                                        if self.model.pof_model.submodels[bank.model_parent].parent().is_some() {
+                                            bank.model_parent = self.model.pof_model.submodels[deleted_id].parent.unwrap();
                                             true
                                         } else {
                                             false
                                         }
                                     } else {
-                                        bank.obj_parent = id_map[&bank.obj_parent];
+                                        bank.model_parent = id_map[&bank.model_parent];
                                         true
                                     }
                                 });
 
                                 self.model.turrets.retain_mut(|turret| {
-                                    if turret.gun_obj == deleted_id {
-                                        turret.gun_obj = id_map[&turret.base_obj];
+                                    if turret.gun_model == deleted_id {
+                                        turret.gun_model = id_map[&turret.base_model];
                                     } else {
-                                        turret.gun_obj = id_map[&turret.gun_obj];
-                                        turret.base_obj = id_map[&turret.base_obj];
+                                        turret.gun_model = id_map[&turret.gun_model];
+                                        turret.base_model = id_map[&turret.base_model];
                                     }
-                                    turret.base_obj != deleted_id
+                                    turret.base_model != deleted_id
                                 });
 
                                 self.model.eye_points.iter_mut().for_each(|eye| {
-                                    if eye.attached_subobj == Some(deleted_id) {
-                                        eye.attached_subobj = None
-                                    } else if let Some(id) = eye.attached_subobj.as_mut() {
+                                    if eye.attached_submodel == Some(deleted_id) {
+                                        eye.attached_submodel = None
+                                    } else if let Some(id) = eye.attached_submodel.as_mut() {
                                         *id = id_map[id];
                                     }
                                 });
 
                                 self.model.pof_model.docking_bays.retain_mut(|bay| {
                                     let str = pof::properties_get_field(&bay.properties, "$parent_submodel");
-                                    str.is_none() || str.unwrap() != self.model.pof_model.sub_objects[deleted_id].name
+                                    str.is_none() || str.unwrap() != self.model.pof_model.submodels[deleted_id].name
                                 });
 
                                 self.model
                                     .pof_model
                                     .paths
-                                    .retain(|path| format!("${}", self.model.pof_model.sub_objects[deleted_id].name) != path.name);
+                                    .retain(|path| format!("${}", self.model.pof_model.submodels[deleted_id].name) != path.name);
 
-                                let mut buffer_obj = Some(self.model.buffer_objects.remove(index));
-                                let mut matrix = Some(self.model.subobject_transform_matrix.remove(index));
-                                let (x, child_list_idx) = self.model.delete_subobject_only(id);
-                                let mut subobj = Some(x);
+                                let mut buffer_mesh = Some(self.model.buffer_meshes.remove(index));
+                                let mut matrix = Some(self.model.submodel_transform_matrix.remove(index));
+                                let (x, child_list_idx) = self.model.delete_submodel_only(id);
+                                let mut submodel = Some(x);
 
                                 let mut undo = true;
                                 let mut first_time = true;
@@ -1579,15 +1578,15 @@ impl PofToolsGui {
                                     undo_func(move |model| {
                                         if !first_time {
                                             if undo {
-                                                model.insert_subobject_only(subobj.take().unwrap(), child_list_idx);
+                                                model.insert_submodel_only(submodel.take().unwrap(), child_list_idx);
 
-                                                model.subobject_transform_matrix.insert(index, matrix.take().unwrap());
-                                                model.buffer_objects.insert(index, buffer_obj.take().unwrap());
+                                                model.submodel_transform_matrix.insert(index, matrix.take().unwrap());
+                                                model.buffer_meshes.insert(index, buffer_mesh.take().unwrap());
                                             } else {
-                                                subobj = Some(model.delete_subobject_only(deleted_id).0);
+                                                submodel = Some(model.delete_submodel_only(deleted_id).0);
 
-                                                matrix = Some(model.subobject_transform_matrix.remove(index));
-                                                buffer_obj = Some(model.buffer_objects.remove(index));
+                                                matrix = Some(model.submodel_transform_matrix.remove(index));
+                                                buffer_mesh = Some(model.buffer_meshes.remove(index));
                                             }
 
                                             swap(&mut model.header, &mut header);
@@ -1605,8 +1604,8 @@ impl PofToolsGui {
                                 );
 
                                 selected_id = reset_id;
-                                self.ui_state.tree_view_selection = TreeValue::SubObjects(SubObjectTreeValue::subobj(reset_id));
-                                self.ui_state.last_selected_subobj = reset_id;
+                                self.ui_state.tree_view_selection = TreeValue::Submodels(SubmodelTreeValue::smodel(reset_id));
+                                self.ui_state.last_selected_smodel = reset_id;
 
                                 ui.close_menu();
                             }
@@ -1618,7 +1617,7 @@ impl PofToolsGui {
 
                 let mut text = LayoutJob::default();
                 text.append(
-                    "This will affect all child subobjects of this one, its turret firepoints if any and ",
+                    "This will affect all child submodels of this one, its turret firepoints if any and ",
                     0.0,
                     TextFormat {
                         font_id: TextStyle::Body.resolve(ui.style()),
@@ -1639,18 +1638,18 @@ impl PofToolsGui {
                     if let Some(id) = selected_id {
                         // even though the header version of this actually modifies the mesh, this just modifies the transform matrix
                         // ideally this would allow it to be undoable, but that's still really complicated...
-                        pub fn transform_subobj(model: &mut Model, id: ObjectId, matrix: &TMat4<f32>, transform_offset: bool) {
+                        pub fn transform_submodel(model: &mut Model, id: SubmodelId, matrix: &TMat4<f32>, transform_offset: bool) {
                             let no_trans_matrix = glm::set_row(matrix, 3, &glm::vec4(0.0, 0.0, 0.0, 1.0));
                             let rot_matrix = no_trans_matrix.normalize();
 
                             if !transform_offset {
-                                model.subobject_transform_matrix[id] *= matrix;
+                                model.submodel_transform_matrix[id] *= matrix;
                             } else {
-                                model.subobject_transform_matrix[id] *= no_trans_matrix;
+                                model.submodel_transform_matrix[id] *= no_trans_matrix;
                             }
 
                             for turret in &mut model.turrets {
-                                if id == turret.base_obj {
+                                if id == turret.base_model {
                                     for firepoint in &mut turret.fire_points {
                                         *firepoint = &no_trans_matrix * *firepoint;
                                     }
@@ -1658,20 +1657,20 @@ impl PofToolsGui {
                                 }
                             }
 
-                            if let Some((mut uvec, mut fvec)) = model.sub_objects[id].uvec_fvec() {
+                            if let Some((mut uvec, mut fvec)) = model.submodels[id].uvec_fvec() {
                                 uvec = &rot_matrix * uvec;
                                 fvec = &rot_matrix * fvec;
-                                pof::properties_update_field(&mut model.sub_objects[id].properties, "$uvec", &uvec.to_string());
-                                pof::properties_update_field(&mut model.sub_objects[id].properties, "$fvec", &fvec.to_string());
+                                pof::properties_update_field(&mut model.submodels[id].properties, "$uvec", &uvec.to_string());
+                                pof::properties_update_field(&mut model.submodels[id].properties, "$fvec", &fvec.to_string());
                             }
 
-                            let children: Vec<_> = model.sub_objects[id].children().copied().collect();
+                            let children: Vec<_> = model.submodels[id].children().copied().collect();
                             for child_id in children {
-                                transform_subobj(model, child_id, &no_trans_matrix, true)
+                                transform_submodel(model, child_id, &no_trans_matrix, true)
                             }
                         }
 
-                        transform_subobj(&mut self.model, id, &matrix, false);
+                        transform_submodel(&mut self.model, id, &matrix, false);
 
                         transform_window.open = false;
                     }
@@ -1686,29 +1685,29 @@ impl PofToolsGui {
                     if self
                         .model
                         .errors
-                        .contains(&Error::DuplicateSubobjectName(self.model.sub_objects[id].name.clone()))
-                        || self.model.errors.contains(&Error::UnnamedSubObject(id))
+                        .contains(&Error::DuplicateSubmodelName(self.model.submodels[id].name.clone()))
+                        || self.model.errors.contains(&Error::UnnamedSubmodel(id))
                     {
                         text = text.color(ERROR_RED);
                     }
                     ui.label(text);
-                    let old_name = self.model.sub_objects[id].name.clone();
+                    let old_name = self.model.submodels[id].name.clone();
 
                     if text_edit_single(
                         ui,
-                        "subobj name".to_string(),
+                        "submodel name".to_string(),
                         &mut self.model,
-                        path_func(move |model| &mut model.sub_objects[id].name),
+                        path_func(move |model| &mut model.submodels[id].name),
                         undo_history,
                     )
                     .changed()
                     {
-                        self.model.recheck_warnings(One(Warning::SubObjectNameTooLong(id)));
-                        self.model.recheck_errors(One(Error::UnnamedSubObject(id)));
-                        self.model.recheck_errors(One(Error::DuplicateSubobjectName(old_name)));
+                        self.model.recheck_warnings(One(Warning::SubmodelNameTooLong(id)));
+                        self.model.recheck_errors(One(Error::UnnamedSubmodel(id)));
+                        self.model.recheck_errors(One(Error::DuplicateSubmodelName(old_name)));
                         self.model
                             .pof_model
-                            .recheck_errors(One(Error::DuplicateSubobjectName(self.model.pof_model.sub_objects[id].name.clone())));
+                            .recheck_errors(One(Error::DuplicateSubmodelName(self.model.pof_model.submodels[id].name.clone())));
                         self.model.recalc_semantic_name_links();
                     }
                 } else {
@@ -1718,28 +1717,28 @@ impl PofToolsGui {
 
                 ui.add_space(5.0);
 
-                // Is Debris Object Checkbox ================================================================
+                // Is Debris Model Checkbox ================================================================
 
-                let num_debris = self.model.num_debris_objects();
+                let num_debris = self.model.num_debris_models();
                 let cannot_be_debris =
-                    num_debris >= pof::MAX_DEBRIS_OBJECTS || selected_id.is_some_and(|id| self.model.header.detail_levels.contains(&id));
+                    num_debris >= pof::MAX_DEBRIS_MODELS || selected_id.is_some_and(|id| self.model.header.detail_levels.contains(&id));
 
-                ui.add_enabled_ui(selected_id.is_some_and(|id| !cannot_be_debris || self.model.sub_objects[id].is_debris_model), |ui| {
+                ui.add_enabled_ui(selected_id.is_some_and(|id| !cannot_be_debris || self.model.submodels[id].is_debris_model), |ui| {
                     if selected_id.is_some_and(|id| {
-                        self.model.sub_objects[id].is_debris_model
-                            && (self.model.header.detail_levels.contains(&id) || num_debris > pof::MAX_DEBRIS_OBJECTS)
+                        self.model.submodels[id].is_debris_model
+                            && (self.model.header.detail_levels.contains(&id) || num_debris > pof::MAX_DEBRIS_MODELS)
                     }) {
                         UiState::set_widget_color(ui, ERROR_RED);
                     }
 
-                    let mut checkbox = ui.checkbox(is_debris_check, "Debris Subobject");
+                    let mut checkbox = ui.checkbox(is_debris_check, "Debris Submodel");
 
-                    if selected_id.is_some_and(|_| num_debris >= pof::MAX_DEBRIS_OBJECTS) {
-                        checkbox = checkbox.on_disabled_hover_text(format!("The maximum number of debris is {}", pof::MAX_DEBRIS_OBJECTS));
+                    if selected_id.is_some_and(|_| num_debris >= pof::MAX_DEBRIS_MODELS) {
+                        checkbox = checkbox.on_disabled_hover_text(format!("The maximum number of debris is {}", pof::MAX_DEBRIS_MODELS));
                     }
 
                     if selected_id.is_some_and(|id| self.model.header.detail_levels.contains(&id)) {
-                        checkbox = checkbox.on_disabled_hover_text(format!("A detail object cannot also be debris"));
+                        checkbox = checkbox.on_disabled_hover_text(format!("A detail model cannot also be debris"));
                     }
 
                     if checkbox.changed() {
@@ -1749,7 +1748,7 @@ impl PofToolsGui {
                             undo_history,
                             &mut self.model,
                             undo_func(move |model| {
-                                model.sub_objects[id].is_debris_model = !model.sub_objects[id].is_debris_model;
+                                model.submodels[id].is_debris_model = !model.submodels[id].is_debris_model;
                             }),
                         );
                     }
@@ -1777,7 +1776,7 @@ impl PofToolsGui {
                         format!("{} bounding box min", current_tree_selection),
                         ui,
                         false,
-                        selected_id.map(|id| path_func(move |model| &mut model.sub_objects[id].bbox.min)),
+                        selected_id.map(|id| path_func(move |model| &mut model.submodels[id].bbox.min)),
                         bbox_min_string
                     );
 
@@ -1793,7 +1792,7 @@ impl PofToolsGui {
                         format!("{} bounding box max", current_tree_selection),
                         ui,
                         false,
-                        selected_id.map(|id| path_func(move |model| &mut model.sub_objects[id].bbox.max)),
+                        selected_id.map(|id| path_func(move |model| &mut model.submodels[id].bbox.max)),
                         bbox_max_string
                     );
 
@@ -1806,12 +1805,12 @@ impl PofToolsGui {
                 let response = ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate"));
                 if response.clicked() {
                     let id = selected_id.unwrap();
-                    let mut new_bbox = self.model.sub_objects[id].recalc_bbox();
+                    let mut new_bbox = self.model.submodels[id].recalc_bbox();
                     model_action(
                         undo_history,
                         &mut self.model,
                         undo_func(move |model| {
-                            swap(&mut model.sub_objects[id].bbox, &mut new_bbox);
+                            swap(&mut model.submodels[id].bbox, &mut new_bbox);
                         }),
                     );
                 }
@@ -1825,7 +1824,7 @@ impl PofToolsGui {
                 }
 
                 if let Some(id) = selected_id {
-                    let bbox = &self.model.sub_objects[id].bbox;
+                    let bbox = &self.model.submodels[id].bbox;
                     ui.horizontal_wrapped(|ui| {
                         ui.label(format!("Width:{NON_BREAK_SPACE}{:.1}", bbox.x_width()));
                         ui.label(format!("Height:{NON_BREAK_SPACE}{:.1}", bbox.y_height()));
@@ -1855,34 +1854,34 @@ impl PofToolsGui {
                 if let Some(id) = selected_id {
                     let only_offset = self.ui_state.move_only_offset;
                     let offset_move = parse_func(move |model: &Model, mut new_offset: Vec3d| {
-                        let mut diff = model.sub_objects[id].offset - new_offset;
-                        let mut new_radius = model.sub_objects[id].radius + diff.magnitude(); //this is an overestimate... maybe fix...
-                        let mut new_bbox = model.sub_objects[id].bbox.shift(diff);
+                        let mut diff = model.submodels[id].offset - new_offset;
+                        let mut new_radius = model.submodels[id].radius + diff.magnitude(); //this is an overestimate... maybe fix...
+                        let mut new_bbox = model.submodels[id].bbox.shift(diff);
                         if only_offset {
                             undo_func(move |model| {
-                                let subobj = &mut model.sub_objects[id];
-                                swap(&mut subobj.offset, &mut new_offset);
-                                swap(&mut subobj.radius, &mut new_radius);
-                                swap(&mut subobj.bbox, &mut new_bbox);
-                                let children: Vec<_> = subobj.children().copied().collect();
+                                let smodel = &mut model.submodels[id];
+                                swap(&mut smodel.offset, &mut new_offset);
+                                swap(&mut smodel.radius, &mut new_radius);
+                                swap(&mut smodel.bbox, &mut new_bbox);
+                                let children: Vec<_> = smodel.children().copied().collect();
                                 for id in children {
-                                    model.sub_objects[id].offset += diff;
+                                    model.submodels[id].offset += diff;
                                 }
-                                model.subobject_transform_matrix[id].append_translation_mut(&diff.into());
+                                model.submodel_transform_matrix[id].append_translation_mut(&diff.into());
 
                                 diff = -diff;
-                                info!("Modifying: Subobject - {:?} - offset", id);
+                                info!("Modifying: Submodel - {:?} - offset", id);
                             })
                         } else {
                             undo_func(move |model| {
-                                swap(&mut model.sub_objects[id].offset, &mut new_offset);
-                                info!("Modifying: Subobject - {:?} - offset", id);
+                                swap(&mut model.submodels[id].offset, &mut new_offset);
+                                info!("Modifying: Submodel - {:?} - offset", id);
                             })
                         }
                     });
 
                     let response = UiState::model_value_edit_custom(
-                        "subobj offset",
+                        "smodel offset",
                         &mut self.ui_state.viewport_3d_dirty,
                         ui,
                         false,
@@ -1904,26 +1903,26 @@ impl PofToolsGui {
                 let response = ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate"));
                 if response.clicked() {
                     let id = selected_id.unwrap();
-                    let mut new_offset = self.model.recalc_subobj_offset(id);
-                    let mut diff = self.model.sub_objects[id].offset - new_offset;
-                    let mut new_radius = self.model.sub_objects[id].radius + diff.magnitude(); //this is an overestimate... maybe fix...
-                    let mut new_bbox = self.model.sub_objects[id].bbox.shift(diff);
+                    let mut new_offset = self.model.recalc_submodel_offset(id);
+                    let mut diff = self.model.submodels[id].offset - new_offset;
+                    let mut new_radius = self.model.submodels[id].radius + diff.magnitude(); //this is an overestimate... maybe fix...
+                    let mut new_bbox = self.model.submodels[id].bbox.shift(diff);
                     model_action(
                         undo_history,
                         &mut self.model,
                         undo_func(move |model| {
-                            let subobj = &mut model.sub_objects[id];
-                            swap(&mut subobj.offset, &mut new_offset);
-                            swap(&mut subobj.radius, &mut new_radius);
-                            swap(&mut subobj.bbox, &mut new_bbox);
-                            let children: Vec<_> = subobj.children().copied().collect();
+                            let smodel = &mut model.submodels[id];
+                            swap(&mut smodel.offset, &mut new_offset);
+                            swap(&mut smodel.radius, &mut new_radius);
+                            swap(&mut smodel.bbox, &mut new_bbox);
+                            let children: Vec<_> = smodel.children().copied().collect();
                             for id in children {
-                                model.sub_objects[id].offset += diff;
+                                model.submodels[id].offset += diff;
                             }
-                            model.subobject_transform_matrix[id].append_translation_mut(&diff.into());
+                            model.submodel_transform_matrix[id].append_translation_mut(&diff.into());
 
                             diff = -diff;
-                            info!("Recalculating: Subobject - {:?} - offset", id);
+                            info!("Recalculating: Submodel - {:?} - offset", id);
                         }),
                     );
                     self.ui_state.viewport_3d_dirty = true;
@@ -1934,7 +1933,7 @@ impl PofToolsGui {
                 let response = ui
                     .add_enabled(selected_id.is_some(), egui::Checkbox::new(&mut self.ui_state.move_only_offset, "Modify Offset Only"))
                     .on_hover_text(
-                        "Changes will affect only the offset/center of this subobject, all other geometry remains in place.\nThe radius will be recalculated.",
+                        "Changes will affect only the offset/center of this submodel, all other geometry remains in place.\nThe radius will be recalculated.",
                     );
                 display_origin |= response.hovered() || response.has_focus();
 
@@ -1957,7 +1956,7 @@ impl PofToolsGui {
                     format!("{} radius", current_tree_selection),
                     ui,
                     self.model.warnings.contains(&Warning::RadiusTooSmall(selected_id)),
-                    selected_id.map(|id| path_func(move |model| &mut model.sub_objects[id].radius)),
+                    selected_id.map(|id| path_func(move |model| &mut model.submodels[id].radius)),
                     radius_string
                 );
                 display_radius |= response.hovered() || response.has_focus();
@@ -1969,13 +1968,13 @@ impl PofToolsGui {
                 let response = ui.add_enabled(selected_id.is_some(), egui::Button::new("Recalculate"));
                 if response.clicked() {
                     let id = selected_id.unwrap();
-                    let mut new_radius = self.model.sub_objects[id].recalc_radius();
+                    let mut new_radius = self.model.submodels[id].recalc_radius();
 
                     model_action(
                         undo_history,
                         &mut self.model,
                         undo_func(move |model| {
-                            swap(&mut model.sub_objects[id].radius, &mut new_radius);
+                            swap(&mut model.submodels[id].radius, &mut new_radius);
                         }),
                     );
                 }
@@ -1985,34 +1984,32 @@ impl PofToolsGui {
 
                 ui.separator();
 
-                // Parent subobject combo box ================================================================
+                // Parent submodel combo box ================================================================
 
                 // first index is none
-                let mut subobj_names_list = vec![format!("None")];
+                let mut submodel_names_list = vec![format!("None")];
                 let mut combo_idx = 0;
                 // add the current parent if it exists as the second entry
-                if let Some(parent_id) = selected_id.and_then(|id| self.model.sub_objects[id].parent()) {
-                    subobj_names_list.push(self.model.sub_objects[parent_id].name.clone());
+                if let Some(parent_id) = selected_id.and_then(|id| self.model.submodels[id].parent()) {
+                    submodel_names_list.push(self.model.submodels[parent_id].name.clone());
                     combo_idx = 1;
                 }
 
-                // fill the remainder with the rest of the subobjects which are NOT children of this one
+                // fill the remainder with the rest of the submodels which are NOT children of this one
                 if let Some(id) = selected_id {
-                    subobj_names_list.extend(
+                    submodel_names_list.extend(
                         self.model
-                            .sub_objects
+                            .submodels
                             .iter()
-                            .filter(|subobj| {
-                                self.model.sub_objects[id].parent() != Some(subobj.obj_id) && !self.model.is_obj_id_ancestor(subobj.obj_id, id)
-                            })
-                            .map(|subobj| subobj.name.clone()),
+                            .filter(|smodel| self.model.submodels[id].parent() != Some(smodel.id) && !self.model.is_model_id_ancestor(smodel.id, id))
+                            .map(|smodel| smodel.name.clone()),
                     );
                 }
 
-                if let Some(new_parent) = UiState::subobject_combo_box(ui, &subobj_names_list, &mut combo_idx, selected_id, "Parent", None, None) {
+                if let Some(new_parent) = UiState::submodel_combo_box(ui, &submodel_names_list, &mut combo_idx, selected_id, "Parent", None, None) {
                     let id = selected_id.unwrap();
                     let mut new_parent = if new_parent != 0 {
-                        self.model.get_obj_id_by_name(&subobj_names_list[new_parent])
+                        self.model.get_model_id_by_name(&submodel_names_list[new_parent])
                     } else {
                         None
                     };
@@ -2021,7 +2018,7 @@ impl PofToolsGui {
                         undo_history,
                         &mut self.model,
                         undo_func(move |model| {
-                            let old_parent = model.sub_objects[id].parent;
+                            let old_parent = model.submodels[id].parent;
                             model.make_orphan(id);
                             if let Some(parent_id) = new_parent {
                                 new_parent = old_parent; // swap in the old value
@@ -2035,7 +2032,7 @@ impl PofToolsGui {
 
                 ui.label("Properties:");
                 if let Some(id) = selected_id {
-                    if self.model.sub_objects[id].uvec_fvec().is_some() {
+                    if self.model.submodels[id].uvec_fvec().is_some() {
                         self.ui_state.display_uvec_fvec = true;
                     }
 
@@ -2044,11 +2041,11 @@ impl PofToolsGui {
                         format!("{} properties", current_tree_selection),
                         2,
                         &mut self.model,
-                        path_func(move |model| &mut model.sub_objects[id].properties),
+                        path_func(move |model| &mut model.submodels[id].properties),
                         undo_history,
                     );
                     if widget_response.changed() {
-                        self.model.recheck_warnings(One(Warning::SubObjectPropertiesTooLong(id)));
+                        self.model.recheck_warnings(One(Warning::SubmodelPropertiesTooLong(id)));
                         self.ui_state.viewport_3d_dirty = true; // There may be changes to the uvec/fvec
                     };
                 } else {
@@ -2075,12 +2072,12 @@ impl PofToolsGui {
                                 undo_history,
                                 &mut self.model,
                                 undo_func(move |model: &mut Model| {
-                                    let obj = &mut model.sub_objects[id];
-                                    swap(&mut obj.rotation_axis, &mut new_axis);
-                                    if obj.rotation_axis == SubsysRotationAxis::None {
-                                        obj.rotation_type = SubsysRotationType::None
-                                    } else if obj.rotation_type == SubsysRotationType::None {
-                                        obj.rotation_type = SubsysRotationType::Regular
+                                    let smodel = &mut model.submodels[id];
+                                    swap(&mut smodel.rotation_axis, &mut new_axis);
+                                    if smodel.rotation_axis == SubsysRotationAxis::None {
+                                        smodel.rotation_type = SubsysRotationType::None
+                                    } else if smodel.rotation_type == SubsysRotationType::None {
+                                        smodel.rotation_type = SubsysRotationType::Regular
                                     }
                                 }),
                             );
@@ -2088,7 +2085,7 @@ impl PofToolsGui {
                     });
 
                     ui.vertical(|ui| {
-                        if selected_id.is_some_and(|id| self.model.warnings.contains(&Warning::SubObjectTranslationInvalidVersion(id))) {
+                        if selected_id.is_some_and(|id| self.model.warnings.contains(&Warning::SubmodelTranslationInvalidVersion(id))) {
                             UiState::set_widget_color(ui, WARNING_YELLOW);
                             ui.label("Translation Axis:");
                             UiState::reset_widget_color(ui);
@@ -2120,12 +2117,12 @@ impl PofToolsGui {
                                 undo_history,
                                 &mut self.model,
                                 undo_func(move |model: &mut Model| {
-                                    let obj = &mut model.sub_objects[id];
-                                    swap(&mut obj.translation_axis, &mut new_axis);
-                                    if obj.translation_axis == SubsysTranslationAxis::None {
-                                        obj.translation_type = SubsysTranslationType::None
-                                    } else if obj.translation_type == SubsysTranslationType::None {
-                                        obj.translation_type = SubsysTranslationType::Regular
+                                    let smodel = &mut model.submodels[id];
+                                    swap(&mut smodel.translation_axis, &mut new_axis);
+                                    if smodel.translation_axis == SubsysTranslationAxis::None {
+                                        smodel.translation_type = SubsysTranslationType::None
+                                    } else if smodel.translation_type == SubsysTranslationType::None {
+                                        smodel.translation_type = SubsysTranslationType::Regular
                                     }
                                 }),
                             );
@@ -2137,7 +2134,7 @@ impl PofToolsGui {
                 // Theoretically should be a decent metric for BSP tree efficiency; lower = better
                 //
                 // if ui.button("avg depth").clicked() {
-                //     let node = &self.model.sub_objects[selected_id.unwrap()].bsp_data.collision_tree;
+                //     let node = &self.model.submodels[selected_id.unwrap()].bsp_data.collision_tree;
                 //     let bbox_vol = match node {
                 //         pof::BspNode::Split { bbox, .. } | pof::BspNode::Leaf { bbox, .. } => bbox.volume(),
                 //     };
@@ -2153,22 +2150,22 @@ impl PofToolsGui {
                 // Semantic name links ================================================================
 
                 if let Some(id) = selected_id {
-                    let subobj = &self.model.sub_objects[id];
-                    if !subobj.name_links.is_empty() {
+                    let smodel = &self.model.submodels[id];
+                    if !smodel.name_links.is_empty() {
                         ui.separator();
 
                         let mut has_live_debris = false;
                         let mut has_detail_level = false;
-                        for link in &subobj.name_links {
+                        for link in &smodel.name_links {
                             match *link {
                                 pof::NameLink::DestroyedVersion(destroyed_id) => {
                                     ui.horizontal_wrapped(|ui| {
                                         ui.label(RichText::new(format!("Has a destroyed version:")).weak().color(Color32::LIGHT_RED));
                                         if ui
-                                            .button(RichText::new(&self.model.sub_objects[destroyed_id].name).weak().color(Color32::LIGHT_RED))
+                                            .button(RichText::new(&self.model.submodels[destroyed_id].name).weak().color(Color32::LIGHT_RED))
                                             .clicked()
                                         {
-                                            select_new_tree_val!(TreeValue::SubObjects(SubObjectTreeValue::SubObject(destroyed_id)));
+                                            select_new_tree_val!(TreeValue::Submodels(SubmodelTreeValue::Submodel(destroyed_id)));
                                         }
                                     });
                                 }
@@ -2176,34 +2173,34 @@ impl PofToolsGui {
                                     ui.horizontal_wrapped(|ui| {
                                         ui.label(RichText::new(format!("Is the destroyed version of: ")).weak().color(Color32::LIGHT_RED));
                                         if ui
-                                            .button(RichText::new(&self.model.sub_objects[intact_id].name).weak().color(Color32::LIGHT_RED))
+                                            .button(RichText::new(&self.model.submodels[intact_id].name).weak().color(Color32::LIGHT_RED))
                                             .clicked()
                                         {
-                                            select_new_tree_val!(TreeValue::SubObjects(SubObjectTreeValue::SubObject(intact_id)));
+                                            select_new_tree_val!(TreeValue::Submodels(SubmodelTreeValue::Submodel(intact_id)));
                                         }
                                     });
                                 }
                                 pof::NameLink::LiveDebris(_) => has_live_debris = true,
                                 pof::NameLink::LiveDebrisOf(debris_parent_id) => {
                                     ui.horizontal_wrapped(|ui| {
-                                        ui.label(RichText::new(format!("Is a debris object of: ")).weak().color(LIGHT_ORANGE));
+                                        ui.label(RichText::new(format!("Is a debris model of: ")).weak().color(LIGHT_ORANGE));
                                         if ui
-                                            .button(RichText::new(&self.model.sub_objects[debris_parent_id].name).weak().color(LIGHT_ORANGE))
+                                            .button(RichText::new(&self.model.submodels[debris_parent_id].name).weak().color(LIGHT_ORANGE))
                                             .clicked()
                                         {
-                                            select_new_tree_val!(TreeValue::SubObjects(SubObjectTreeValue::SubObject(debris_parent_id)));
+                                            select_new_tree_val!(TreeValue::Submodels(SubmodelTreeValue::Submodel(debris_parent_id)));
                                         }
                                     });
                                 }
                                 pof::NameLink::DetailLevel(..) => has_detail_level = true,
                                 pof::NameLink::DetailLevelOf(detail_parent_id, _) => {
                                     ui.horizontal_wrapped(|ui| {
-                                        ui.label(RichText::new(format!("Is a detail object of: ")).weak().color(LIGHT_BLUE));
+                                        ui.label(RichText::new(format!("Is a detail model of: ")).weak().color(LIGHT_BLUE));
                                         if ui
-                                            .button(RichText::new(&self.model.sub_objects[detail_parent_id].name).weak().color(LIGHT_BLUE))
+                                            .button(RichText::new(&self.model.submodels[detail_parent_id].name).weak().color(LIGHT_BLUE))
                                             .clicked()
                                         {
-                                            select_new_tree_val!(TreeValue::SubObjects(SubObjectTreeValue::SubObject(detail_parent_id)));
+                                            select_new_tree_val!(TreeValue::Submodels(SubmodelTreeValue::Submodel(detail_parent_id)));
                                         }
                                     });
                                 }
@@ -2211,28 +2208,28 @@ impl PofToolsGui {
                         }
 
                         if has_live_debris {
-                            ui.label(RichText::new(format!("Has sub-debris objects:")).weak().color(LIGHT_ORANGE));
-                            for link in &subobj.name_links {
+                            ui.label(RichText::new(format!("Has sub-debris models:")).weak().color(LIGHT_ORANGE));
+                            for link in &smodel.name_links {
                                 if let pof::NameLink::LiveDebris(id) = *link {
                                     if ui
-                                        .button(RichText::new(&self.model.sub_objects[id].name).weak().color(LIGHT_ORANGE))
+                                        .button(RichText::new(&self.model.submodels[id].name).weak().color(LIGHT_ORANGE))
                                         .clicked()
                                     {
-                                        select_new_tree_val!(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)));
+                                        select_new_tree_val!(TreeValue::Submodels(SubmodelTreeValue::Submodel(id)));
                                     }
                                 }
                             }
                         }
 
                         if has_detail_level {
-                            ui.label(RichText::new(format!("Has detail level objects:")).weak().color(LIGHT_BLUE));
-                            for link in &subobj.name_links {
+                            ui.label(RichText::new(format!("Has detail level models:")).weak().color(LIGHT_BLUE));
+                            for link in &smodel.name_links {
                                 if let pof::NameLink::DetailLevel(id, _) = *link {
                                     if ui
-                                        .button(RichText::new(&self.model.sub_objects[id].name).weak().color(LIGHT_BLUE))
+                                        .button(RichText::new(&self.model.submodels[id].name).weak().color(LIGHT_BLUE))
                                         .clicked()
                                     {
-                                        select_new_tree_val!(TreeValue::SubObjects(SubObjectTreeValue::SubObject(id)));
+                                        select_new_tree_val!(TreeValue::Submodels(SubmodelTreeValue::Submodel(id)));
                                     }
                                 }
                             }
@@ -2245,12 +2242,12 @@ impl PofToolsGui {
                 ui.separator();
 
                 if let Some(id) = selected_id {
-                    ui.label(RichText::new(format!("Id: {:?}", self.model.sub_objects[id].obj_id)).weak());
-                    let mut vert_string = RichText::new(format!("Vertices: {}", self.model.sub_objects[id].bsp_data.verts.len())).weak();
+                    ui.label(RichText::new(format!("Id: {:?}", self.model.submodels[id].id)).weak());
+                    let mut vert_string = RichText::new(format!("Vertices: {}", self.model.submodels[id].bsp_data.verts.len())).weak();
                     if self.model.errors.contains(&Error::TooManyVerts(id)) {
                         vert_string = vert_string.color(ERROR_RED);
                     }
-                    let mut norm_string = RichText::new(format!("Normals: {}", self.model.sub_objects[id].bsp_data.norms.len())).weak();
+                    let mut norm_string = RichText::new(format!("Normals: {}", self.model.submodels[id].bsp_data.norms.len())).weak();
                     if self.model.errors.contains(&Error::TooManyNorms(id)) {
                         norm_string = norm_string.color(ERROR_RED);
                     }
@@ -2635,12 +2632,12 @@ impl PofToolsGui {
                     }
                 });
 
-                let mut subobj_names_list = vec!["None".to_string()];
+                let mut submodel_names_list = vec!["None".to_string()];
 
                 let mut warning_idx = None;
                 if bay_num.is_some_and(|idx| self.model.warnings.contains(&Warning::InvalidDockParentSubmodel(idx))) {
-                    // this bay has an invalid parent object, so add whatever its name is to the list
-                    subobj_names_list.push(
+                    // this bay has an invalid parent model, so add whatever its name is to the list
+                    submodel_names_list.push(
                         pof::properties_get_field(&self.model.docking_bays[bay_num.unwrap()].properties, "$parent_submodel")
                             .unwrap()
                             .to_string(),
@@ -2648,11 +2645,11 @@ impl PofToolsGui {
                     warning_idx = Some(1);
                 }
 
-                subobj_names_list.extend(self.model.get_subobj_names());
+                submodel_names_list.extend(self.model.get_smodel_names());
 
                 let mut parent_id = if let Some(bay) = bay_num {
-                    self.model.docking_bays[bay].get_parent_obj().map_or(0, |parent_name| {
-                        subobj_names_list
+                    self.model.docking_bays[bay].get_parent_smodel().map_or(0, |parent_name| {
+                        submodel_names_list
                             .iter()
                             .position(|name| name.to_lowercase() == parent_name.to_lowercase())
                             .unwrap_or(0)
@@ -2661,11 +2658,11 @@ impl PofToolsGui {
                     0 // doesnt matter
                 };
 
-                if let Some(new_subobj) =
-                    UiState::subobject_combo_box(ui, &subobj_names_list, &mut parent_id, bay_num, "Parent Object", None, warning_idx)
+                if let Some(new_smodel) =
+                    UiState::submodel_combo_box(ui, &submodel_names_list, &mut parent_id, bay_num, "Submodel", None, warning_idx)
                 {
                     let bay_num = bay_num.unwrap();
-                    let mut new_name = subobj_names_list[new_subobj].clone();
+                    let mut new_name = submodel_names_list[new_smodel].clone();
                     let mut old_name = pof::properties_get_field(&self.model.docking_bays[bay_num].properties, "$parent_submodel")
                         .unwrap_or_default()
                         .to_owned();
@@ -2847,7 +2844,7 @@ impl PofToolsGui {
                 lod_string,
                 glow_type_string,
                 glow_texture_string,
-                attached_subobj_idx,
+                attached_submodel_idx,
                 position_string,
                 normal_string,
                 radius_string,
@@ -2861,8 +2858,8 @@ impl PofToolsGui {
                     _ => (None, None),
                 };
 
-                // no subobjects = no glow banks allowed
-                let glow_banks_opt = (!self.model.sub_objects.is_empty()).then(|| &self.model.glow_banks);
+                // no submodels = no glow banks allowed
+                let glow_banks_opt = (!self.model.submodels.is_empty()).then(|| &self.model.glow_banks);
                 let bank_idx_response = UiState::list_manipulator_widget(ui, bank_num, glow_banks_opt, "Bank");
 
                 ui.add_space(10.0);
@@ -2887,17 +2884,18 @@ impl PofToolsGui {
                     ui.add_enabled(false, egui::TextEdit::singleline(&mut blank_string).desired_rows(1));
                 }
 
-                let subobj_names_list = self.model.get_subobj_names();
+                let submodel_names_list = self.model.get_smodel_names();
 
-                if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, attached_subobj_idx, bank_num, "SubObject", None, None)
+                if let Some(new_submodel) =
+                    UiState::submodel_combo_box(ui, &submodel_names_list, attached_submodel_idx, bank_num, "Submodel", None, None)
                 {
                     let num = bank_num.unwrap();
-                    let mut new_id = ObjectId(new_subobj as u32);
+                    let mut new_id = SubmodelId(new_submodel as u32);
                     model_action(
                         undo_history,
                         &mut self.model,
                         undo_func(move |model| {
-                            swap(&mut model.glow_banks[num].obj_parent, &mut new_id);
+                            swap(&mut model.glow_banks[num].model_parent, &mut new_id);
                         }),
                     );
                 }
@@ -3163,66 +3161,66 @@ impl PofToolsGui {
                     _ => (None, None),
                 };
 
-                // no subobjects = no turrets allowed
-                let turrets_opt = (!self.model.sub_objects.is_empty()).then(|| &self.model.turrets);
+                // no submodels = no turrets allowed
+                let turrets_opt = (!self.model.submodels.is_empty()).then(|| &self.model.turrets);
                 let turret_idx_response = UiState::list_manipulator_widget(ui, turret_num, turrets_opt, "Turret");
 
                 ui.add_space(10.0);
-                let subobj_names_list = self.model.get_subobj_names();
+                let submodel_names_list = self.model.get_smodel_names();
 
-                if let Some(new_subobj) = UiState::subobject_combo_box(ui, &subobj_names_list, base_idx, turret_num, "Base object", None, None) {
-                    let mut new_val = ObjectId(new_subobj as u32);
+                if let Some(new_submodel) = UiState::submodel_combo_box(ui, &submodel_names_list, base_idx, turret_num, "Base model", None, None) {
+                    let mut new_val = SubmodelId(new_submodel as u32);
                     let turret_num = turret_num.unwrap(); // the unwrap is ok here, if it were none, the combo box would be un-interactable
 
                     model_action(
                         undo_history,
                         &mut self.model,
                         undo_func(move |model: &mut Model| {
-                            let val = &mut model.turrets[turret_num].base_obj;
+                            let val = &mut model.turrets[turret_num].base_model;
                             swap(&mut new_val, val);
                         }),
                     );
                 }
 
-                // turret gun subobject combo box is a bit trickier since we only want to show valid subobjects (and the currently used one,
+                // turret gun submodel combo box is a bit trickier since we only want to show valid submodels (and the currently used one,
                 // which may be invalid)
 
-                let mut gun_subobj_ids_list = vec![];
-                let mut gun_subobj_idx = 0;
+                let mut gun_smodel_ids_list = vec![];
+                let mut gun_smodel_idx = 0;
                 let mut error_idx = None;
                 // assemble the list of ids, and get the index of the currently being used one
                 if let Some(num) = turret_num {
                     let (list, idx) = self
                         .model
-                        .get_valid_gun_subobjects_for_turret(self.model.turrets[num].gun_obj, self.model.turrets[num].base_obj);
-                    gun_subobj_ids_list = list;
-                    gun_subobj_idx = idx;
-                    if self.model.errors.contains(&Error::InvalidTurretGunSubobject(num)) {
-                        for (i, &id) in gun_subobj_ids_list.iter().enumerate() {
-                            if id == self.model.turrets[num].gun_obj {
+                        .get_valid_gun_submodels_for_turret(self.model.turrets[num].gun_model, self.model.turrets[num].base_model);
+                    gun_smodel_ids_list = list;
+                    gun_smodel_idx = idx;
+                    if self.model.errors.contains(&Error::InvalidTurretGunSubmodel(num)) {
+                        for (i, &id) in gun_smodel_ids_list.iter().enumerate() {
+                            if id == self.model.turrets[num].gun_model {
                                 error_idx = Some(i);
                             }
                         }
                     }
                 }
                 // assemble the string names list from the id list
-                let gun_subobj_names_list = gun_subobj_ids_list
+                let gun_submodel_names_list = gun_smodel_ids_list
                     .iter()
-                    .map(|id| self.model.sub_objects[*id].name.clone())
+                    .map(|id| self.model.submodels[*id].name.clone())
                     .collect::<Vec<_>>();
 
                 // then make the combo box, giving it the list of names and the index
                 if let Some(new_idx) =
-                    UiState::subobject_combo_box(ui, &gun_subobj_names_list, &mut gun_subobj_idx, turret_num, "Gun object", error_idx, None)
+                    UiState::submodel_combo_box(ui, &gun_submodel_names_list, &mut gun_smodel_idx, turret_num, "Gun model", error_idx, None)
                 {
-                    let mut new_val = gun_subobj_ids_list[new_idx];
+                    let mut new_val = gun_smodel_ids_list[new_idx];
                     let turret_num = turret_num.unwrap(); // the unwrap is ok here, if it were none, the combo box would be un-interactable
 
                     model_action(
                         undo_history,
                         &mut self.model,
                         undo_func(move |model: &mut Model| {
-                            let val = &mut model.turrets[turret_num].gun_obj;
+                            let val = &mut model.turrets[turret_num].gun_model;
                             swap(&mut new_val, val);
                         }),
                     );
@@ -3423,7 +3421,7 @@ impl PofToolsGui {
                     select_new_tree_val!(TreeValue::Paths(PathTreeValue::path_point(path_num.unwrap(), new_idx)));
                 }
 
-                // Auto-Gen Paths: generates approach paths for all turrets, subsystem subobjects,
+                // Auto-Gen Paths: generates approach paths for all turrets, subsystem submodels,
                 // subsystem special points, and docking bays that don't already have paths.
                 // Ported from PCS2
                 ui.add_space(10.0);
@@ -3521,7 +3519,7 @@ impl PofToolsGui {
                 ui.label("Offset:");
                 model_value_widget!(format!("{} offset", current_tree_selection), ui, false, offset, offset_string);
             }
-            PropertiesPanel::EyePoint { position_string, normal_string, attached_subobj_idx } => {
+            PropertiesPanel::EyePoint { position_string, normal_string, attached_submodel_idx } => {
                 ui.heading("Eye Point");
                 ui.separator();
 
@@ -3530,24 +3528,24 @@ impl PofToolsGui {
                     _ => None,
                 };
 
-                // no subobjects = no eye points allowed
-                let eye_points_opt = (!self.model.sub_objects.is_empty()).then(|| &self.model.eye_points);
+                // no submodels = no eye points allowed
+                let eye_points_opt = (!self.model.submodels.is_empty()).then(|| &self.model.eye_points);
                 let eye_idx_response = UiState::list_manipulator_widget(ui, eye_num, eye_points_opt, "Eye Point");
 
                 ui.add_space(10.0);
 
                 ui.add_enabled_ui(eye_num.is_some(), |ui| {
                     if let Some(num) = eye_num {
-                        let mut name_list = self.model.get_subobj_names();
+                        let mut name_list = self.model.get_smodel_names();
                         name_list.push("None".to_string());
 
                         let changed = egui::ComboBox::from_label("Attached submodel")
-                            .show_index(ui, attached_subobj_idx, name_list.len(), |i| name_list[i].to_owned())
+                            .show_index(ui, attached_submodel_idx, name_list.len(), |i| name_list[i].to_owned())
                             .changed();
 
                         if changed {
-                            let mut new_val = if *attached_subobj_idx < self.model.sub_objects.len() {
-                                Some(ObjectId(*attached_subobj_idx as u32))
+                            let mut new_val = if *attached_submodel_idx < self.model.submodels.len() {
+                                Some(SubmodelId(*attached_submodel_idx as u32))
                             } else {
                                 None
                             };
@@ -3556,13 +3554,13 @@ impl PofToolsGui {
                                 undo_history,
                                 &mut self.model,
                                 undo_func(move |model: &mut Model| {
-                                    let val = &mut model.eye_points[num].attached_subobj;
+                                    let val = &mut model.eye_points[num].attached_submodel;
                                     swap(&mut new_val, val);
                                 }),
                             );
                         }
                     } else {
-                        egui::ComboBox::from_label("Attached submodel").show_index(ui, attached_subobj_idx, 1, |_| format!(""));
+                        egui::ComboBox::from_label("Attached submodel").show_index(ui, attached_submodel_idx, 1, |_| format!(""));
                     }
                 });
 

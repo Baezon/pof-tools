@@ -35,7 +35,7 @@ macro_rules! id_type {
     };
 }
 
-id_type! {ObjectId, u32}
+id_type! {SubmodelId, u32}
 id_type! {TextureId, u32}
 id_type! {VertexId, u32}
 id_type! {NormalId, u32}
@@ -60,20 +60,20 @@ pub(crate) fn get_version() -> Version {
 
 // like a regular vector, but indexed with ObjectIds only, for some safety
 #[derive(Debug)]
-pub struct ObjVec<T>(pub Vec<T>);
-impl<T> Index<ObjectId> for ObjVec<T> {
+pub struct SubmodelVec<T>(pub Vec<T>);
+impl<T> Index<SubmodelId> for SubmodelVec<T> {
     type Output = T;
 
-    fn index(&self, index: ObjectId) -> &Self::Output {
+    fn index(&self, index: SubmodelId) -> &Self::Output {
         &self.0[index.0 as usize]
     }
 }
-impl<T> IndexMut<ObjectId> for ObjVec<T> {
-    fn index_mut(&mut self, index: ObjectId) -> &mut Self::Output {
+impl<T> IndexMut<SubmodelId> for SubmodelVec<T> {
+    fn index_mut(&mut self, index: SubmodelId) -> &mut Self::Output {
         &mut self.0[index.0 as usize]
     }
 }
-impl<'a, T> IntoIterator for &'a ObjVec<T> {
+impl<'a, T> IntoIterator for &'a SubmodelVec<T> {
     type Item = &'a T;
 
     type IntoIter = std::slice::Iter<'a, T>;
@@ -82,24 +82,24 @@ impl<'a, T> IntoIterator for &'a ObjVec<T> {
         self.iter()
     }
 }
-impl<T> Default for ObjVec<T> {
+impl<T> Default for SubmodelVec<T> {
     fn default() -> Self {
         Self(Default::default())
     }
 }
-impl<T> ObjVec<T> {
+impl<T> SubmodelVec<T> {
     fn iter(&self) -> std::slice::Iter<'_, T> {
         self.0.iter()
     }
 }
-impl<T> Deref for ObjVec<T> {
+impl<T> Deref for SubmodelVec<T> {
     type Target = Vec<T>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-impl<T> DerefMut for ObjVec<T> {
+impl<T> DerefMut for SubmodelVec<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
@@ -609,13 +609,13 @@ mk_struct! {
     pub struct PathPoint {
         pub position: Vec3d,
         pub radius: f32,
-        pub turrets: Vec<ObjectId>,
+        pub turrets: Vec<SubmodelId>,
     }
 }
 
 #[derive(Default, Debug, Clone)]
 pub struct EyePoint {
-    pub attached_subobj: Option<ObjectId>,
+    pub attached_submodel: Option<SubmodelId>,
     pub position: Vec3d,
     pub normal: NormalVec3,
 }
@@ -629,7 +629,7 @@ impl EyePoint {
 }
 impl Serialize for EyePoint {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
-        self.attached_subobj.map_or(u32::MAX, |id| id.0).write_to(w)?;
+        self.attached_submodel.map_or(u32::MAX, |id| id.0).write_to(w)?;
         self.position.write_to(w)?;
         self.normal.write_to(w)
     }
@@ -902,12 +902,12 @@ impl GlowPoint {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct ObjHeader {
+pub struct ModelHeader {
     pub max_radius: f32,
     pub obj_flags: u32,
-    pub num_subobjects: u32,
+    pub num_submodels: u32,
     pub bbox: BoundingBox,
-    pub detail_levels: Vec<ObjectId>,
+    pub detail_levels: Vec<SubmodelId>,
     pub mass: f32,
     pub center_of_mass: Vec3d,
     pub moment_of_inertia: Mat3d,
@@ -1394,32 +1394,32 @@ impl Default for SubsysRotationAxis {
     }
 }
 
-pub const MAX_DEBRIS_OBJECTS: u32 = 32;
+pub const MAX_DEBRIS_MODELS: u32 = 32;
 
 /// "semantic name links", fields derived specifically from their names
 /// recalculated by recalc_semantic_name_links
 #[derive(Debug, Copy, Clone)]
 pub enum NameLink {
     /// points from a turret to its destroyed version
-    DestroyedVersion(ObjectId),
+    DestroyedVersion(SubmodelId),
     /// back-link for [`DestroyedVersion`]
-    DestroyedVersionOf(ObjectId),
+    DestroyedVersionOf(SubmodelId),
     /// points to the debris version of this object
-    LiveDebris(ObjectId),
+    LiveDebris(SubmodelId),
     /// back-link for [`LiveDebris`]
-    LiveDebrisOf(ObjectId),
+    LiveDebrisOf(SubmodelId),
     /// Points from the highest detail level object to one of the lower detail levels.
     /// Repeats for each lower detail version; they are in arbitrary order
-    DetailLevel(ObjectId, u8),
+    DetailLevel(SubmodelId, u8),
     /// back-link for [`DetailLevel`]: points from lower detail to highest detail version
-    DetailLevelOf(ObjectId, u8),
+    DetailLevelOf(SubmodelId, u8),
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct SubObject {
-    pub obj_id: ObjectId,
+pub struct Submodel {
+    pub id: SubmodelId,
     pub radius: f32,
-    pub parent: Option<ObjectId>,
+    pub parent: Option<SubmodelId>,
     pub offset: Vec3d,
     pub geo_center: Vec3d,
     pub bbox: BoundingBox,
@@ -1432,19 +1432,19 @@ pub struct SubObject {
     pub bsp_data: BspData,
 
     // the following fields are derived information
-    pub children: Vec<ObjectId>,
+    pub children: Vec<SubmodelId>,
     pub is_debris_model: bool,
 
     // "semantic name links", fields derived specifically from their names
     // recalculated by recalc_semantic_name_links
     pub name_links: Vec<NameLink>,
 }
-impl SubObject {
-    pub fn parent(&self) -> Option<ObjectId> {
+impl Submodel {
+    pub fn parent(&self) -> Option<SubmodelId> {
         self.parent
     }
 
-    pub fn children(&self) -> std::slice::Iter<'_, ObjectId> {
+    pub fn children(&self) -> std::slice::Iter<'_, SubmodelId> {
         self.children.iter()
     }
 
@@ -1503,7 +1503,7 @@ impl SubObject {
         properties_get_field(&self.properties, "$special") == Some("subsystem")
     }
 
-    /// returns the surface area of the subobject, and the average surface area position
+    /// returns the surface area of the submodel, and the average surface area position
     pub fn surface_area_average_pos(&self) -> (f32, Vec3d) {
         let mut surface_area = 0.0;
         let mut weighted_sum = Vec3d::ZERO;
@@ -1528,16 +1528,16 @@ fn parse_uvec_fvec(props: &str) -> Option<(Vec3d, Vec3d)> {
     Some((uvec, fvec))
 }
 
-impl Serialize for SubObject {
+impl Serialize for Submodel {
     fn write_to(&self, w: &mut impl Write) -> io::Result<()> {
         let version = get_version();
-        self.obj_id.write_to(w)?;
+        self.id.write_to(w)?;
         if version >= Version::V21_16 {
             self.radius.write_to(w)?;
-            self.parent.unwrap_or(ObjectId(u32::MAX)).write_to(w)?;
+            self.parent.unwrap_or(SubmodelId(u32::MAX)).write_to(w)?;
             self.offset.write_to(w)?;
         } else {
-            self.parent.unwrap_or(ObjectId(u32::MAX)).write_to(w)?;
+            self.parent.unwrap_or(SubmodelId(u32::MAX)).write_to(w)?;
             self.offset.write_to(w)?;
             self.radius.write_to(w)?;
         }
@@ -1629,7 +1629,7 @@ impl Dock {
         properties_get_field(&self.properties, "$name")
     }
 
-    pub fn get_parent_obj(&self) -> Option<&str> {
+    pub fn get_parent_smodel(&self) -> Option<&str> {
         properties_get_field(&self.properties, "$parent_submodel")
     }
 
@@ -1647,8 +1647,8 @@ pub const MAX_TURRET_POINTS: usize = 10;
 mk_struct! {
     #[derive(Clone)]
     pub struct Turret {
-        pub base_obj: ObjectId,
-        pub gun_obj: ObjectId,
+        pub base_model: SubmodelId,
+        pub gun_model: SubmodelId,
         pub normal: NormalVec3,
         pub fire_points: Vec<Vec3d>,
     }
@@ -1657,8 +1657,8 @@ mk_struct! {
 impl Default for Turret {
     fn default() -> Self {
         Self {
-            base_obj: Default::default(),
-            gun_obj: Default::default(),
+            base_model: Default::default(),
+            gun_model: Default::default(),
             normal: Default::default(),
             fire_points: vec![],
         }
@@ -1668,8 +1668,8 @@ impl Default for Turret {
 impl Debug for Turret {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Turret")
-            .field("base_obj", &self.base_obj)
-            .field("gun_obj", &self.gun_obj)
+            .field("base_obj", &self.base_model)
+            .field("gun_obj", &self.gun_model)
             .field("normal", &self.normal)
             .field("fire_points", &self.fire_points.len())
             .finish()
@@ -1724,7 +1724,7 @@ pub struct GlowPointBank {
     pub disp_time: i32,
     pub on_time: u32,
     pub off_time: u32,
-    pub obj_parent: ObjectId,
+    pub model_parent: SubmodelId,
     pub lod: u32,
     pub glow_type: u32,
     pub properties: String,
@@ -1735,7 +1735,7 @@ impl Serialize for GlowPointBank {
         self.disp_time.write_to(w)?;
         self.on_time.write_to(w)?;
         self.off_time.write_to(w)?;
-        self.obj_parent.write_to(w)?;
+        self.model_parent.write_to(w)?;
         self.lod.write_to(w)?;
         self.glow_type.write_to(w)?;
         (self.glow_points.len() as u32).write_to(w)?;
@@ -1823,7 +1823,7 @@ mk_versions! {
     V22_00(2200, "22.00"),
     /// External weapon angle offset compatible
     V22_01(2201, "22.01"),
-    /// Extended vertex and normal limits per subobject and file size optimizations
+    /// Extended vertex and normal limits per submodel and file size optimizations
     V23_00(2300, "23.00"),
     /// Added submodel translation support
     V23_01(2301, "23.01"),
@@ -1832,8 +1832,8 @@ mk_versions! {
 #[derive(Debug, Default)]
 pub struct Model {
     pub version: Version,
-    pub header: ObjHeader,
-    pub sub_objects: ObjVec<SubObject>,
+    pub header: ModelHeader,
+    pub submodels: SubmodelVec<Submodel>,
     pub textures: Vec<String>,
     pub paths: Vec<Path>,
     pub special_points: Vec<SpecialPoint>,
@@ -1859,14 +1859,14 @@ impl Model {
     pub fn recheck_errors(&mut self, error_to_check: Set<Error>) {
         if let Set::One(error) = error_to_check {
             let failed_check = match &error {
-                Error::InvalidTurretGunSubobject(turret) => self.turret_gun_subobj_not_valid(*turret),
-                Error::TooManyDebrisObjects => self.num_debris_objects() > MAX_DEBRIS_OBJECTS,
-                Error::DetailAndDebrisObj(id) => self.header.detail_levels.contains(&id) && self.sub_objects[*id].is_debris_model,
-                Error::DetailObjWithParent(id) => self.header.detail_levels.contains(&id) && self.sub_objects[*id].parent().is_some(),
-                Error::TooManyVerts(id) => self.sub_objects[*id].bsp_data.verts.len() > self.max_verts_norms_per_subobj(),
-                Error::TooManyNorms(id) => self.sub_objects[*id].bsp_data.norms.len() > self.max_verts_norms_per_subobj(),
-                Error::DuplicateSubobjectName(name) => self.sub_objects.iter().filter(|subobj| subobj.name == *name).count() > 1,
-                Error::UnnamedSubObject(id) => self.sub_objects[*id].name.is_empty(),
+                Error::InvalidTurretGunSubmodel(turret) => self.turret_gun_submodel_not_valid(*turret),
+                Error::TooManyDebrisModels => self.num_debris_models() > MAX_DEBRIS_MODELS,
+                Error::DetailAndDebrisModel(id) => self.header.detail_levels.contains(&id) && self.submodels[*id].is_debris_model,
+                Error::DetailModelWithParent(id) => self.header.detail_levels.contains(&id) && self.submodels[*id].parent().is_some(),
+                Error::TooManyVerts(id) => self.submodels[*id].bsp_data.verts.len() > self.max_verts_norms_per_submodel(),
+                Error::TooManyNorms(id) => self.submodels[*id].bsp_data.norms.len() > self.max_verts_norms_per_submodel(),
+                Error::DuplicateSubmodelName(name) => self.submodels.iter().filter(|smodel| smodel.name == *name).count() > 1,
+                Error::UnnamedSubmodel(id) => self.submodels[*id].name.is_empty(),
             };
 
             let existing_warning = self.errors.contains(&error);
@@ -1879,53 +1879,53 @@ impl Model {
             self.errors.clear();
 
             for i in 0..self.turrets.len() {
-                if self.turret_gun_subobj_not_valid(i) {
-                    self.errors.insert(Error::InvalidTurretGunSubobject(i));
+                if self.turret_gun_submodel_not_valid(i) {
+                    self.errors.insert(Error::InvalidTurretGunSubmodel(i));
                 }
             }
 
-            if self.num_debris_objects() > MAX_DEBRIS_OBJECTS {
-                self.errors.insert(Error::TooManyDebrisObjects);
+            if self.num_debris_models() > MAX_DEBRIS_MODELS {
+                self.errors.insert(Error::TooManyDebrisModels);
             }
 
             for &id in &self.header.detail_levels {
-                let subobj = &self.sub_objects[id];
-                if subobj.parent().is_some() {
-                    self.errors.insert(Error::DetailObjWithParent(id));
+                let smodel = &self.submodels[id];
+                if smodel.parent().is_some() {
+                    self.errors.insert(Error::DetailModelWithParent(id));
                 }
-                if subobj.is_debris_model {
-                    self.errors.insert(Error::DetailAndDebrisObj(id));
-                }
-            }
-
-            for subobj in &self.sub_objects {
-                if subobj.name.is_empty() {
-                    self.errors.insert(Error::UnnamedSubObject(subobj.obj_id));
-                }
-
-                if subobj.bsp_data.verts.len() > self.max_verts_norms_per_subobj() {
-                    self.errors.insert(Error::TooManyVerts(subobj.obj_id));
-                }
-
-                if subobj.bsp_data.norms.len() > self.max_verts_norms_per_subobj() {
-                    self.errors.insert(Error::TooManyNorms(subobj.obj_id));
+                if smodel.is_debris_model {
+                    self.errors.insert(Error::DetailAndDebrisModel(id));
                 }
             }
 
-            for duped_name in self.sub_objects.iter().map(|subobj| &subobj.name).duplicates() {
-                self.errors.insert(Error::DuplicateSubobjectName(duped_name.clone()));
+            for smodel in &self.submodels {
+                if smodel.name.is_empty() {
+                    self.errors.insert(Error::UnnamedSubmodel(smodel.id));
+                }
+
+                if smodel.bsp_data.verts.len() > self.max_verts_norms_per_submodel() {
+                    self.errors.insert(Error::TooManyVerts(smodel.id));
+                }
+
+                if smodel.bsp_data.norms.len() > self.max_verts_norms_per_submodel() {
+                    self.errors.insert(Error::TooManyNorms(smodel.id));
+                }
+            }
+
+            for duped_name in self.submodels.iter().map(|smodel| &smodel.name).duplicates() {
+                self.errors.insert(Error::DuplicateSubmodelName(duped_name.clone()));
             }
         }
     }
 
-    fn turret_gun_subobj_not_valid(&self, turret_num: usize) -> bool {
+    fn turret_gun_submodel_not_valid(&self, turret_num: usize) -> bool {
         let turret = &self.turrets[turret_num];
-        if turret.base_obj == turret.gun_obj {
+        if turret.base_model == turret.gun_model {
             return false;
         }
 
-        for &child_id in self.sub_objects[turret.base_obj].children() {
-            if child_id == turret.gun_obj {
+        for &child_id in self.submodels[turret.base_model].children() {
+            if child_id == turret.gun_model {
                 return false;
             }
         }
@@ -1937,8 +1937,8 @@ impl Model {
     pub fn recheck_warnings(&mut self, warning_to_check: Set<Warning>) {
         if let Set::One(warning) = warning_to_check {
             let failed_check = match &warning {
-                Warning::RadiusTooSmall(subobj_opt) => self.radius_test_failed(*subobj_opt),
-                Warning::BBoxTooSmall(subobj_opt) => self.bbox_test_failed(*subobj_opt),
+                Warning::RadiusTooSmall(smodel_opt) => self.radius_test_failed(*smodel_opt),
+                Warning::BBoxTooSmall(smodel_opt) => self.bbox_test_failed(*smodel_opt),
                 Warning::DockingBayWithoutPath(bay_num) => self.docking_bays.get(*bay_num).map_or(false, |bay| bay.path.is_none()),
                 Warning::ThrusterPropertiesInvalidVersion(bank_idx) => {
                     self.version <= Version::V21_16 && self.thruster_banks.get(*bank_idx).map_or(false, |bank| !bank.properties.is_empty())
@@ -1952,12 +1952,12 @@ impl Model {
                         }
                     }
                 }
-                Warning::SubObjectTranslationInvalidVersion(id) => {
-                    self.version < Version::V23_01 && self.sub_objects[*id].translation_axis != SubsysTranslationAxis::None
+                Warning::SubmodelTranslationInvalidVersion(id) => {
+                    self.version < Version::V23_01 && self.submodels[*id].translation_axis != SubsysTranslationAxis::None
                 }
                 Warning::InvertedBBox(id_opt) => {
                     if let Some(id) = id_opt {
-                        self.sub_objects[*id].bbox.is_inverted()
+                        self.submodels[*id].bbox.is_inverted()
                     } else {
                         self.header.bbox.is_inverted()
                     }
@@ -1974,7 +1974,7 @@ impl Model {
                 Warning::DuplicateDetailLevel(duped_id) => self.header.detail_levels.iter().filter(|id| duped_id == *id).count() > 1,
 
                 Warning::PathNameTooLong(idx) => self.paths.get(*idx).map_or(false, |path| path.name.len() > MAX_NAME_LEN),
-                Warning::SubObjectNameTooLong(id) => self.sub_objects[*id].name.len() > MAX_NAME_LEN,
+                Warning::SubmodelNameTooLong(id) => self.submodels[*id].name.len() > MAX_NAME_LEN,
                 Warning::SpecialPointNameTooLong(idx) => self
                     .special_points
                     .get(*idx)
@@ -1989,7 +1989,7 @@ impl Model {
                     .thruster_banks
                     .get(*idx)
                     .map_or(false, |bank| bank.properties.len() > MAX_PROPERTIES_LEN),
-                Warning::SubObjectPropertiesTooLong(id) => self.sub_objects[*id].properties.len() > MAX_PROPERTIES_LEN,
+                Warning::SubmodelPropertiesTooLong(id) => self.submodels[*id].properties.len() > MAX_PROPERTIES_LEN,
                 Warning::DockingBayPropertiesTooLong(idx) => self
                     .docking_bays
                     .get(*idx)
@@ -1999,13 +1999,9 @@ impl Model {
                     .get(*idx)
                     .map_or(false, |spec_point| spec_point.properties.len() > MAX_PROPERTIES_LEN),
                 Warning::InvalidDockParentSubmodel(idx) => self.docking_bays.get(*idx).map_or(false, |dock| {
-                    properties_get_field(&dock.properties, "$parent_submodel").map_or(false, |name| self.get_obj_id_by_name(name).is_none())
+                    properties_get_field(&dock.properties, "$parent_submodel").map_or(false, |name| self.get_model_id_by_name(name).is_none())
                 }),
-                Warning::Detail0NonZeroOffset => self
-                    .header
-                    .detail_levels
-                    .get(0)
-                    .map_or(false, |id| !self.sub_objects[*id].offset.is_null()),
+                Warning::Detail0NonZeroOffset => self.header.detail_levels.get(0).map_or(false, |id| !self.submodels[*id].offset.is_null()),
             };
 
             let existing_warning = self.warnings.contains(&warning);
@@ -2029,29 +2025,29 @@ impl Model {
                 self.warnings.insert(Warning::InvertedBBox(None));
             }
 
-            for subobj in &self.sub_objects {
-                if self.bbox_test_failed(Some(subobj.obj_id)) {
-                    self.warnings.insert(Warning::BBoxTooSmall(Some(subobj.obj_id)));
+            for smodel in &self.submodels {
+                if self.bbox_test_failed(Some(smodel.id)) {
+                    self.warnings.insert(Warning::BBoxTooSmall(Some(smodel.id)));
                 }
 
-                if self.radius_test_failed(Some(subobj.obj_id)) {
-                    self.warnings.insert(Warning::RadiusTooSmall(Some(subobj.obj_id)));
+                if self.radius_test_failed(Some(smodel.id)) {
+                    self.warnings.insert(Warning::RadiusTooSmall(Some(smodel.id)));
                 }
 
-                if subobj.bbox.is_inverted() && subobj.bbox != BoundingBox::EMPTY {
-                    self.warnings.insert(Warning::InvertedBBox(Some(subobj.obj_id)));
+                if smodel.bbox.is_inverted() && smodel.bbox != BoundingBox::EMPTY {
+                    self.warnings.insert(Warning::InvertedBBox(Some(smodel.id)));
                 }
 
-                if subobj.name.len() > MAX_NAME_LEN {
-                    self.warnings.insert(Warning::SubObjectNameTooLong(subobj.obj_id));
+                if smodel.name.len() > MAX_NAME_LEN {
+                    self.warnings.insert(Warning::SubmodelNameTooLong(smodel.id));
                 }
 
-                if subobj.properties.len() > MAX_PROPERTIES_LEN {
-                    self.warnings.insert(Warning::SubObjectPropertiesTooLong(subobj.obj_id));
+                if smodel.properties.len() > MAX_PROPERTIES_LEN {
+                    self.warnings.insert(Warning::SubmodelPropertiesTooLong(smodel.id));
                 }
 
-                if self.version < Version::V23_01 && subobj.translation_axis != SubsysTranslationAxis::None {
-                    self.warnings.insert(Warning::SubObjectTranslationInvalidVersion(subobj.obj_id));
+                if self.version < Version::V23_01 && smodel.translation_axis != SubsysTranslationAxis::None {
+                    self.warnings.insert(Warning::SubmodelTranslationInvalidVersion(smodel.id));
                 }
             }
 
@@ -2068,7 +2064,7 @@ impl Model {
                     self.warnings.insert(Warning::DockingBayNameTooLong(i));
                 }
 
-                if properties_get_field(&dock.properties, "$parent_submodel").map_or(false, |name| self.get_obj_id_by_name(name).is_none()) {
+                if properties_get_field(&dock.properties, "$parent_submodel").map_or(false, |name| self.get_model_id_by_name(name).is_none()) {
                     self.warnings.insert(Warning::InvalidDockParentSubmodel(i));
                 }
             }
@@ -2139,7 +2135,7 @@ impl Model {
             }
 
             if let Some(id) = self.header.detail_levels.get(0) {
-                if !self.sub_objects[*id].offset.is_null() {
+                if !self.submodels[*id].offset.is_null() {
                     self.warnings.insert(Warning::Detail0NonZeroOffset);
                 }
             }
@@ -2162,13 +2158,13 @@ impl Model {
         }
     }
 
-    // tests if the radius for a subobject or the header is too small for its geometry
+    // tests if the radius for a submodel or the header is too small for its geometry
     // None means the header/entire model's radius
-    fn radius_test_failed(&self, subobj_opt: Option<ObjectId>) -> bool {
-        if let Some(subobj) = subobj_opt {
-            let subobj = &self.sub_objects[subobj];
-            let radius_with_margin = (1.0 + f32::EPSILON) * subobj.radius;
-            for vert in &subobj.bsp_data.verts {
+    fn radius_test_failed(&self, smodel_opt: Option<SubmodelId>) -> bool {
+        if let Some(id) = smodel_opt {
+            let smodel = &self.submodels[id];
+            let radius_with_margin = (1.0 + f32::EPSILON) * smodel.radius;
+            for vert in &smodel.bsp_data.verts {
                 if vert.magnitude() > radius_with_margin {
                     return true;
                 }
@@ -2176,14 +2172,14 @@ impl Model {
         } else {
             let radius_with_margin = (1.0 + f32::EPSILON) * self.header.max_radius;
             if let Some(&detail_0) = self.header.detail_levels.first() {
-                for subobj in &self.sub_objects {
-                    // we dont care about subobjects which aren't part of the detail0 hierarchy
-                    if !self.is_obj_id_ancestor(subobj.obj_id, detail_0) {
+                for smodel in &self.submodels {
+                    // we dont care about submodels which aren't part of the detail0 hierarchy
+                    if !self.is_model_id_ancestor(smodel.id, detail_0) {
                         continue;
                     }
 
-                    let offset = self.get_total_subobj_offset(subobj.obj_id);
-                    for vert in &subobj.bsp_data.verts {
+                    let offset = self.get_total_submodel_offset(smodel.id);
+                    for vert in &smodel.bsp_data.verts {
                         if (*vert + offset).magnitude() > radius_with_margin {
                             return true;
                         }
@@ -2195,25 +2191,25 @@ impl Model {
         false
     }
 
-    // tests if the bbox for a subobject or the header is too small for its geometry
+    // tests if the bbox for a submodel or the header is too small for its geometry
     // None means the header/entire model's radius
-    fn bbox_test_failed(&self, subobj_opt: Option<ObjectId>) -> bool {
-        if let Some(subobj) = subobj_opt {
-            let subobj = &self.sub_objects[subobj];
-            for vert in &subobj.bsp_data.verts {
-                if !subobj.bbox.contains(*vert) {
+    fn bbox_test_failed(&self, smodel_opt: Option<SubmodelId>) -> bool {
+        if let Some(id) = smodel_opt {
+            let smodel = &self.submodels[id];
+            for vert in &smodel.bsp_data.verts {
+                if !smodel.bbox.contains(*vert) {
                     return true;
                 }
             }
         } else if let Some(&detail_0) = self.header.detail_levels.first() {
-            for subobj in &self.sub_objects {
-                // we dont care about subobjects which aren't part of the detail0 hierarchy
-                if !self.is_obj_id_ancestor(subobj.obj_id, detail_0) {
+            for smodel in &self.submodels {
+                // we dont care about submodels which aren't part of the detail0 hierarchy
+                if !self.is_model_id_ancestor(smodel.id, detail_0) {
                     continue;
                 }
 
-                let offset = self.get_total_subobj_offset(subobj.obj_id);
-                for vert in &subobj.bsp_data.verts {
+                let offset = self.get_total_submodel_offset(smodel.id);
+                for vert in &smodel.bsp_data.verts {
                     if !self.header.bbox.contains(offset + *vert) {
                         return true;
                     }
@@ -2224,149 +2220,149 @@ impl Model {
         false
     }
 
-    pub fn get_total_subobj_offset(&self, id: ObjectId) -> Vec3d {
-        let mut subobj = &self.sub_objects[id];
-        let mut out = subobj.offset;
-        while let Some(parent) = subobj.parent {
-            subobj = &self.sub_objects[parent];
-            out += subobj.offset;
+    pub fn get_total_submodel_offset(&self, id: SubmodelId) -> Vec3d {
+        let mut smodel = &self.submodels[id];
+        let mut out = smodel.offset;
+        while let Some(parent) = smodel.parent {
+            smodel = &self.submodels[parent];
+            out += smodel.offset;
         }
         out
     }
 
-    // see if maybe_ancestor is actually an ancestor of obj_id in the subobject hierarchy
-    pub fn is_obj_id_ancestor(&self, obj_id: ObjectId, maybe_ancestor: ObjectId) -> bool {
+    // see if maybe_ancestor is actually an ancestor of obj_id in the submodel hierarchy
+    pub fn is_model_id_ancestor(&self, obj_id: SubmodelId, maybe_ancestor: SubmodelId) -> bool {
         if obj_id == maybe_ancestor {
             return true;
         }
 
-        let mut sub_obj_parent = self.sub_objects[obj_id].parent;
+        let mut sub_obj_parent = self.submodels[obj_id].parent;
         loop {
             if sub_obj_parent == Some(maybe_ancestor) {
                 return true;
             } else if sub_obj_parent.is_none() {
                 return false;
             }
-            assert!(sub_obj_parent != self.sub_objects[sub_obj_parent.unwrap()].parent, "cycle detected!! {:?} {:?}", obj_id, sub_obj_parent);
-            sub_obj_parent = self.sub_objects[sub_obj_parent.unwrap()].parent;
+            assert!(sub_obj_parent != self.submodels[sub_obj_parent.unwrap()].parent, "cycle detected!! {:?} {:?}", obj_id, sub_obj_parent);
+            sub_obj_parent = self.submodels[sub_obj_parent.unwrap()].parent;
         }
     }
 
-    pub fn get_sobj_detail_level(&self, obj_id: ObjectId) -> Option<u32> {
+    pub fn get_smodel_detail_level(&self, obj_id: SubmodelId) -> Option<u32> {
         for (i, id) in self.header.detail_levels.iter().enumerate() {
-            if self.is_obj_id_ancestor(obj_id, *id) {
+            if self.is_model_id_ancestor(obj_id, *id) {
                 return Some(i as u32);
             }
         }
         None
     }
 
-    pub fn get_subobj_names(&self) -> Vec<String> {
+    pub fn get_smodel_names(&self) -> Vec<String> {
         let mut ret = vec![];
-        for subobj in &self.sub_objects {
-            ret.push(subobj.name.clone());
+        for smodel in &self.submodels {
+            ret.push(smodel.name.clone());
         }
         ret
     }
 
-    pub fn get_obj_id_by_name(&self, name: &str) -> Option<ObjectId> {
-        for subobj in &self.sub_objects {
-            if subobj.name == name {
-                return Some(subobj.obj_id);
+    pub fn get_model_id_by_name(&self, name: &str) -> Option<SubmodelId> {
+        for smodel in &self.submodels {
+            if smodel.name == name {
+                return Some(smodel.id);
             }
         }
         None
     }
 
-    /// deletes a subobject without modifying other data structures, glow points, docking bays, etc
+    /// deletes a submodel without modifying other data structures, glow points, docking bays, etc
     /// this will leave stale obj id references!!!
-    pub fn delete_subobject_only(&mut self, deleted_id: ObjectId) -> (SubObject, Option<usize>) {
-        let deleted_subobj = self.sub_objects.remove(deleted_id.0 as usize);
+    pub fn delete_submodel_only(&mut self, deleted_id: SubmodelId) -> (Submodel, Option<usize>) {
+        let deleted_smodel = self.submodels.remove(deleted_id.0 as usize);
         let mut id_map = HashMap::new();
 
         // generate id mapping from old to new
-        for subobj in &self.sub_objects {
-            if subobj.obj_id.0 >= deleted_id.0 {
-                id_map.insert(subobj.obj_id, ObjectId(subobj.obj_id.0 - 1));
+        for smodel in &self.submodels {
+            if smodel.id.0 >= deleted_id.0 {
+                id_map.insert(smodel.id, SubmodelId(smodel.id.0 - 1));
             } else {
-                id_map.insert(subobj.obj_id, subobj.obj_id);
+                id_map.insert(smodel.id, smodel.id);
             }
         }
 
-        let mut deleted_subobj_child_list_index = None;
+        let mut deleted_submodel_child_list_index = None;
         // map object id references, keeping track of the newly orphaned
         let mut orphans = vec![];
-        for subobj in self.sub_objects.iter_mut() {
-            subobj.obj_id = id_map[&subobj.obj_id];
+        for smodel in self.submodels.iter_mut() {
+            smodel.id = id_map[&smodel.id];
 
             let mut i = 0;
-            subobj.children.retain_mut(|id| {
+            smodel.children.retain_mut(|id| {
                 if *id != deleted_id {
                     *id = id_map[&id];
                     i += 1;
                     true
                 } else {
-                    deleted_subobj_child_list_index = Some(i);
+                    deleted_submodel_child_list_index = Some(i);
                     i += 1;
                     false
                 }
             });
 
-            if subobj.parent == Some(deleted_id) {
-                subobj.parent = None;
-                orphans.push(subobj.obj_id);
+            if smodel.parent == Some(deleted_id) {
+                smodel.parent = None;
+                orphans.push(smodel.id);
             } else {
-                subobj.parent = subobj.parent.map(|parent_id| id_map[&parent_id]);
+                smodel.parent = smodel.parent.map(|parent_id| id_map[&parent_id]);
             }
         }
 
         // set those orphans to their grandparent, if it exists
-        if let Some(mut grand_parent_id) = deleted_subobj.parent {
+        if let Some(mut grand_parent_id) = deleted_smodel.parent {
             grand_parent_id = id_map[&grand_parent_id];
             for orphan in orphans {
-                self.sub_objects[grand_parent_id].children.push(orphan);
-                self.sub_objects[orphan].parent = Some(grand_parent_id);
+                self.submodels[grand_parent_id].children.push(orphan);
+                self.submodels[orphan].parent = Some(grand_parent_id);
             }
         }
 
-        (deleted_subobj, deleted_subobj_child_list_index)
+        (deleted_smodel, deleted_submodel_child_list_index)
     }
 
-    /// inserts a suboject into the list without modifying other data structures, glow points, docking bays, etc
-    pub fn insert_subobject_only(&mut self, inserted_subobj: SubObject, child_list_idx: Option<usize>) {
+    /// inserts a submodel into the list without modifying other data structures, glow points, docking bays, etc
+    pub fn insert_submodel_only(&mut self, inserted_submodel: Submodel, child_list_idx: Option<usize>) {
         let mut id_map = HashMap::new();
-        let inserted_id = inserted_subobj.obj_id;
-        for subobj in &self.sub_objects {
-            if subobj.obj_id >= inserted_subobj.obj_id {
-                id_map.insert(subobj.obj_id, ObjectId(subobj.obj_id.0 + 1));
+        let inserted_id = inserted_submodel.id;
+        for smodel in &self.submodels {
+            if smodel.id >= inserted_submodel.id {
+                id_map.insert(smodel.id, SubmodelId(smodel.id.0 + 1));
             } else {
-                id_map.insert(subobj.obj_id, subobj.obj_id);
+                id_map.insert(smodel.id, smodel.id);
             }
         }
 
-        for subobj in self.sub_objects.iter_mut() {
-            subobj.obj_id = id_map[&subobj.obj_id];
+        for smodel in self.submodels.iter_mut() {
+            smodel.id = id_map[&smodel.id];
 
-            for child_id in subobj.children.iter_mut() {
+            for child_id in smodel.children.iter_mut() {
                 *child_id = id_map[&child_id];
             }
 
-            if inserted_subobj.parent == Some(subobj.obj_id) {
-                subobj.children.insert(child_list_idx.unwrap(), inserted_id);
+            if inserted_submodel.parent == Some(smodel.id) {
+                smodel.children.insert(child_list_idx.unwrap(), inserted_id);
             }
 
-            if let Some(parent) = subobj.parent.as_mut() {
+            if let Some(parent) = smodel.parent.as_mut() {
                 *parent = id_map[parent];
             }
         }
 
-        self.sub_objects.insert(inserted_id.0 as usize, inserted_subobj);
+        self.submodels.insert(inserted_id.0 as usize, inserted_submodel);
 
-        for child_id in self.sub_objects[inserted_id].children.clone() {
-            if let Some(old_parent_id) = self.sub_objects[child_id].parent {
-                self.sub_objects[old_parent_id].children.retain(|x| x != &child_id);
+        for child_id in self.submodels[inserted_id].children.clone() {
+            if let Some(old_parent_id) = self.submodels[child_id].parent {
+                self.submodels[old_parent_id].children.retain(|x| x != &child_id);
             }
-            self.sub_objects[child_id].parent = Some(inserted_id);
+            self.submodels[child_id].parent = Some(inserted_id);
         }
     }
 
@@ -2392,7 +2388,7 @@ impl Model {
         }
     }
 
-    /// Computes paths to auto-generate for all turrets, `$special=subsystem` subobjects,
+    /// Computes paths to auto-generate for all turrets, `$special=subsystem` submodels,
     /// `$special=subsystem` special points, and docking bays not already covered by an
     /// existing path. Returns `(new_paths_to_append, dock_bay_assignments)`.
     /// `dock_bay_assignments` is a list of `(bay_index, PathId)` where `PathId` is the index
@@ -2418,23 +2414,23 @@ impl Model {
         // Build maps... object name to index
         let mut sobj_name_to_turret_idx: HashMap<String, usize> = HashMap::new();
         for (i, turret) in self.turrets.iter().enumerate() {
-            let base_name = self.sub_objects[turret.base_obj].name.clone();
+            let base_name = self.submodels[turret.base_model].name.clone();
             sobj_name_to_turret_idx.insert(base_name, i);
         }
 
-        let sobj_name_map: HashMap<String, usize> = self.sub_objects.iter().map(|s| (s.name.clone(), s.obj_id.0 as usize)).collect();
+        let sobj_name_map: HashMap<String, usize> = self.submodels.iter().map(|s| (s.name.clone(), s.id.0 as usize)).collect();
 
         let spcl_name_map: HashMap<String, usize> = self.special_points.iter().enumerate().map(|(i, s)| (s.name.clone(), i)).collect();
 
         // Track which objects already have paths (true = skip)
         let mut turret_has_path = vec![false; self.turrets.len()];
-        let mut sobj_has_path = vec![false; self.sub_objects.len()];
+        let mut smodel_has_path = vec![false; self.submodels.len()];
         let mut spcl_has_path = vec![false; self.special_points.len()];
 
-        // Skip non subsystem subobjects and special points, which is what PCS2 did
-        for (i, sobj) in self.sub_objects.iter().enumerate() {
+        // Skip non subsystem submodels and special points, which is what PCS2 did
+        for (i, sobj) in self.submodels.iter().enumerate() {
             if !sobj.properties.contains("$special=subsystem") {
-                sobj_has_path[i] = true;
+                smodel_has_path[i] = true;
             }
         }
         for (i, spcl) in self.special_points.iter().enumerate() {
@@ -2453,7 +2449,7 @@ impl Model {
                 spcl_has_path[si] = true;
             }
             if let Some(&oi) = sobj_name_map.get(parent) {
-                sobj_has_path[oi] = true;
+                smodel_has_path[oi] = true;
             }
         }
 
@@ -2468,8 +2464,8 @@ impl Model {
             if turret_has_path[i] {
                 continue;
             }
-            let base = &self.sub_objects[turret.base_obj];
-            let offset = self.get_total_subobj_offset(turret.base_obj);
+            let base = &self.submodels[turret.base_model];
+            let offset = self.get_total_submodel_offset(turret.base_model);
             let r = base.radius;
             let r0 = (r * 30.0_f32).min(1000.0);
             let r1 = (r * 2.0_f32).min(100.0);
@@ -2490,17 +2486,17 @@ impl Model {
                     },
                 ],
             });
-            // Mark the base_obj as covered so a subobject path is not also generated for it
-            sobj_has_path[turret.base_obj.0 as usize] = true;
+            // Mark the base_obj as covered so a submodel path is not also generated for it
+            smodel_has_path[turret.base_model.0 as usize] = true;
         }
 
-        // --- Subobjects ($special=subsystem only, not already covered by a turret path) ---
-        for sobj in self.sub_objects.iter() {
-            let idx = sobj.obj_id.0 as usize;
-            if sobj_has_path[idx] {
+        // --- Submodels ($special=subsystem only, not already covered by a turret path) ---
+        for sobj in self.submodels.iter() {
+            let idx = sobj.id.0 as usize;
+            if smodel_has_path[idx] {
                 continue;
             }
-            let offset = self.get_total_subobj_offset(sobj.obj_id);
+            let offset = self.get_total_submodel_offset(sobj.id);
             let r = sobj.radius;
             let r0 = (r * 30.0_f32).min(1000.0);
             let r1 = (r * 2.0_f32).min(100.0);
@@ -2577,7 +2573,7 @@ impl Model {
         (new_paths, dock_assignments)
     }
 
-    pub fn get_valid_gun_subobjects_for_turret(&self, existing_obj: ObjectId, turret_obj: ObjectId) -> (Vec<ObjectId>, usize) {
+    pub fn get_valid_gun_submodels_for_turret(&self, existing_obj: SubmodelId, turret_obj: SubmodelId) -> (Vec<SubmodelId>, usize) {
         let mut out_vec = vec![];
         let mut out_idx = 0;
         let mut found_existing_obj = false;
@@ -2590,7 +2586,7 @@ impl Model {
         out_vec.push(turret_obj);
 
         // then iterate through immediate base object children, which are also valid
-        for &child_id in &self.sub_objects[turret_obj].children {
+        for &child_id in &self.submodels[turret_obj].children {
             if existing_obj == child_id {
                 out_idx = out_vec.len();
                 found_existing_obj = true;
@@ -2608,18 +2604,18 @@ impl Model {
         (out_vec, out_idx)
     }
 
-    pub fn do_for_recursive_subobj_children<'a>(&'a self, id: ObjectId, f: &mut impl FnMut(&'a SubObject)) {
-        f(&self.sub_objects[id]);
+    pub fn do_for_recursive_smodel_children<'a>(&'a self, id: SubmodelId, f: &mut impl FnMut(&'a Submodel)) {
+        f(&self.submodels[id]);
 
-        for &child_id in self.sub_objects[id].children() {
-            f(&self.sub_objects[child_id]);
-            self.do_for_recursive_subobj_children(child_id, f);
+        for &child_id in self.submodels[id].children() {
+            f(&self.submodels[child_id]);
+            self.do_for_recursive_smodel_children(child_id, f);
         }
     }
 
-    pub fn num_debris_objects(&self) -> u32 {
+    pub fn num_debris_models(&self) -> u32 {
         let mut num_debris = 0;
-        for sobj in &self.sub_objects {
+        for sobj in &self.submodels {
             if sobj.is_debris_model {
                 num_debris += 1;
             }
@@ -2628,11 +2624,11 @@ impl Model {
     }
 
     pub fn apply_transform(&mut self, matrix: &TMat4<f32>) {
-        for i in 0..self.sub_objects.len() {
-            // only apply to top-level subobjects (no parent), apply_transform() will
+        for i in 0..self.submodels.len() {
+            // only apply to top-level submodels (no parent), apply_transform() will
             // recursively apply the proper transform to its children
-            if self.sub_objects[ObjectId(i as u32)].parent().is_none() {
-                self.apply_subobj_transform(ObjectId(i as u32), &matrix, true);
+            if self.submodels[SubmodelId(i as u32)].parent().is_none() {
+                self.apply_submodel_transform(SubmodelId(i as u32), &matrix, true);
             }
         }
 
@@ -2691,101 +2687,101 @@ impl Model {
         }
     }
 
-    pub fn apply_subobj_transform(&mut self, id: ObjectId, matrix: &TMat4<f32>, transform_offset: bool) {
+    pub fn apply_submodel_transform(&mut self, id: SubmodelId, matrix: &TMat4<f32>, transform_offset: bool) {
         let zero = Vec3d::ZERO.into();
         let translation = matrix.transform_point(&zero) - zero;
         let no_trans_matrix = &matrix.append_translation(&(-translation));
 
-        let subobj = &mut self.sub_objects[id];
-        subobj.radius = 0.0;
-        for vert in &mut subobj.bsp_data.verts {
+        let submodel = &mut self.submodels[id];
+        submodel.radius = 0.0;
+        for vert in &mut submodel.bsp_data.verts {
             *vert = no_trans_matrix * *vert;
             if !transform_offset {
                 *vert += translation.into();
             }
-            if vert.magnitude() > subobj.radius {
-                subobj.radius = vert.magnitude();
+            if vert.magnitude() > submodel.radius {
+                submodel.radius = vert.magnitude();
             }
         }
 
         // this preserves rotations, but inverts scales, which is the proper transformation for normals
         let norm_matrix = no_trans_matrix.try_inverse().unwrap().transpose();
 
-        for norm in &mut subobj.bsp_data.norms {
+        for norm in &mut submodel.bsp_data.norms {
             *norm = (&norm_matrix * *norm).normalize();
         }
 
-        subobj.bsp_data.collision_tree =
-            BspData::recalculate(&subobj.bsp_data.verts, std::mem::take(&mut subobj.bsp_data.collision_tree).into_leaves().map(|(_, poly)| poly));
+        submodel.bsp_data.collision_tree =
+            BspData::recalculate(&submodel.bsp_data.verts, std::mem::take(&mut submodel.bsp_data.collision_tree).into_leaves().map(|(_, poly)| poly));
 
-        subobj.bbox = *subobj.bsp_data.collision_tree.bbox();
+        submodel.bbox = *submodel.bsp_data.collision_tree.bbox();
 
         if transform_offset {
-            subobj.offset = matrix * subobj.offset;
+            submodel.offset = matrix * submodel.offset;
         }
 
-        let children = subobj.children.clone();
+        let children = submodel.children.clone();
 
         for child_id in children {
-            self.apply_subobj_transform(child_id, no_trans_matrix, true)
+            self.apply_submodel_transform(child_id, no_trans_matrix, true)
         }
     }
 
     // as above, but only affects the mesh itself
-    pub fn apply_subobj_transform_mesh(&mut self, id: ObjectId, matrix: &TMat4<f32>) {
+    pub fn apply_submodel_transform_mesh(&mut self, id: SubmodelId, matrix: &TMat4<f32>) {
         let zero = Vec3d::ZERO.into();
         let translation = matrix.transform_point(&zero) - zero;
         let no_trans_matrix = &matrix.append_translation(&(-translation));
 
-        let subobj = &mut self.sub_objects[id];
-        for vert in &mut subobj.bsp_data.verts {
+        let submodel = &mut self.submodels[id];
+        for vert in &mut submodel.bsp_data.verts {
             *vert = matrix * *vert;
         }
 
         // this preserves rotations, but inverts scales, which is the proper transformation for normals
         let norm_matrix = no_trans_matrix.try_inverse().unwrap().transpose();
 
-        for norm in &mut subobj.bsp_data.norms {
+        for norm in &mut submodel.bsp_data.norms {
             *norm = (&norm_matrix * *norm).normalize();
         }
 
-        subobj.bsp_data.collision_tree =
-            BspData::recalculate(&subobj.bsp_data.verts, std::mem::take(&mut subobj.bsp_data.collision_tree).into_leaves().map(|(_, poly)| poly));
+        submodel.bsp_data.collision_tree =
+            BspData::recalculate(&submodel.bsp_data.verts, std::mem::take(&mut submodel.bsp_data.collision_tree).into_leaves().map(|(_, poly)| poly));
     }
 
-    pub fn recalc_subobj_offset(&mut self, id: ObjectId) -> Vec3d {
-        let subobj = &mut self.sub_objects[id];
-        let new_offset = Vec3d::average(subobj.bsp_data.verts.iter().map(|vert| *vert + subobj.offset));
+    pub fn recalc_submodel_offset(&mut self, id: SubmodelId) -> Vec3d {
+        let smodel = &mut self.submodels[id];
+        let new_offset = Vec3d::average(smodel.bsp_data.verts.iter().map(|vert| *vert + smodel.offset));
         new_offset
     }
 
-    pub fn subobj_move_only_offset(&mut self, id: ObjectId, new_offset: Vec3d) {
-        let subobj = &mut self.sub_objects[id];
-        let diff = new_offset - subobj.offset;
+    pub fn submodel_move_only_offset(&mut self, id: SubmodelId, new_offset: Vec3d) {
+        let smodel = &mut self.submodels[id];
+        let diff = new_offset - smodel.offset;
 
-        let children = subobj.children.clone();
+        let children = smodel.children.clone();
         for id in &children {
-            self.sub_objects[*id].offset -= diff;
+            self.submodels[*id].offset -= diff;
         }
 
-        let subobj = &mut self.sub_objects[id];
-        subobj.bbox.max -= diff;
-        subobj.bbox.min -= diff;
-        subobj.offset = new_offset;
-        self.apply_subobj_transform(id, &glm::translation(&(-diff).into()), false);
-        self.sub_objects[id].recalc_radius();
+        let smodel = &mut self.submodels[id];
+        smodel.bbox.max -= diff;
+        smodel.bbox.min -= diff;
+        smodel.offset = new_offset;
+        self.apply_submodel_transform(id, &glm::translation(&(-diff).into()), false);
+        self.submodels[id].recalc_radius();
     }
 
     pub fn recalc_radius(&self) -> f32 {
         let mut radius = 0.00001;
         if let Some(&detail_0) = self.header.detail_levels.first() {
-            for subobj in &self.sub_objects {
-                if !self.is_obj_id_ancestor(subobj.obj_id, detail_0) {
+            for smodel in &self.submodels {
+                if !self.is_model_id_ancestor(smodel.id, detail_0) {
                     continue;
                 }
 
-                let offset = self.get_total_subobj_offset(subobj.obj_id);
-                for vert in &subobj.bsp_data.verts {
+                let offset = self.get_total_submodel_offset(smodel.id);
+                for vert in &smodel.bsp_data.verts {
                     if (*vert + offset).magnitude() > radius {
                         radius = (*vert + offset).magnitude();
                     }
@@ -2810,14 +2806,14 @@ impl Model {
         let mut bbox = BoundingBox::EMPTY;
 
         if let Some(&detail_0) = self.header.detail_levels.first() {
-            for subobj in &self.sub_objects {
-                if !self.is_obj_id_ancestor(subobj.obj_id, detail_0) {
+            for smodel in &self.submodels {
+                if !self.is_model_id_ancestor(smodel.id, detail_0) {
                     continue;
                 }
 
-                let offset = self.get_total_subobj_offset(subobj.obj_id);
-                let min = offset + subobj.bbox.min;
-                let max = offset + subobj.bbox.max;
+                let offset = self.get_total_submodel_offset(smodel.id);
+                let min = offset + smodel.bbox.min;
+                let max = offset + smodel.bbox.max;
                 bbox.min = Vec3d {
                     x: f32::min(bbox.min.x, min.x),
                     y: f32::min(bbox.min.y, min.y),
@@ -2840,12 +2836,12 @@ impl Model {
     }
 
     pub fn recalc_moi(&mut self) -> Option<Mat3d> {
-        fn sum_verts_recurse(subobjects: &ObjVec<SubObject>, id: ObjectId) -> usize {
-            subobjects[id].bsp_data.verts.len() + subobjects[id].children.iter().map(|id| sum_verts_recurse(subobjects, *id)).sum::<usize>()
+        fn sum_verts_recurse(submodels: &SubmodelVec<Submodel>, id: SubmodelId) -> usize {
+            submodels[id].bsp_data.verts.len() + submodels[id].children.iter().map(|id| sum_verts_recurse(submodels, *id)).sum::<usize>()
         }
 
         if let Some(&detail_0) = self.header.detail_levels.first() {
-            let num_verts = sum_verts_recurse(&self.sub_objects, detail_0);
+            let num_verts = sum_verts_recurse(&self.submodels, detail_0);
 
             fn add_point_mass_moi(moi: &mut Matrix3<f64>, pos: Vec3d) {
                 moi.column_mut(0).x += (pos.y * pos.y + pos.z * pos.z) as f64;
@@ -2859,14 +2855,14 @@ impl Model {
                 moi.column_mut(2).z += (pos.x * pos.x + pos.y * pos.y) as f64;
             }
 
-            fn accumulate_moi_recurse(subobjects: &ObjVec<SubObject>, id: ObjectId, moi: &mut Matrix3<f64>) {
-                subobjects[id].bsp_data.verts.iter().for_each(|vert| add_point_mass_moi(moi, *vert));
-                subobjects[id].children.iter().for_each(|id| accumulate_moi_recurse(subobjects, *id, moi));
+            fn accumulate_moi_recurse(submodels: &SubmodelVec<Submodel>, id: SubmodelId, moi: &mut Matrix3<f64>) {
+                submodels[id].bsp_data.verts.iter().for_each(|vert| add_point_mass_moi(moi, *vert));
+                submodels[id].children.iter().for_each(|id| accumulate_moi_recurse(submodels, *id, moi));
             }
 
             let mut new_moi: Matrix3<f64> = Matrix3::zeros();
 
-            accumulate_moi_recurse(&self.sub_objects, detail_0, &mut new_moi);
+            accumulate_moi_recurse(&self.submodels, detail_0, &mut new_moi);
 
             let point_mass = self.header.mass as f64 / num_verts as f64;
             new_moi *= point_mass;
@@ -2888,8 +2884,8 @@ impl Model {
             return (0.0, Vec3d::ZERO);
         };
 
-        self.do_for_recursive_subobj_children(*detail0, &mut |subobj| {
-            let (this_area, this_avg) = subobj.surface_area_average_pos();
+        self.do_for_recursive_smodel_children(*detail0, &mut |smodel| {
+            let (this_area, this_avg) = smodel.surface_area_average_pos();
             weighted_avg += this_avg * this_area;
             surface_area += this_area;
         });
@@ -2898,54 +2894,54 @@ impl Model {
     }
 
     pub fn recalc_all_children_ids(&mut self) {
-        for subobj in self.sub_objects.iter_mut() {
-            subobj.children.clear();
+        for smodel in self.submodels.iter_mut() {
+            smodel.children.clear();
         }
 
-        for i in 0..self.sub_objects.len() {
-            if let Some(parent) = self.sub_objects.0[i].parent {
-                let id = self.sub_objects.0[i].obj_id;
-                self.sub_objects[parent].children.push(id);
+        for i in 0..self.submodels.len() {
+            if let Some(parent) = self.submodels.0[i].parent {
+                let id = self.submodels.0[i].id;
+                self.submodels[parent].children.push(id);
             }
         }
     }
 
     pub fn recalc_semantic_name_links(&mut self) {
         // clear everything first
-        for subobj in self.sub_objects.iter_mut() {
-            subobj.name_links.clear();
+        for smodel in self.submodels.iter_mut() {
+            smodel.name_links.clear();
         }
 
-        for i in (0..self.sub_objects.len()).map(|i| ObjectId(i as u32)) {
-            let mut name1 = &self.sub_objects[i].name;
+        for i in (0..self.submodels.len()).map(|i| SubmodelId(i as u32)) {
+            let mut name1 = &self.submodels[i].name;
             if let Some((_, debris_of)) = name1.split_once("debris-") {
-                if let Some(obj) = self.sub_objects.iter().find(|obj| debris_of.starts_with(&obj.name)) {
-                    let j = obj.obj_id;
-                    self.sub_objects[j].name_links.push(NameLink::LiveDebris(i));
-                    self.sub_objects[i].name_links.push(NameLink::LiveDebrisOf(j));
-                    name1 = &self.sub_objects[i].name;
+                if let Some(obj) = self.submodels.iter().find(|obj| debris_of.starts_with(&obj.name)) {
+                    let j = obj.id;
+                    self.submodels[j].name_links.push(NameLink::LiveDebris(i));
+                    self.submodels[i].name_links.push(NameLink::LiveDebrisOf(j));
+                    name1 = &self.submodels[i].name;
                 }
             }
             if let Some(destroyed_of) = name1.strip_suffix("-destroyed") {
-                if let Some(obj) = self.sub_objects.iter().find(|obj| obj.name == destroyed_of) {
-                    let j = obj.obj_id;
-                    self.sub_objects[j].name_links.push(NameLink::DestroyedVersion(i));
-                    self.sub_objects[i].name_links.push(NameLink::DestroyedVersionOf(j));
-                    name1 = &self.sub_objects[i].name;
+                if let Some(obj) = self.submodels.iter().find(|obj| obj.name == destroyed_of) {
+                    let j = obj.id;
+                    self.submodels[j].name_links.push(NameLink::DestroyedVersion(i));
+                    self.submodels[i].name_links.push(NameLink::DestroyedVersionOf(j));
+                    name1 = &self.submodels[i].name;
                 }
             }
-            for j in (0..self.sub_objects.len()).map(|i| ObjectId(i as u32)) {
-                let name2 = &self.sub_objects[j].name;
-                if name1.len() == name2.len() && self.sub_objects[j].parent.is_some() && self.sub_objects[i].parent.is_some() {
+            for j in (0..self.submodels.len()).map(|i| SubmodelId(i as u32)) {
+                let name2 = &self.submodels[j].name;
+                if name1.len() == name2.len() && self.submodels[j].parent.is_some() && self.submodels[i].parent.is_some() {
                     // zip them together and filter for equal characters, leaving only the remaining, differing characters
                     let mut iter = name1.chars().zip(name2.chars()).filter(|(c1, c2)| c1 != c2);
                     // grab the characters that differ and don't continue if there's more than one,
                     // and check that they're 'a' and 'b'..='h' respectively
                     if let (Some(('a', ch @ 'b'..='h')), None) = (iter.next(), iter.next()) {
                         let level = ch as u8 - 'a' as u8;
-                        self.sub_objects[j].name_links.push(NameLink::DetailLevelOf(i, level));
-                        self.sub_objects[i].name_links.push(NameLink::DetailLevel(j, level));
-                        name1 = &self.sub_objects[i].name;
+                        self.submodels[j].name_links.push(NameLink::DetailLevelOf(i, level));
+                        self.submodels[i].name_links.push(NameLink::DetailLevel(j, level));
+                        name1 = &self.submodels[i].name;
                     }
                 }
             }
@@ -2959,28 +2955,28 @@ impl Model {
             }
         }
 
-        self.header.num_subobjects = self.sub_objects.len() as u32;
+        self.header.num_submodels = self.submodels.len() as u32;
     }
 
-    pub fn make_orphan(&mut self, would_be_orphan: ObjectId) {
-        if let Some(parent_id) = self.sub_objects[would_be_orphan].parent {
+    pub fn make_orphan(&mut self, would_be_orphan: SubmodelId) {
+        if let Some(parent_id) = self.submodels[would_be_orphan].parent {
             // maintain it's current relative position to the whole model
-            self.sub_objects[would_be_orphan].offset = self.get_total_subobj_offset(would_be_orphan);
+            self.submodels[would_be_orphan].offset = self.get_total_submodel_offset(would_be_orphan);
 
-            let parent_children = &mut self.sub_objects[parent_id].children;
+            let parent_children = &mut self.submodels[parent_id].children;
             parent_children.remove(parent_children.iter().position(|child_id| *child_id == would_be_orphan).unwrap());
         }
-        self.sub_objects[would_be_orphan].parent = None;
+        self.submodels[would_be_orphan].parent = None;
     }
 
-    pub fn make_parent(&mut self, new_parent: ObjectId, new_child: ObjectId) -> Option<()> {
-        if !self.is_obj_id_ancestor(new_parent, new_child) {
-            self.sub_objects[new_parent].children.push(new_child);
-            self.sub_objects[new_child].parent = Some(new_parent);
+    pub fn make_parent(&mut self, new_parent: SubmodelId, new_child: SubmodelId) -> Option<()> {
+        if !self.is_model_id_ancestor(new_parent, new_child) {
+            self.submodels[new_parent].children.push(new_child);
+            self.submodels[new_child].parent = Some(new_parent);
 
             // maintain it's current relative position to the whole model
-            let offset_from_parents = self.get_total_subobj_offset(new_child) - self.sub_objects[new_child].offset;
-            self.sub_objects[new_child].offset -= offset_from_parents;
+            let offset_from_parents = self.get_total_submodel_offset(new_child) - self.submodels[new_child].offset;
+            self.submodels[new_child].offset -= offset_from_parents;
 
             Some(())
         } else {
@@ -2988,7 +2984,7 @@ impl Model {
         }
     }
 
-    pub fn max_verts_norms_per_subobj(&self) -> usize {
+    pub fn max_verts_norms_per_submodel(&self) -> usize {
         if self.version >= Version::V23_00 {
             u32::MAX as usize
         } else {
@@ -3011,12 +3007,12 @@ impl Model {
 
         // turrets are more complicated, exact base + arm object name matches only
         import_model.turrets.retain_mut(|turret| {
-            for subobj in &self.sub_objects {
-                if import_model.sub_objects[turret.base_obj].name == subobj.name
-                    && self.get_obj_id_by_name(&import_model.sub_objects[turret.gun_obj].name).is_some()
+            for smodel in &self.submodels {
+                if import_model.submodels[turret.base_model].name == smodel.name
+                    && self.get_model_id_by_name(&import_model.submodels[turret.gun_model].name).is_some()
                 {
-                    turret.base_obj = subobj.obj_id;
-                    turret.gun_obj = self.get_obj_id_by_name(&import_model.sub_objects[turret.gun_obj].name).unwrap();
+                    turret.base_model = smodel.id;
+                    turret.gun_model = self.get_model_id_by_name(&import_model.submodels[turret.gun_model].name).unwrap();
                     return true;
                 }
             }
@@ -3030,7 +3026,7 @@ impl Model {
 
     pub fn turret_matrix(&self, turret_idx: usize) -> TMat4<f32> {
         let turret = &self.turrets[turret_idx];
-        let mut arr = if let Some((uvec, fvec)) = self.sub_objects[turret.base_obj].uvec_fvec() {
+        let mut arr = if let Some((uvec, fvec)) = self.submodels[turret.base_model].uvec_fvec() {
             [uvec.into(), fvec.into()]
         } else {
             [turret.normal.0.into(), Vec3d::new(0.0, 0.0, 1.0).into()]
@@ -3055,31 +3051,31 @@ pub enum Set<T> {
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone)]
 pub enum Error {
-    InvalidTurretGunSubobject(usize), // turret index
-    TooManyDebrisObjects,
-    DetailObjWithParent(ObjectId),
-    DetailAndDebrisObj(ObjectId),
-    TooManyVerts(ObjectId),
-    TooManyNorms(ObjectId),
-    UnnamedSubObject(ObjectId),
-    DuplicateSubobjectName(String),
+    InvalidTurretGunSubmodel(usize), // turret index
+    TooManyDebrisModels,
+    DetailModelWithParent(SubmodelId),
+    DetailAndDebrisModel(SubmodelId),
+    TooManyVerts(SubmodelId),
+    TooManyNorms(SubmodelId),
+    UnnamedSubmodel(SubmodelId),
+    DuplicateSubmodelName(String),
     // all turret base/gun objects must be disjoint!
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
 pub enum Warning {
-    RadiusTooSmall(Option<ObjectId>),
-    BBoxTooSmall(Option<ObjectId>),
-    InvertedBBox(Option<ObjectId>),
+    RadiusTooSmall(Option<SubmodelId>),
+    BBoxTooSmall(Option<SubmodelId>),
+    InvertedBBox(Option<SubmodelId>),
     UntexturedPolygons,
     DockingBayWithoutPath(usize),
     ThrusterPropertiesInvalidVersion(usize),
     WeaponOffsetInvalidVersion { primary: bool, bank: usize, point: usize },
-    SubObjectTranslationInvalidVersion(ObjectId),
+    SubmodelTranslationInvalidVersion(SubmodelId),
     TooFewTurretFirePoints(usize),
     TooManyTurretFirePoints(usize),
     DuplicatePathName(String),
-    DuplicateDetailLevel(ObjectId),
+    DuplicateDetailLevel(SubmodelId),
     TooManyEyePoints,
     TooManyTextures,
     InvalidDockParentSubmodel(usize),
@@ -3087,10 +3083,10 @@ pub enum Warning {
 
     PathNameTooLong(usize),
     SpecialPointNameTooLong(usize),
-    SubObjectNameTooLong(ObjectId),
+    SubmodelNameTooLong(SubmodelId),
     DockingBayNameTooLong(usize),
 
-    SubObjectPropertiesTooLong(ObjectId),
+    SubmodelPropertiesTooLong(SubmodelId),
     ThrusterPropertiesTooLong(usize),
     DockingBayPropertiesTooLong(usize),
     GlowBankPropertiesTooLong(usize),
@@ -3098,20 +3094,20 @@ pub enum Warning {
     // path with no parent
     // thruster with no engine subsys (and an engine subsys exists)
     // turret uvec != turret normal
-    // turret subobject properties not set up for a turret
+    // turret submodel properties not set up for a turret
     // turret without 'turret' in name
     // nonturret with 'turret' in name
 }
 
-pub fn post_parse_fill_untextured_slot(sub_objects: &mut Vec<SubObject>, textures: &mut Vec<String>) -> Option<TextureId> {
+pub fn post_parse_fill_untextured_slot(sub_objects: &mut Vec<Submodel>, textures: &mut Vec<String>) -> Option<TextureId> {
     let max_texture = TextureId(textures.len().try_into().unwrap());
     let untextured_id = match textures.iter().position(|tex| tex == "Untextured") {
         Some(index) => TextureId(index.try_into().unwrap()),
         None => max_texture,
     };
     let mut has_untextured = false;
-    for subobj in sub_objects.iter_mut() {
-        for (_, poly) in subobj.bsp_data.collision_tree.leaves_mut() {
+    for smodel in sub_objects.iter_mut() {
+        for (_, poly) in smodel.bsp_data.collision_tree.leaves_mut() {
             if poly.texture >= max_texture {
                 has_untextured = true;
                 poly.texture = untextured_id;

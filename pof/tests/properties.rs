@@ -47,6 +47,21 @@ fn a_field_with_no_value_reads_as_empty() {
     assert_eq!(properties_get_field("$name=\n$other=1", "$name"), Some(""));
 }
 
+#[test]
+fn every_field_drops_its_trailing_whitespace() {
+    // it's dropped for all fields - a trailing space is never meaningful, and leaving one in breaks
+    // name lookups and outright fails the numeric parses
+    assert_eq!(properties_get_field("$name=Fighterbay  \n$parent_submodel=hull ", "$name"), Some("Fighterbay"));
+    assert_eq!(properties_get_field("$name=Fighterbay  \n$parent_submodel=hull ", "$parent_submodel"), Some("hull"));
+    assert_eq!(properties_get_field("$fov = 1.5 ", "$fov").and_then(|val| val.parse::<f32>().ok()), Some(1.5));
+    assert_eq!(properties_get_field("$special : subsystem  ", "$special"), Some("subsystem"));
+    assert_eq!(properties_get_field("$special=subsystem\t", "$special"), Some("subsystem"));
+
+    // a value which is nothing but whitespace comes back empty rather than as blanks
+    assert_eq!(properties_get_field("$name=   ", "$name"), Some(""));
+    assert_eq!(properties_get_field("$name=kept inside  ", "$name"), Some("kept inside"), "only the trailing run goes");
+}
+
 // ---------------------------------------------------------------- updating
 
 #[test]
@@ -182,4 +197,32 @@ fn a_tab_separated_subsystem_is_recognized() {
     let dock = Dock { properties: "$name:\tFighterbay\n$parent_submodel=hull".to_string(), ..Default::default() };
     assert_eq!(dock.get_name(), Some("Fighterbay"));
     assert_eq!(dock.get_parent_smodel(), Some("hull"));
+}
+
+#[test]
+fn trailing_whitespace_doesnt_stop_something_being_a_subsystem() {
+    // FSO's get_user_prop_value ends with drop_trailing_white_space, so these are subsystems there
+    for props in ["$special=subsystem ", "$special = subsystem \n$other=1", "$special:\tsubsystem  "] {
+        let smodel = Submodel { properties: props.to_string(), ..Default::default() };
+        assert!(smodel.is_subsystem(), "for {:?}", props);
+    }
+
+    let spcl = SpecialPoint { properties: "$special=subsystem ".to_string(), ..Default::default() };
+    assert!(spcl.is_subsystem());
+}
+
+#[test]
+fn the_subsystem_value_is_matched_case_insensitively() {
+    // FSO reads this through string_lookup, which compares with lcase_equal, so the case a modeller
+    // typed makes no difference there and must make none here
+    for props in ["$special=Subsystem", "$special=SUBSYSTEM", "$special = SubSystem \n$other=1"] {
+        let smodel = Submodel { properties: props.to_string(), ..Default::default() };
+        assert!(smodel.is_subsystem(), "for {:?}", props);
+
+        let spcl = SpecialPoint { properties: props.to_string(), ..Default::default() };
+        assert!(spcl.is_subsystem(), "for {:?}", props);
+    }
+
+    let not_one = Submodel { properties: "$special=shieldpoint".to_string(), ..Default::default() };
+    assert!(!not_one.is_subsystem());
 }

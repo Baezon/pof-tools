@@ -576,6 +576,10 @@ impl UiState {
 
     // fills the properties panel based on the current tree selection, taking all the relevant data from the model
     pub(crate) fn refresh_properties_panel(&mut self, model: &Model) {
+        // the auto-gen paths confirmation only draws as part of the path panel, so dismiss it
+        // whenever the panel gets rebuilt, otherwise it'd linger and pop up again later
+        self.auto_gen_paths_confirm = false;
+
         match self.tree_view_selection {
             TreeValue::Header => {
                 self.properties_panel = PropertiesPanel::Header {
@@ -3058,7 +3062,9 @@ impl PofToolsGui {
                 let mut idx = 0;
                 if let Some(point) = point_num {
                     if let Some(type_str) = pof::properties_get_field(&self.model.special_points[point].properties, "$special") {
-                        if let Some(i) = types.iter().position(|str| *str == type_str) {
+                        // matched the way is_subsystem and FSO's string_lookup do, so "$special=Subsystem" doesn't show a
+                        // blank type next to a path button which considers it a subsystem
+                        if let Some(i) = types.iter().position(|str| str.eq_ignore_ascii_case(type_str)) {
                             idx = i;
                         }
                     }

@@ -2314,6 +2314,25 @@ impl Graphics {
             SrgbTexture2d::new(display, glium::texture::RawImage2d::from_raw_rgba(image_raw, image_dimensions)).unwrap()
         }
 
+        macro_rules! shader {
+            ($vert_shader:expr, $frag_shader:expr) => {
+                glium::program::Program::new(
+                    display,
+                    glium::program::ProgramCreationInput::SourceCode {
+                        vertex_shader: $vert_shader,
+                        tessellation_control_shader: None,
+                        tessellation_evaluation_shader: None,
+                        geometry_shader: None,
+                        fragment_shader: $frag_shader,
+                        transform_feedback_varyings: None,
+                        outputs_srgb: false,
+                        uses_point_size: false,
+                    },
+                )
+                .unwrap()
+            };
+        }
+
         Graphics {
             circle_verts: glium::VertexBuffer::new(display, &*primitives::CIRCLE_VERTS).unwrap(),
             circle_indices: glium::IndexBuffer::new(display, glium::index::PrimitiveType::LineLoop, &primitives::CIRCLE_INDICES).unwrap(),
@@ -2426,15 +2445,15 @@ impl Graphics {
                 load_img(display, include_bytes!("yup.png")),
                 load_img(display, include_bytes!("ydown.png")),
             ],
-            default_material_shader: glium::Program::from_source(display, DEFAULT_VERTEX_SHADER, DEFAULT_MAT_FRAGMENT_SHADER, None).unwrap(),
-            textured_material_shader: glium::Program::from_source(display, DEFAULT_VERTEX_SHADER, TEXTURED_FRAGMENT_SHADER, None).unwrap(),
-            flat_textured_material_shader: glium::Program::from_source(display, NO_NORMS_VERTEX_SHADER, FLAT_TEXTURED_FRAGMENT_SHADER, None).unwrap(),
-            shield_shader: glium::Program::from_source(display, DEFAULT_VERTEX_SHADER, SHIELD_FRAGMENT_SHADER, None).unwrap(),
-            wireframe_shader: glium::Program::from_source(display, NO_NORMS_VERTEX_SHADER, WIRE_FRAGMENT_SHADER, None).unwrap(),
-            lollipop_stick_shader: glium::Program::from_source(display, NO_NORMS_VERTEX_SHADER, LOLLIPOP_STICK_FRAGMENT_SHADER, None).unwrap(),
-            lollipop_shader: glium::Program::from_source(display, LOLLIPOP_VERTEX_SHADER, LOLLIPOP_FRAGMENT_SHADER, None).unwrap(),
-            arrowhead_shader: glium::Program::from_source(display, NO_NORMS_VERTEX_SHADER, LOLLIPOP_FRAGMENT_SHADER, None).unwrap(),
-            fov_shader: glium::Program::from_source(display, FOV_VERTEX_SHADER, LOLLIPOP_STICK_FRAGMENT_SHADER, None).unwrap(),
+            default_material_shader: shader!(DEFAULT_VERTEX_SHADER, DEFAULT_MAT_FRAGMENT_SHADER),
+            textured_material_shader: shader!(DEFAULT_VERTEX_SHADER, TEXTURED_FRAGMENT_SHADER),
+            flat_textured_material_shader: shader!(NO_NORMS_VERTEX_SHADER, FLAT_TEXTURED_FRAGMENT_SHADER),
+            shield_shader: shader!(DEFAULT_VERTEX_SHADER, SHIELD_FRAGMENT_SHADER),
+            wireframe_shader: shader!(NO_NORMS_VERTEX_SHADER, WIRE_FRAGMENT_SHADER),
+            lollipop_stick_shader: shader!(NO_NORMS_VERTEX_SHADER, LOLLIPOP_STICK_FRAGMENT_SHADER),
+            lollipop_shader: shader!(LOLLIPOP_VERTEX_SHADER, LOLLIPOP_FRAGMENT_SHADER),
+            arrowhead_shader: shader!(NO_NORMS_VERTEX_SHADER, LOLLIPOP_FRAGMENT_SHADER),
+            fov_shader: shader!(FOV_VERTEX_SHADER, LOLLIPOP_STICK_FRAGMENT_SHADER),
         }
     }
 }

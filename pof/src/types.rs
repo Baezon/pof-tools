@@ -3125,60 +3125,67 @@ pub fn post_parse_fill_untextured_slot(sub_objects: &mut Vec<Submodel>, textures
 }
 
 pub fn properties_delete_field(properties: &mut String, field: &str) {
-    if let Some(start_idx) = properties.find(field) {
-        let mut end_idx = if let Some(idx) = properties[start_idx..].chars().position(|d| d.is_ascii_control()) {
-            start_idx + idx
-        } else {
-            start_idx + properties[start_idx..].len()
-        };
+    if let Some((after_field, _, value_end)) = properties_find_field(properties, field) {
+        let field_idx = after_field - field.len();
 
-        let mut chars = properties[start_idx..].chars();
-        while end_idx < properties.len() && chars.next().unwrap().is_ascii_control() {
-            end_idx += 1;
-        }
+        // take the line break after the value along with it, instead of leaving a blank line behind
+        let next_line = value_end + byte_offset_of_first(&properties[value_end..], |c| !c.is_ascii_control());
 
-        *properties = format!("{}{}", &properties[..start_idx], &properties[end_idx..]).trim().to_string();
+        *properties = format!("{}{}", &properties[..field_idx], &properties[next_line..]).trim().to_string();
     }
 }
 
-fn properties_find_field(properties: &str, field: &str) -> Option<(usize, usize)> {
-    if let Some(mut start_idx) = properties.find(field) {
-        let end_idx = if let Some(idx) = properties[start_idx..].chars().position(|d| d.is_ascii_control()) {
-            start_idx + idx
-        } else {
-            properties.len()
-        };
+/// The byte offset of the first char of `s` satisfying `pred`, or the length of `s` if there is none.
+///
+/// A byte offset, not a char index - `chars().position()` gives the latter, and adding one of those
+/// to a byte index goes quietly wrong as soon as a property contains a non ASCII character.
+fn byte_offset_of_first(s: &str, mut pred: impl FnMut(char) -> bool) -> usize {
+    s.char_indices().find(|&(_, c)| pred(c)).map_or(s.len(), |(idx, _)| idx)
+}
 
-        start_idx += field.len();
+/// What may sit between a field name and its value. FSO's get_user_prop_value skips '=', ':' and
+/// whitespace; a newline ends the line, so it is never part of the separator.
+fn is_field_separator(c: char) -> bool {
+    c == '=' || c == ':' || (c.is_whitespace() && c != '\n')
+}
 
-        let mut chars = properties[start_idx..].chars();
-        while chars.next().map_or(false, |c| c == '=' || c == ':' || (c.is_whitespace() && c != '\n')) {
-            start_idx += 1;
-        }
+/// Where the field name ends and its value begins and ends, as byte offsets, if the field is
+/// present at all. Readers want the value alone (`value_start..value_end`); the writer also needs
+/// to know whether a separator is there (`value_start == after_field` when there is none).
+fn properties_find_field(properties: &str, field: &str) -> Option<(usize, usize, usize)> {
+    let after_field = properties.find(field)? + field.len();
 
-        Some((start_idx, end_idx))
-    } else {
-        None
-    }
+    // skip whatever separates the field name from its value...
+    let value_start = after_field + byte_offset_of_first(&properties[after_field..], |c| !is_field_separator(c));
+
+    // ...then take the rest of the line. Measuring this from the value rather than from the field
+    // name matters: a tab is both a valid separator and a control character, so anchoring it at the
+    // field name ended the value before it had begun.
+    let value_end = value_start + byte_offset_of_first(&properties[value_start..], |c| c.is_ascii_control());
+
+    Some((after_field, value_start, value_end))
 }
 
 pub fn properties_update_field(properties: &mut String, field: &str, val: &str) {
     if val == "" {
         properties_delete_field(properties, field);
+    } else if properties.is_empty() {
+        *properties = format!("{}={}", field, val);
+    } else if let Some((after_field, value_start, value_end)) = properties_find_field(properties, field) {
+        // a field with nothing after its name - "$special" on its own, or a flag being given a
+        // value - has no separator to write the value after, and one has to go in. Without it the
+        // value runs straight into the name, turning "$special" into "$specialsubsystem": a field
+        // FSO has never heard of, which this code then reads back as "$special" and calls correct.
+        let separator = if value_start == after_field { "=" } else { "" };
+        *properties = format!("{}{}{}{}", &properties[..value_start], separator, val, &properties[value_end..]);
     } else {
-        if properties.is_empty() {
-            *properties = format!("{}={}", field, val);
-        } else if let Some((start_idx, end_idx)) = properties_find_field(properties, field) {
-            *properties = format!("{}{}{}", &properties[..start_idx], val, &properties[end_idx..]);
-        } else {
-            *properties = format!("{}\n{}={}", properties, field, val);
-        }
+        *properties = format!("{}\n{}={}", properties, field, val);
     }
 }
 
 pub fn properties_get_field<'a>(properties: &'a str, field: &str) -> Option<&'a str> {
-    if let Some((start_idx, end_idx)) = properties_find_field(properties, field) {
-        Some(&properties[start_idx..end_idx])
+    if let Some((_, value_start, value_end)) = properties_find_field(properties, field) {
+        Some(&properties[value_start..value_end])
     } else {
         None
     }

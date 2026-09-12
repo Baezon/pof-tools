@@ -12,6 +12,7 @@ use itertools::Itertools;
 use byteorder::{WriteBytesExt, LE};
 pub use dae_parser::UpAxis;
 use glm::{TMat3, TMat4, Vec3};
+use log::warn;
 use nalgebra::Matrix3;
 use nalgebra_glm::Mat4;
 extern crate nalgebra_glm as glm;
@@ -2384,6 +2385,85 @@ impl Model {
                 if path_num.0 >= inserted_idx as u32 {
                     bay.path = Some(PathId(path_num.0 + 1));
                 }
+            }
+        }
+    }
+
+    /// Settles every stored index which names nothing in this model, so the rest of the program may
+    /// take an index at face value.
+    ///
+    /// A POF refers to its own parts by index, and no loader can know a file's numbers are honest.
+    /// An index which names nothing isn't inert either: most of the UI indexes straight into the
+    /// list it belongs to, and an out of range one panics on the frame that object is drawn or
+    /// selected. Every loader calls this once, so the invariant is established at load rather than
+    /// worked around at each of the many places which read an index.
+    pub fn sanitize_index_references(&mut self) {
+        self.sanitize_dock_paths();
+        self.sanitize_eye_points();
+        self.sanitize_glow_bank_parents();
+    }
+
+    /// Clears every docking bay link which points past the end of the path list.
+    ///
+    /// A link is an index, so one which resolves to nothing on load doesn't stay harmless: add a
+    /// path and it starts resolving to whichever one lands on it.
+    pub fn sanitize_dock_paths(&mut self) {
+        let path_count = self.paths.len();
+        for dock in &mut self.docking_bays {
+            if dock.path.is_some_and(|id| id.0 as usize >= path_count) {
+                dock.path = None;
+                warn!("Invalid dock path on {:?} reset", dock.get_name());
+            }
+        }
+    }
+
+    /// Clears every eye point whose attached submodel names no submodel.
+    pub fn sanitize_eye_points(&mut self) {
+        let submodel_count = self.submodels.len();
+        for (i, eye) in self.eye_points.iter_mut().enumerate() {
+            if eye.attached_submodel.is_some_and(|id| id.0 as usize >= submodel_count) {
+                eye.attached_submodel = None;
+                warn!("Invalid eye point {} reset", i);
+            }
+        }
+    }
+
+    /// The submodel a glow bank with no valid parent should fall back to: detail0 if it names a
+    /// real submodel, otherwise the first submodel. A bank is always attached to something, and a
+    /// model always has at least one submodel, so there is always somewhere to send a stray bank.
+    /// Shared by the load-time sanitizer and the import path so the two can't drift.
+    pub fn glow_bank_parent_fallback(&self) -> SubmodelId {
+        let submodel_count = self.submodels.len();
+        self.header
+            .detail_levels
+            .first()
+            .filter(|id| (id.0 as usize) < submodel_count)
+            .copied()
+            .unwrap_or_else(|| self.submodels.first().expect("a model always has at least one submodel").id)
+    }
+
+    /// Repoints every glow point bank whose parent names no submodel.
+    ///
+    /// A bank's parent isn't optional the way a bay's path or an eye point's submodel is - a bank
+    /// is always attached to something - so a bogus one is moved to detail0 (falling back to the
+    /// first submodel) rather than cleared. Leaving one with a dangling parent panics the moment
+    /// it's drawn, which is the whole thing this pass exists to prevent. A model with no submodels
+    /// at all - which a hand-edited collada #glows node with no geometry can still produce - has
+    /// nowhere to put a bank, so those are dropped.
+    pub fn sanitize_glow_bank_parents(&mut self) {
+        if self.submodels.is_empty() {
+            if !self.glow_banks.is_empty() {
+                warn!("Glow point banks dropped: model has no submodels to attach them to");
+                self.glow_banks.clear();
+            }
+            return;
+        }
+        let submodel_count = self.submodels.len();
+        let fallback = self.glow_bank_parent_fallback();
+        for (index, bank) in self.glow_banks.iter_mut().enumerate() {
+            if (bank.model_parent.0 as usize) >= submodel_count {
+                warn!("Invalid glow point bank {} parent reset", index);
+                bank.model_parent = fallback;
             }
         }
     }

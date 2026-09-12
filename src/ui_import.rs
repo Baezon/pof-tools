@@ -1,5 +1,5 @@
 use egui::{collapsing_header::CollapsingState, Button, Color32, Id, Response, RichText, TextEdit, TextStyle, Ui, WidgetText};
-use pof::{properties_delete_field, Submodel, SubmodelId, TextureId};
+use pof::{properties_delete_field, PathId, Submodel, SubmodelId, TextureId};
 
 use crate::{
     start_loading_import_model,
@@ -1099,6 +1099,20 @@ impl PofToolsGui {
         let selection = std::mem::take(&mut self.import_window.import_selection);
         let mut import_model = std::mem::take(&mut self.import_window.model).unwrap();
 
+        // where each imported path ended up here, keyed by its index in the model being imported
+        // from, so a docking bay's link can be pointed at it once the whole selection has landed
+        let mut path_id_map: HashMap<usize, PathId> = HashMap::new();
+        // the bays this import placed, by their index in the receiving model. Each still carries the
+        // path index it had in the model being imported from, resolved once every path has landed.
+        let mut imported_bays: BTreeSet<usize> = BTreeSet::new();
+
+        // a turret and an eye point are matched against the existing ones by the submodel they sit
+        // on. Newly added ones are collected here rather than pushed as we go, so that match never
+        // searches an item we added earlier in this same import - which is both wrong (it isn't a
+        // pre-existing target) and, for turrets, a panic (its submodel isn't installed yet).
+        let mut imported_turrets = Vec::new();
+        let mut imported_eyes = Vec::new();
+
         // make the model id map to translate old model ids to new model ids
         let mut model_id_map = HashMap::new();
         let mut num_submodels = self.model.submodels.len();
@@ -1146,6 +1160,10 @@ impl PofToolsGui {
                 TreeValue::DockingBays(DockingTreeValue::Bay(idx)) => {
                     // requires getting submodels by name -> still have to be intact
                     let mut dock = std::mem::take(&mut import_model.docking_bays[idx]);
+
+                    // dock.path still indexes the model being imported from; it's remapped to
+                    // wherever that path landed here once the whole selection is in, below.
+
                     if let Some(parent_name) = dock.get_parent_smodel() {
                         if import_model
                             .get_model_id_by_name(parent_name)
@@ -1156,26 +1174,37 @@ impl PofToolsGui {
                         }
                     }
 
-                    match self.import_window.import_type {
+                    // which bay in this model the imported one became, if it became one at all
+                    let new_bay = match self.import_window.import_type {
                         ImportType::Add => {
                             self.model.docking_bays.push(dock);
+                            Some(self.model.docking_bays.len() - 1)
                         }
                         ImportType::MatchAndReplace => {
                             // find and replace
                             if let Some(name) = dock.get_name() {
-                                if let Some(replaced_dock) = self
+                                if let Some(replaced_idx) = self
                                     .model
                                     .docking_bays
-                                    .iter_mut()
-                                    .find(|replaced_dock| replaced_dock.get_name() == Some(name))
+                                    .iter()
+                                    .position(|replaced_dock| replaced_dock.get_name() == Some(name))
                                 {
-                                    *replaced_dock = dock;
+                                    self.model.docking_bays[replaced_idx] = dock;
+                                    Some(replaced_idx)
                                 } else {
                                     // fall back, just add it
                                     self.model.docking_bays.push(dock);
+                                    Some(self.model.docking_bays.len() - 1)
                                 }
+                            } else {
+                                // a bay with no name has nothing to match against, and is dropped
+                                None
                             }
                         }
+                    };
+
+                    if let Some(bay_idx) = new_bay {
+                        imported_bays.insert(bay_idx);
                     }
                 }
                 TreeValue::DockingBays(_) => unreachable!(),
@@ -1225,21 +1254,18 @@ impl PofToolsGui {
                 TreeValue::Glows(GlowTreeValue::Bank(idx)) => {
                     let mut g_bank = std::mem::take(&mut import_model.glow_banks[idx]);
 
-                    if !model_id_map.contains_key(&g_bank.model_parent) {
-                        // reset it to detail0
-                        // ... if theres no detail0, just the first submodel
-                        // ... if theres no models, skip it i guess
-                        if let Some(id) = self
-                            .model
-                            .header
-                            .detail_levels
-                            .first()
-                            .or_else(|| self.model.submodels.first().map(|smodel| &smodel.id))
-                        {
-                            g_bank.model_parent = *id;
-                        } else {
-                            continue;
-                        }
+                    // a glow bank is only ever added, never matched, so its parent needs no name
+                    // search: follow it if it was imported too, otherwise fall back to detail0
+                    if let Some(new_parent) = model_id_map.get(&g_bank.model_parent) {
+                        g_bank.model_parent = *new_parent;
+                    } else if self.model.submodels.is_empty() {
+                        // importing into a still-empty model, so nothing to attach it to - a bank
+                        // only ever sits on a submodel, so drop it rather than invent one
+                        continue;
+                    } else {
+                        // parent wasn't imported, so fall back to detail0 (or the first submodel),
+                        // the same repair the load-time sanitizer applies
+                        g_bank.model_parent = self.model.glow_bank_parent_fallback();
                     }
 
                     self.model.glow_banks.push(g_bank);
@@ -1281,10 +1307,13 @@ impl PofToolsGui {
                                     continue;
                                 }
                             }
-                            self.model.turrets.push(turret);
+                            // collected, not pushed, so a later turret's match below won't search it
+                            imported_turrets.push(turret);
                         }
                         ImportType::MatchAndReplace => {
-                            // find and replace
+                            // find and replace. This searches only the turrets already here - the
+                            // ones we add are collected and pushed after the loop, so it never reads
+                            // a base submodel that hasn't been installed yet
                             if let Some(replaced_turret) = self.model.pof_model.turrets.iter_mut().find(|replaced_turret| {
                                 self.model.pof_model.submodels[replaced_turret.base_model].name == import_model.submodels[turret.base_model].name
                             }) {
@@ -1302,7 +1331,7 @@ impl PofToolsGui {
                                 // parent models were imported too, cool
                                 turret.base_model = model_id_map[&turret.base_model];
                                 turret.gun_model = model_id_map[&turret.gun_model];
-                                self.model.turrets.push(turret);
+                                imported_turrets.push(turret);
                             }
                             // else just lose it
                         }
@@ -1312,25 +1341,41 @@ impl PofToolsGui {
                 TreeValue::EyePoints(EyeTreeValue::EyePoint(idx)) => {
                     let mut point = std::mem::take(&mut import_model.eye_points[idx]);
 
+                    // follow the attachment: to its fresh id if imported too, else to a same-named
+                    // submodel here, else nothing
+                    let resolved = point.attached_submodel.and_then(|id| {
+                        model_id_map.get(&id).copied().or_else(|| {
+                            import_model
+                                .submodels
+                                .get(id.0 as usize)
+                                .and_then(|src| self.model.submodels.iter().find(|smodel| smodel.name == src.name))
+                                .map(|smodel| smodel.id)
+                        })
+                    });
+
                     match self.import_window.import_type {
                         ImportType::Add => {
-                            self.model.eye_points.push(point);
+                            point.attached_submodel = resolved;
+                            imported_eyes.push(point);
                         }
                         ImportType::MatchAndReplace => {
-                            let attached_model = point.attached_submodel.map(|id| &import_model.submodels[id].name);
-                            // find and replace
-                            if let Some(replaced_point) = self.model.pof_model.eye_points.iter_mut().find(|replaced_point| {
-                                replaced_point.attached_submodel.map(|id| &self.model.pof_model.submodels[id].name) == attached_model
-                            }) {
-                                point.attached_submodel = replaced_point.attached_submodel;
+                            // an eye pairs with an existing one only when we know where it belongs:
+                            // both unattached, or both on the same submodel. An attachment we could
+                            // not resolve is no basis to replace an unrelated eye, so it's just added
+                            let can_match = point.attached_submodel.is_none() || resolved.is_some();
+                            point.attached_submodel = resolved;
+                            let replaced = can_match
+                                .then(|| self.model.eye_points.iter_mut().find(|p| p.attached_submodel == resolved))
+                                .flatten();
+                            if let Some(replaced_point) = replaced {
                                 *replaced_point = point;
                             } else {
-                                // fall back, just add it
-                                self.model.eye_points.push(point);
+                                imported_eyes.push(point);
                             }
                         }
                     }
                 }
+                TreeValue::EyePoints(_) => unreachable!(),
                 TreeValue::Shield => {
                     let shield = std::mem::take(&mut import_model.shield_data);
 
@@ -1354,6 +1399,12 @@ impl PofToolsGui {
                 _ => (),
             }
         }
+
+        // every new turret and eye point has now been matched against the pre-existing ones, so the
+        // collected additions can go in - a turret's base id landing where its submodel will once
+        // the install loop below runs
+        self.model.turrets.append(&mut imported_turrets);
+        self.model.eye_points.append(&mut imported_eyes);
 
         let old_smodel_len = self.model.submodels.len();
         for tree_val in &selection {
@@ -1432,26 +1483,45 @@ impl PofToolsGui {
                 TreeValue::Paths(PathTreeValue::Path(idx)) => {
                     let path = std::mem::take(&mut import_model.paths[idx]);
 
-                    match self.import_window.import_type {
+                    // where it landed, so a docking bay which linked to it can be pointed there
+                    let new_path = match self.import_window.import_type {
                         ImportType::Add => {
                             self.model.paths.push(path);
+                            self.model.paths.len() - 1
                         }
                         ImportType::MatchAndReplace => {
-                            if let Some(replaced_path) = self.model.paths.iter_mut().find(|replaced_path| replaced_path.name == path.name) {
-                                *replaced_path = path;
+                            if let Some(replaced_idx) = self.model.paths.iter().position(|replaced_path| replaced_path.name == path.name) {
+                                self.model.paths[replaced_idx] = path;
+                                replaced_idx
                             } else {
                                 // fall back, just add it
                                 self.model.paths.push(path);
+                                self.model.paths.len() - 1
                             }
                         }
-                    }
+                    };
+                    path_id_map.insert(idx, PathId(new_path as u32));
                 }
                 TreeValue::Paths(_) => unreachable!(),
                 _ => (),
             }
         }
 
+        // now every selected path has landed, so each imported bay can follow the path it carried
+        // over to wherever it ended up - or lose the link if that path didn't come along, rather
+        // than keep an index which names a stranger's path here
+        for bay_idx in imported_bays {
+            let old_path = self.model.docking_bays[bay_idx].path;
+            self.model.docking_bays[bay_idx].path = old_path.and_then(|p| path_id_map.get(&(p.0 as usize)).copied());
+        }
+
         self.model.recalc_semantic_name_links();
         self.model.recalc_all_children_ids();
+
+        // the remaps above aim each imported index at where it landed; this is the safety net,
+        // establishing the same no-dangling-index invariant the loaders do so a stray one can't
+        // reach the UI and panic when it's drawn or selected. As at load, it runs after the recalcs
+        // so it sees the model in its final shape (recalc_all_children_ids in particular).
+        self.model.sanitize_index_references();
     }
 }

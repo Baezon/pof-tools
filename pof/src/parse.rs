@@ -499,26 +499,6 @@ impl<R: Read + Seek> Parser<R> {
             }
         });
 
-        // sanitize dock paths
-        if let Some(points) = dock_points.as_deref_mut() {
-            for dock in points.iter_mut() {
-                if dock.path.map_or(false, |id| id.0 >= paths.as_ref().map_or(0, |paths| paths.len()) as u32) {
-                    dock.path = None;
-                    warn!("Invalid dock path on {:?} reset", dock.get_name());
-                }
-            }
-        }
-
-        // sanitize eye point submodels
-        if let Some(points) = eye_points.as_deref_mut() {
-            for (i, eye) in points.iter_mut().enumerate() {
-                if eye.attached_submodel.map_or(false, |id| id.0 >= submodels.len() as u32) {
-                    eye.attached_submodel = None;
-                    warn!("Invalid eye point {} reset", i);
-                }
-            }
-        }
-
         let mut textures = textures.unwrap_or_default();
         let untextured_idx = post_parse_fill_untextured_slot(&mut submodels, &mut textures);
 
@@ -547,6 +527,7 @@ impl<R: Read + Seek> Parser<R> {
         };
 
         model.recalc_all_children_ids();
+        model.sanitize_index_references();
         model.recheck_warnings(Set::All);
         model.recheck_errors(Set::All);
         model.recalc_semantic_name_links();
@@ -1572,6 +1553,9 @@ pub fn parse_dae(path: std::path::PathBuf) -> Model {
     let scene = &document.scene.as_ref().unwrap().instance_visual_scene.as_ref().unwrap().url;
     ctx.parse_top_level_nodes(&mut model, &ctx.local_maps.get(scene).unwrap().nodes);
 
+    // a bay's path, an eye point's submodel and a glow bank's parent are all written into the node
+    // name as a bare number, and nothing before here has checked that any of them names anything
+    model.sanitize_index_references();
     model.prune_unused_textures();
 
     model
@@ -1697,6 +1681,8 @@ pub fn parse_gltf(path: std::path::PathBuf) -> Model {
 
     GltfContext { buffers }.parse_top_level_nodes(&mut model, scene.nodes());
 
+    // as in parse_dae - every imported index is whatever number the node name carried
+    model.sanitize_index_references();
     model.prune_unused_textures();
 
     model

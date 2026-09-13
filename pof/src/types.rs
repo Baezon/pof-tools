@@ -791,7 +791,7 @@ impl SpecialPoint {
     }
 
     pub fn is_subsystem(&self) -> bool {
-        properties_get_field(&self.properties, "$special") == Some("subsystem")
+        properties_get_field(&self.properties, "$special").is_some_and(|val| val.eq_ignore_ascii_case("subsystem"))
     }
 }
 
@@ -1501,7 +1501,7 @@ impl Submodel {
     }
 
     pub fn is_subsystem(&self) -> bool {
-        properties_get_field(&self.properties, "$special") == Some("subsystem")
+        properties_get_field(&self.properties, "$special").is_some_and(|val| val.eq_ignore_ascii_case("subsystem"))
     }
 
     /// returns the surface area of the submodel, and the average surface area position
@@ -2491,16 +2491,17 @@ impl Model {
             }
         }
 
-        // Build maps... object name to index
+        // Build maps... normalized object name to index
         let mut sobj_name_to_turret_idx: HashMap<String, usize> = HashMap::new();
         for (i, turret) in self.turrets.iter().enumerate() {
-            let base_name = self.submodels[turret.base_model].name.clone();
+            let base_name = normalize_path_parent(&self.submodels[turret.base_model].name);
             sobj_name_to_turret_idx.insert(base_name, i);
         }
 
-        let sobj_name_map: HashMap<String, usize> = self.submodels.iter().map(|s| (s.name.clone(), s.id.0 as usize)).collect();
+        let sobj_name_map: HashMap<String, usize> = self.submodels.iter().map(|s| (normalize_path_parent(&s.name), s.id.0 as usize)).collect();
 
-        let spcl_name_map: HashMap<String, usize> = self.special_points.iter().enumerate().map(|(i, s)| (s.name.clone(), i)).collect();
+        let spcl_name_map: HashMap<String, usize> =
+            self.special_points.iter().enumerate().map(|(i, s)| (normalize_path_parent(&s.name), i)).collect();
 
         // Track which objects already have paths (true = skip)
         let mut turret_has_path = vec![false; self.turrets.len()];
@@ -2508,27 +2509,29 @@ impl Model {
         let mut spcl_has_path = vec![false; self.special_points.len()];
 
         // Skip non subsystem submodels and special points, which is what PCS2 did
+        // is_subsystem() actually parses the properties field, so it also catches the separators
+        // FSO accepts, like "$special: subsystem", which a plain substring match would miss
         for (i, sobj) in self.submodels.iter().enumerate() {
-            if !sobj.properties.contains("$special=subsystem") {
+            if !sobj.is_subsystem() {
                 smodel_has_path[i] = true;
             }
         }
         for (i, spcl) in self.special_points.iter().enumerate() {
-            if !spcl.properties.contains("$special=subsystem") {
+            if !spcl.is_subsystem() {
                 spcl_has_path[i] = true;
             }
         }
 
         // Mark objects already covered by an existing path's parent field
         for path in &self.paths {
-            let parent = &path.parent;
-            if let Some(&ti) = sobj_name_to_turret_idx.get(parent) {
+            let parent = normalize_path_parent(&path.parent);
+            if let Some(&ti) = sobj_name_to_turret_idx.get(&parent) {
                 turret_has_path[ti] = true;
             }
-            if let Some(&si) = spcl_name_map.get(parent) {
+            if let Some(&si) = spcl_name_map.get(&parent) {
                 spcl_has_path[si] = true;
             }
-            if let Some(&oi) = sobj_name_map.get(parent) {
+            if let Some(&oi) = sobj_name_map.get(&parent) {
                 smodel_has_path[oi] = true;
             }
         }
@@ -2635,6 +2638,8 @@ impl Model {
                 name: next_name(),
                 // FSO format: $dock{XX}-{YY}, XX = bay index (1-based), YY = path slot within bay (1-based).
                 // We always generate one path per dock, so the slot is always 01.
+                // Docks link to their paths by index rather than by name, so this is purely descriptive,
+                // and FSO expects it *not* to resolve to a submodel - see the dockpoint checks in modelread.cpp
                 parent: format!("$dock{:02}-01", bay_idx + 1),
                 points: vec![
                     PathPoint {
@@ -3204,6 +3209,13 @@ pub fn post_parse_fill_untextured_slot(sub_objects: &mut Vec<Submodel>, textures
     }
 }
 
+/// Normalizes a name for the purposes of matching a path's parent against a submodel or
+/// special point, mirroring how FSO resolves it: the leading '$' is stripped (special point
+/// names carry one, submodel names don't) and the comparison is case insensitive.
+pub fn normalize_path_parent(name: &str) -> String {
+    name.strip_prefix('$').unwrap_or(name).to_ascii_lowercase()
+}
+
 pub fn properties_delete_field(properties: &mut String, field: &str) {
     if let Some((after_field, _, value_end)) = properties_find_field(properties, field) {
         let field_idx = after_field - field.len();
@@ -3265,7 +3277,12 @@ pub fn properties_update_field(properties: &mut String, field: &str, val: &str) 
 
 pub fn properties_get_field<'a>(properties: &'a str, field: &str) -> Option<&'a str> {
     if let Some((_, value_start, value_end)) = properties_find_field(properties, field) {
-        Some(&properties[value_start..value_end])
+        // trailing whitespace is dropped, as it is never meaningful in a property value and FSO
+        // drops it too - get_user_prop_value ends with a drop_trailing_white_space. Leading
+        // whitespace is already skipped by properties_find_field.
+        // Note this is the read path only, so properties_update_field still replaces the whole
+        // span, and writing a field tidies away any trailing whitespace which was there before.
+        Some(properties[value_start..value_end].trim_end())
     } else {
         None
     }

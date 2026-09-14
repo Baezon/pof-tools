@@ -1977,6 +1977,28 @@ impl Model {
         true
     }
 
+    /// Rechecks the warnings which depend on other objects' names: which objects claim which paths.
+    /// Runs on every keystroke, unlike a full recheck, so keep it cheap.
+    pub fn recheck_cross_object_warnings(&mut self) {
+        self.warnings.retain(|warning| !matches!(warning, Warning::ContestedPath(_)));
+
+        // how many objects answer to each name, counted once; calling path_claimants for every path would
+        // rescan every object per path, which is far too slow for every keystroke
+        let mut named: HashMap<String, usize> = HashMap::new();
+        for target in self.path_targets() {
+            if let Some(name) = self.target_parent_name(target) {
+                *named.entry(normalized_path_name(name)).or_default() += 1;
+            }
+        }
+        for i in 0..self.paths.len() {
+            let by_name = named.get(&normalized_path_name(&self.paths[i].parent)).copied().unwrap_or(0);
+            let by_bays = self.docking_bays.iter().filter(|dock| dock.path == Some(PathId(i as u32))).count();
+            if by_name + by_bays > 1 {
+                self.warnings.insert(Warning::ContestedPath(i));
+            }
+        }
+    }
+
     // rechecks just one or all of the warnings on the model
     pub fn recheck_warnings(&mut self, warning_to_check: Set<Warning>) {
         if let Set::One(warning) = warning_to_check {
@@ -1984,6 +2006,7 @@ impl Model {
                 Warning::RadiusTooSmall(smodel_opt) => self.radius_test_failed(*smodel_opt),
                 Warning::BBoxTooSmall(smodel_opt) => self.bbox_test_failed(*smodel_opt),
                 Warning::DockingBayWithoutPath(bay_num) => self.docking_bays.get(*bay_num).map_or(false, |bay| bay.path.is_none()),
+                Warning::ContestedPath(idx) => self.path_claimants(PathId(*idx as u32)).len() > 1,
                 Warning::ThrusterPropertiesInvalidVersion(bank_idx) => {
                     self.version <= Version::V21_16 && self.thruster_banks.get(*bank_idx).map_or(false, |bank| !bank.properties.is_empty())
                 }
@@ -2173,6 +2196,8 @@ impl Model {
                     self.warnings.insert(Warning::PathNameTooLong(i));
                 }
             }
+
+            self.recheck_cross_object_warnings();
 
             for duped_name in self.paths.iter().map(|path| &path.name).duplicates() {
                 self.warnings.insert(Warning::DuplicatePathName(duped_name.clone()));
@@ -3251,6 +3276,7 @@ pub enum Warning {
     TooFewTurretFirePoints(usize),
     TooManyTurretFirePoints(usize),
     DuplicatePathName(String),
+    ContestedPath(usize),
     DuplicateDetailLevel(SubmodelId),
     TooManyEyePoints,
     TooManyTextures,

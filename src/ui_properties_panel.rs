@@ -778,7 +778,7 @@ impl UiState {
                     self.properties_panel = PropertiesPanel::EyePoint {
                         position_string: format!("{}", model.eye_points[idx].position),
                         normal_string: format!("{}", model.eye_points[idx].normal.0),
-                        attached_submodel_idx: model.eye_points[idx].attached_submodel.map_or(model.submodels.len(), |id| id.0 as usize),
+                        attached_submodel_idx: model.eye_points[idx].attached_submodel.map_or(0, |id| id.0 as usize + 1),
                     }
                 }
                 _ => self.properties_panel = PropertiesPanel::default_eye(),
@@ -3535,18 +3535,18 @@ impl PofToolsGui {
 
                 ui.add_enabled_ui(eye_num.is_some(), |ui| {
                     if let Some(num) = eye_num {
-                        let mut name_list = self.model.get_smodel_names();
-                        name_list.push("None".to_string());
+                        let mut name_list = vec!["None".to_string()];
+                        name_list.extend(self.model.get_smodel_names());
 
                         let changed = egui::ComboBox::from_label("Attached submodel")
                             .show_index(ui, attached_submodel_idx, name_list.len(), |i| name_list[i].to_owned())
                             .changed();
 
                         if changed {
-                            let mut new_val = if *attached_submodel_idx < self.model.submodels.len() {
-                                Some(SubmodelId(*attached_submodel_idx as u32))
-                            } else {
+                            let mut new_val = if *attached_submodel_idx == 0 {
                                 None
+                            } else {
+                                Some(SubmodelId(*attached_submodel_idx as u32 - 1))
                             };
 
                             model_action(

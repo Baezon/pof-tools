@@ -676,7 +676,7 @@ impl UiState {
                         position_string: format!("{}", model.docking_bays[bay].position),
                         fvec_string: format!("{}", model.docking_bays[bay].fvec.0),
                         uvec_ang: model.docking_bays[bay].get_uvec_angle().to_degrees() % 360.0,
-                        path_num: model.docking_bays[bay].path.unwrap_or(PathId(model.paths.len() as u32)).0 as usize,
+                        path_num: model.docking_bays[bay].path.map_or(0, |path| path.0 as usize + 1),
                     }
                 }
                 _ => self.properties_panel = PropertiesPanel::default_docking_bay(),
@@ -2683,13 +2683,10 @@ impl PofToolsGui {
 
                 // combo box list of path names
                 //  no valid bay selected -> a single empty string
-                //  valid bay, without a path -> list of paths, followed by a single empty string
-                //  valid bay, with a path -> list of paths
-                let paths = if let Some(bay) = bay_num {
-                    let mut out: Vec<String> = self.model.paths.iter().map(|path| path.name.clone()).collect();
-                    if self.model.docking_bays[bay].path.is_none() {
-                        out.push(String::new());
-                    }
+                //  valid bay -> "None", followed by the list of paths
+                let paths = if bay_num.is_some() {
+                    let mut out = vec!["None".to_string()];
+                    out.extend(self.model.paths.iter().map(|path| path.name.clone()));
                     out
                 } else {
                     vec![String::new()]
@@ -2702,11 +2699,7 @@ impl PofToolsGui {
                         .changed()
                     {
                         let bay_num = bay_num.unwrap();
-                        let mut new_path = if *path_num == self.model.paths.len() {
-                            None
-                        } else {
-                            Some(PathId(*path_num as u32))
-                        };
+                        let mut new_path = if *path_num == 0 { None } else { Some(PathId(*path_num as u32 - 1)) };
 
                         model_action(
                             undo_history,

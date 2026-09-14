@@ -18,9 +18,9 @@ use pof::{
 use crate::Model;
 
 use crate::ui::{
-    model_action, DockingTreeValue, EyeTreeValue, GlowTreeValue, InsigniaTreeValue, PathTreeValue, PofToolsGui, SpecialPointTreeValue,
-    SubmodelTreeValue, TextureTreeValue, ThrusterTreeValue, TreeValue, TurretTreeValue, UiState, UndoAction, WeaponTreeValue, ERROR_RED, LIGHT_BLUE,
-    LIGHT_ORANGE, WARNING_YELLOW,
+    model_action, model_edit_action, DockingTreeValue, EyeTreeValue, GlowTreeValue, InsigniaTreeValue, PathTreeValue, PofToolsGui,
+    SpecialPointTreeValue, SubmodelTreeValue, TextureTreeValue, ThrusterTreeValue, TreeValue, TurretTreeValue, UiState, UndoAction, WeaponTreeValue,
+    ERROR_RED, LIGHT_BLUE, LIGHT_ORANGE, WARNING_YELLOW,
 };
 
 const NON_BREAK_SPACE: char = '\u{00A0}';
@@ -265,7 +265,7 @@ fn text_edit_single(
                 swap(&mut old_val, val);
             }
         });
-        let _ = undo_history.apply(model, UndoAction { function: func });
+        model_edit_action(undo_history, model, func);
     }
 
     egui::TextEdit::load_state(ui.ctx(), egui_id).unwrap().clear_undoer();
@@ -293,7 +293,7 @@ fn text_edit_multi(
                 swap(&mut old_val, val);
             }
         });
-        let _ = undo_history.apply(model, UndoAction { function: func });
+        model_edit_action(undo_history, model, func);
     }
 
     egui::TextEdit::load_state(ui.ctx(), egui_id).unwrap().clear_undoer();
@@ -477,7 +477,7 @@ impl UiState {
             if response.changed() {
                 if let Ok(new_val) = parsable_string.parse::<T>() {
                     let func = model_func(model, new_val);
-                    let _ = undo_history.apply(model, UndoAction { function: func });
+                    model_edit_action(undo_history, model, func);
 
                     *viewport_3d_dirty = true;
                 }
@@ -513,7 +513,7 @@ impl UiState {
                         info!("Modifying: {}", id);
                         swap(&mut new_val, val);
                     });
-                    let _ = undo_history.apply(model, UndoAction { function: func });
+                    model_edit_action(undo_history, model, func);
 
                     *viewport_3d_dirty = true;
                 }

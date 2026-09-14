@@ -703,6 +703,17 @@ pub enum PathTarget {
     DockingBay(usize),
 }
 
+impl Display for PathTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            PathTarget::Turret(idx) => write!(f, "Turret {}", idx + 1),
+            PathTarget::Submodel(id) => write!(f, "Submodel {}", id.0),
+            PathTarget::SpecialPoint(idx) => write!(f, "Special Point {}", idx + 1),
+            PathTarget::DockingBay(idx) => write!(f, "Bay {}", idx + 1),
+        }
+    }
+}
+
 /// A name as FSO compares a path parent with it: case-insensitive, ignoring a leading '$'.
 pub fn normalized_path_name(name: &str) -> String {
     name.strip_prefix('$').unwrap_or(name).to_ascii_lowercase()
@@ -1980,6 +1991,19 @@ impl Model {
         true
     }
 
+    /// Rechecks the warnings which depend on other objects' names: which objects claim which paths.
+    /// Runs on every keystroke, unlike a full recheck, so keep it cheap.
+    pub fn recheck_cross_object_warnings(&mut self) {
+        self.warnings.retain(|warning| !matches!(warning, Warning::ContestedPath(_)));
+
+        let index = self.path_name_index();
+        for i in 0..self.paths.len() {
+            if self.path_is_contested(&index, PathId(i as u32)) {
+                self.warnings.insert(Warning::ContestedPath(i));
+            }
+        }
+    }
+
     // rechecks just one or all of the warnings on the model
     pub fn recheck_warnings(&mut self, warning_to_check: Set<Warning>) {
         if let Set::One(warning) = warning_to_check {
@@ -1987,6 +2011,7 @@ impl Model {
                 Warning::RadiusTooSmall(smodel_opt) => self.radius_test_failed(*smodel_opt),
                 Warning::BBoxTooSmall(smodel_opt) => self.bbox_test_failed(*smodel_opt),
                 Warning::DockingBayWithoutPath(bay_num) => self.docking_bays.get(*bay_num).map_or(false, |bay| bay.path.is_none()),
+                Warning::ContestedPath(idx) => self.path_is_contested(&self.path_name_index(), PathId(*idx as u32)),
                 Warning::ThrusterPropertiesInvalidVersion(bank_idx) => {
                     self.version <= Version::V21_16 && self.thruster_banks.get(*bank_idx).map_or(false, |bank| !bank.properties.is_empty())
                 }
@@ -2176,6 +2201,8 @@ impl Model {
                     self.warnings.insert(Warning::PathNameTooLong(i));
                 }
             }
+
+            self.recheck_cross_object_warnings();
 
             for duped_name in self.paths.iter().map(|path| &path.name).duplicates() {
                 self.warnings.insert(Warning::DuplicatePathName(duped_name.clone()));
@@ -3316,6 +3343,7 @@ pub enum Warning {
     TooFewTurretFirePoints(usize),
     TooManyTurretFirePoints(usize),
     DuplicatePathName(String),
+    ContestedPath(usize),
     DuplicateDetailLevel(SubmodelId),
     TooManyEyePoints,
     TooManyTextures,

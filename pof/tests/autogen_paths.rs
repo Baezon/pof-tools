@@ -553,6 +553,52 @@ fn take_geometry_from_handles_gaining_points() {
 // ---------------------------------------------------------------- docking bay path conflicts
 
 #[test]
+fn docking_bays_sharing_a_path_raise_no_warning() {
+    let mut model = base_model();
+    model.docking_bays.push(Dock { position: Vec3d::new(0.0, 0.0, 20.0), ..Default::default() });
+    model.docking_bays.push(Dock { position: Vec3d::new(0.0, 0.0, -20.0), ..Default::default() });
+    let (generated, assignments) = model.compute_auto_gen_paths();
+    model.paths.extend(generated);
+    for (bay, path) in assignments {
+        model.docking_bays[bay].path = Some(path);
+    }
+    model.recheck_warnings(Set::All);
+    assert!(model.warnings.iter().all(|warning| !matches!(warning, Warning::ContestedPath(_))));
+
+    // the user repoints bay 1 at bay 0's path, which is ordinary - through both the full recheck
+    // and the cheap one edits use
+    model.docking_bays[1].path = Some(PathId(1));
+    model.recheck_warnings(Set::All);
+    assert!(model.warnings.iter().all(|warning| !matches!(warning, Warning::ContestedPath(_))));
+    model.recheck_cross_object_warnings();
+    assert!(model.warnings.iter().all(|warning| !matches!(warning, Warning::ContestedPath(_))));
+}
+
+#[test]
+fn a_contested_path_is_flagged() {
+    let mut model = turret_model();
+    let (generated, _) = model.compute_auto_gen_paths();
+    model.paths.extend(generated);
+    assert_eq!(model.paths[0].parent, "turret01");
+
+    // the user points bay 0 at the turret's path
+    model.docking_bays.push(Dock { path: Some(PathId(0)), ..Default::default() });
+
+    model.recheck_warnings(Set::All);
+    assert!(model.warnings.contains(&Warning::ContestedPath(0)));
+    assert!(!model.warnings.contains(&Warning::ContestedPath(1)), "the untouched path is fine");
+
+    // pointing it at a path of its own clears the warning again
+    model.paths.push(Path { name: "$path09".into(), parent: "$dock01-01".into(), points: vec![] });
+    let own_path = PathId(model.paths.len() as u32 - 1);
+    model.docking_bays[0].path = Some(own_path);
+
+    assert!(model.path_claimants(&model.path_name_index(), own_path) == vec![PathTarget::DockingBay(0)], "a $dockNN-01 parent names no object");
+    model.recheck_warnings(Set::All);
+    assert!(model.warnings.iter().all(|warning| !matches!(warning, Warning::ContestedPath(_))));
+}
+
+#[test]
 fn regenerating_every_path_restores_the_generated_geometry() {
     let mut model = turret_model();
     model.docking_bays.push(Dock { position: Vec3d::new(0.0, 0.0, 20.0), ..Default::default() });
@@ -629,6 +675,9 @@ fn an_empty_parent_names_nothing() {
     model.paths.extend(generated);
     assert_eq!(parents(&model.paths).last(), Some(&"engine01"));
     assert!(model.compute_auto_gen_paths().0.is_empty(), "still idempotent with an unnamed subsystem about");
+
+    model.recheck_warnings(Set::All);
+    assert!(model.warnings.iter().all(|warning| !matches!(warning, Warning::ContestedPath(_))));
 }
 
 #[test]
@@ -706,6 +755,27 @@ fn dropping_paths_keeps_docking_bay_links_pointing_at_the_right_path() {
     assert_eq!(model.first_path_for(&model.path_name_index(), PathTarget::DockingBay(0)), Some(PathId(0)));
     assert_eq!(model.first_path_for(&model.path_name_index(), PathTarget::DockingBay(1)), Some(PathId(1)));
     assert!(model.compute_auto_gen_paths().0.iter().all(|path| path.parent != "$dock01-01"), "no duplicate for bay 0");
+}
+
+#[test]
+fn a_rename_refreshes_the_contested_path_warning() {
+    // the cheap recheck an edit widget runs on every keystroke, not the full one
+    let mut model = base_model();
+    model.submodels.0.push(smodel(3, "engine02", "$special=subsystem", Vec3d::new(0.0, 0.0, 60.0), 8.0));
+    let (generated, _) = model.compute_auto_gen_paths();
+    model.paths.extend(generated);
+    model.recheck_warnings(Set::All);
+    let contested = |m: &Model| m.warnings.iter().filter(|w| matches!(w, Warning::ContestedPath(_))).count();
+    assert_eq!(contested(&model), 0);
+
+    // engine02 now shares engine01's name, so both claim engine01's path
+    model.submodels[SubmodelId(3)].name = "engine01".into();
+    model.recheck_cross_object_warnings();
+    assert_eq!(contested(&model), 1, "noticed without a full recheck");
+
+    model.submodels[SubmodelId(3)].name = "engine02".into();
+    model.recheck_cross_object_warnings();
+    assert_eq!(contested(&model), 0);
 }
 
 #[test]

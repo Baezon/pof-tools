@@ -1218,7 +1218,7 @@ impl PofToolsGui {
 
                 for (i, &id) in self.model.header.detail_levels.iter().enumerate() {
                     let mut combo_idx = 0;
-                    let mut listed_models = vec![];
+                    let mut listed_models = vec!["None".to_string()];
                     let mut active_warning_idx = None;
 
                     // add all the valid models
@@ -1245,13 +1245,10 @@ impl PofToolsGui {
                         active_warning_idx = Some(combo_idx);
                     }
 
-                    //finally add a "None" option
-                    listed_models.push(format!("None"));
-
                     if let Some(new_idx) =
                         UiState::submodel_combo_box(ui, &listed_models, &mut combo_idx, Some(()), &format!("- {}", i), None, active_warning_idx)
                     {
-                        if new_idx == listed_models.len() - 1 {
+                        if new_idx == 0 {
                             changed_detail = Some((i, None));
                         } else {
                             changed_detail = Some((i, self.model.get_model_id_by_name(&listed_models[new_idx])));
@@ -1261,16 +1258,16 @@ impl PofToolsGui {
 
                 // add a special dummy detail level so that users can add new ones
                 {
-                    let mut listed_models: Vec<String> = self
-                        .model
-                        .submodels
-                        .iter()
-                        .filter(|smodel| smodel.parent().is_none() && !smodel.is_debris_model)
-                        .map(|smodel| smodel.name.clone())
-                        .collect();
-                    listed_models.push(format!("None"));
+                    let mut listed_models = vec!["None".to_string()];
+                    listed_models.extend(
+                        self.model
+                            .submodels
+                            .iter()
+                            .filter(|smodel| smodel.parent().is_none() && !smodel.is_debris_model)
+                            .map(|smodel| smodel.name.clone()),
+                    );
 
-                    let mut combo_idx = listed_models.len() - 1;
+                    let mut combo_idx = 0;
                     if let Some(new_idx) = UiState::submodel_combo_box(
                         ui,
                         &listed_models,
@@ -1280,7 +1277,7 @@ impl PofToolsGui {
                         None,
                         None,
                     ) {
-                        if new_idx == listed_models.len() - 1 {
+                        if new_idx == 0 {
                             changed_detail = Some((self.model.header.detail_levels.len(), None));
                         } else {
                             changed_detail = Some((self.model.header.detail_levels.len(), self.model.get_model_id_by_name(&listed_models[new_idx])));

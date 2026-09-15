@@ -4,6 +4,7 @@ use glium::{
     texture::{RawImage2d, SrgbTexture2d},
     Display,
 };
+use nalgebra_glm::TMat4;
 use pof::{properties_get_field, Error, Set, Submodel, SubmodelVec, TextureId, Vec3d, Version, Warning, WeaponHardpoint};
 use std::{
     collections::HashMap,
@@ -68,15 +69,15 @@ impl Default for TreeValue {
 impl TreeValue {
     pub fn get_position_ref<'a>(&self, model: &'a mut Model) -> Option<&'a mut Vec3d> {
         match *self {
-            TreeValue::Weapons(WeaponTreeValue::PriBankPoint(i, j)) => Some(&mut model.primary_weps[i][j].position),
-            TreeValue::Weapons(WeaponTreeValue::SecBankPoint(i, j)) => Some(&mut model.secondary_weps[i][j].position),
-            TreeValue::DockingBays(DockingTreeValue::Bay(i)) => Some(&mut model.docking_bays[i].position),
-            TreeValue::Thrusters(ThrusterTreeValue::BankPoint(i, j)) => Some(&mut model.thruster_banks[i].glows[j].position),
-            TreeValue::Glows(GlowTreeValue::BankPoint(i, j)) => Some(&mut model.glow_banks[i].glow_points[j].position),
-            TreeValue::SpecialPoints(SpecialPointTreeValue::Point(i)) => Some(&mut model.special_points[i].position),
-            TreeValue::Turrets(TurretTreeValue::TurretPoint(i, j)) => Some(&mut model.turrets[i].fire_points[j]),
-            TreeValue::Paths(PathTreeValue::PathPoint(i, j)) => Some(&mut model.paths[i].points[j].position),
-            TreeValue::EyePoints(EyeTreeValue::EyePoint(i)) => Some(&mut model.eye_points[i].position),
+            TreeValue::Weapons(WeaponTreeValue::PriBankPoint(i, j)) => Some(&mut model.primary_weps.get_mut(i)?.get_mut(j)?.position),
+            TreeValue::Weapons(WeaponTreeValue::SecBankPoint(i, j)) => Some(&mut model.secondary_weps.get_mut(i)?.get_mut(j)?.position),
+            TreeValue::DockingBays(DockingTreeValue::Bay(i)) => Some(&mut model.docking_bays.get_mut(i)?.position),
+            TreeValue::Thrusters(ThrusterTreeValue::BankPoint(i, j)) => Some(&mut model.thruster_banks.get_mut(i)?.glows.get_mut(j)?.position),
+            TreeValue::Glows(GlowTreeValue::BankPoint(i, j)) => Some(&mut model.glow_banks.get_mut(i)?.glow_points.get_mut(j)?.position),
+            TreeValue::SpecialPoints(SpecialPointTreeValue::Point(i)) => Some(&mut model.special_points.get_mut(i)?.position),
+            TreeValue::Turrets(TurretTreeValue::TurretPoint(i, j)) => model.turrets.get_mut(i)?.fire_points.get_mut(j),
+            TreeValue::Paths(PathTreeValue::PathPoint(i, j)) => Some(&mut model.paths.get_mut(i)?.points.get_mut(j)?.position),
+            TreeValue::EyePoints(EyeTreeValue::EyePoint(i)) => Some(&mut model.eye_points.get_mut(i)?.position),
             TreeValue::VisualCenter => Some(&mut model.visual_center),
             _ => None,
         }
@@ -492,6 +493,85 @@ pub enum DragAxis {
     XY,
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum GizmoMode {
+    Translate,
+    Rotate,
+    Scale,
+}
+impl GizmoMode {
+    /// Rotate/Scale bake into submodel geometry, so they only apply to submodels.
+    pub fn allowed_on(self, target: GizmoTarget) -> bool {
+        self == GizmoMode::Translate || matches!(target, GizmoTarget::Submodel(_))
+    }
+}
+
+#[derive(Copy, Clone, PartialEq)]
+pub enum GizmoTarget {
+    Submodel(SubmodelId),
+    Point(TreeValue),
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum GizmoAxis {
+    X,
+    Y,
+    Z,
+    /// The screen-space center handle.
+    Center,
+}
+impl GizmoAxis {
+    pub const XYZ: [GizmoAxis; 3] = [GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z];
+    /// Index into a `[Vec3d; 3]` axes array; `None` for the center handle.
+    pub fn index(self) -> Option<usize> {
+        Self::XYZ.iter().position(|&axis| axis == self)
+    }
+}
+
+#[derive(Clone)]
+pub struct GizmoSubmodelSnapshot {
+    pub id: SubmodelId,
+    pub transform: TMat4<f32>,
+    pub offset: Vec3d,
+    pub properties: String,
+}
+
+#[derive(Clone)]
+pub struct GizmoTurretSnapshot {
+    pub index: usize,
+    pub value: pof::Turret,
+    pub transform_firepoints: bool,
+    pub transform_normal: bool,
+}
+
+#[derive(Clone)]
+pub enum GizmoSnapshot {
+    Point(Vec3d),
+    Submodels {
+        submodels: Vec<GizmoSubmodelSnapshot>,
+        turrets: Vec<GizmoTurretSnapshot>,
+    },
+}
+
+pub struct GizmoDrag {
+    pub mode: GizmoMode,
+    pub target: GizmoTarget,
+    pub axis: GizmoAxis,
+    pub axis_vec: Vec3d,
+    pub center: Vec3d,
+    pub gizmo_len: f32,
+    pub start_param: f32,
+    pub last_param: f32,
+    pub last_vec: Vec3d,
+    pub last_pointer: egui::Pos2,
+    pub view_right: Vec3d,
+    pub view_up: Vec3d,
+    pub world_per_point: f32,
+    pub accum_offset: Vec3d,
+    pub accum_mat: TMat4<f32>,
+    pub snapshot: GizmoSnapshot,
+}
+
 #[derive(PartialEq, Eq)]
 pub(crate) enum DisplayMode {
     Wireframe,
@@ -549,6 +629,11 @@ pub(crate) struct PofToolsGui {
     pub actually_dragging: bool,
     pub drag_start: Vec3d,
     pub drag_axis: DragAxis,
+
+    pub gizmo_mode: Option<GizmoMode>,
+    pub gizmo_local: bool,
+    pub gizmo_hover_axis: Option<GizmoAxis>,
+    pub gizmo_drag: Option<GizmoDrag>,
 
     pub graphics: Graphics,
     pub buffer_textures: HashMap<TextureId, SrgbTexture2d>, // map of tex ids to actual textures
@@ -616,12 +701,32 @@ impl PofToolsGui {
             drag_start: Vec3d::ZERO,
             drag_axis: DragAxis::YZ,
             actually_dragging: false,
+            gizmo_mode: None,
+            gizmo_local: false,
+            gizmo_hover_axis: None,
+            gizmo_drag: None,
             graphics: Graphics::init(display),
         }
     }
 
     fn tree_selectable_item(&mut self, ui: &mut Ui, name: &str, selection: TreeValue) {
         self.ui_state.tree_selectable_item(&self.model, ui, name, selection);
+    }
+
+    pub fn gizmo_target(&mut self) -> Option<GizmoTarget> {
+        match self.ui_state.tree_view_selection {
+            TreeValue::Submodels(SubmodelTreeValue::Submodel(id)) => Some(GizmoTarget::Submodel(id)),
+            tree_val if tree_val.get_position_ref(&mut self.model).is_some() => Some(GizmoTarget::Point(tree_val)),
+            _ => None,
+        }
+    }
+
+    pub fn normalize_gizmo_mode(&mut self) {
+        if let (Some(target), Some(mode)) = (self.gizmo_target(), self.gizmo_mode) {
+            if !mode.allowed_on(target) {
+                self.gizmo_mode = Some(GizmoMode::Translate);
+            }
+        }
     }
 }
 
@@ -1007,6 +1112,39 @@ impl PofToolsGui {
                         self.display_mode = DisplayMode::Wireframe;
                     }
                 });
+
+                ui.separator();
+
+                self.normalize_gizmo_mode();
+                let gizmo_target = self.gizmo_target();
+                let gizmo_local_ok = matches!(gizmo_target, Some(GizmoTarget::Submodel(_))) && self.gizmo_mode.is_some();
+                for (mode, label, hover_text) in [
+                    (GizmoMode::Translate, "G", "Move gizmo (G)"),
+                    (GizmoMode::Rotate, "R", "Rotate gizmo (R) — submodels only"),
+                    (GizmoMode::Scale, "S", "Scale gizmo (S) — submodels only"),
+                ] {
+                    let enabled = gizmo_target.is_some_and(|target| mode.allowed_on(target));
+                    ui.scope(|ui| {
+                        if self.gizmo_mode == Some(mode) && enabled {
+                            ui.visuals_mut().widgets.inactive.bg_stroke = ui.visuals().widgets.hovered.bg_stroke;
+                        }
+                        if ui
+                            .add_enabled(enabled, Button::new(RichText::new(label).text_style(TextStyle::Button)))
+                            .on_hover_text(hover_text)
+                            .on_disabled_hover_text("Select a submodel or editable point to use the transform gizmo.")
+                            .clicked()
+                        {
+                            self.gizmo_mode = if self.gizmo_mode == Some(mode) { None } else { Some(mode) };
+                        }
+                    });
+                }
+                if ui
+                    .add_enabled(gizmo_local_ok, Button::new(if gizmo_local_ok && self.gizmo_local { "Local" } else { "World" }))
+                    .on_hover_text("Gizmo axis basis. Local uses the selected submodel's staged rotation.")
+                    .clicked()
+                {
+                    self.gizmo_local = !self.gizmo_local;
+                }
 
                 ui.add_space(ui.available_width() - ui.spacing().interact_size.x / 2.0);
 

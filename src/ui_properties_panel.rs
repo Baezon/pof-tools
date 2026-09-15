@@ -676,7 +676,7 @@ impl UiState {
                         position_string: format!("{}", model.docking_bays[bay].position),
                         fvec_string: format!("{}", model.docking_bays[bay].fvec.0),
                         uvec_ang: model.docking_bays[bay].get_uvec_angle().to_degrees() % 360.0,
-                        path_num: model.docking_bays[bay].path.unwrap_or(PathId(model.paths.len() as u32)).0 as usize,
+                        path_num: model.docking_bays[bay].path.map_or(0, |path| path.0 as usize + 1),
                     }
                 }
                 _ => self.properties_panel = PropertiesPanel::default_docking_bay(),
@@ -778,7 +778,7 @@ impl UiState {
                     self.properties_panel = PropertiesPanel::EyePoint {
                         position_string: format!("{}", model.eye_points[idx].position),
                         normal_string: format!("{}", model.eye_points[idx].normal.0),
-                        attached_submodel_idx: model.eye_points[idx].attached_submodel.map_or(model.submodels.len(), |id| id.0 as usize),
+                        attached_submodel_idx: model.eye_points[idx].attached_submodel.map_or(0, |id| id.0 as usize + 1),
                     }
                 }
                 _ => self.properties_panel = PropertiesPanel::default_eye(),
@@ -1218,7 +1218,7 @@ impl PofToolsGui {
 
                 for (i, &id) in self.model.header.detail_levels.iter().enumerate() {
                     let mut combo_idx = 0;
-                    let mut listed_models = vec![];
+                    let mut listed_models = vec!["None".to_string()];
                     let mut active_warning_idx = None;
 
                     // add all the valid models
@@ -1245,13 +1245,10 @@ impl PofToolsGui {
                         active_warning_idx = Some(combo_idx);
                     }
 
-                    //finally add a "None" option
-                    listed_models.push(format!("None"));
-
                     if let Some(new_idx) =
                         UiState::submodel_combo_box(ui, &listed_models, &mut combo_idx, Some(()), &format!("- {}", i), None, active_warning_idx)
                     {
-                        if new_idx == listed_models.len() - 1 {
+                        if new_idx == 0 {
                             changed_detail = Some((i, None));
                         } else {
                             changed_detail = Some((i, self.model.get_model_id_by_name(&listed_models[new_idx])));
@@ -1261,16 +1258,16 @@ impl PofToolsGui {
 
                 // add a special dummy detail level so that users can add new ones
                 {
-                    let mut listed_models: Vec<String> = self
-                        .model
-                        .submodels
-                        .iter()
-                        .filter(|smodel| smodel.parent().is_none() && !smodel.is_debris_model)
-                        .map(|smodel| smodel.name.clone())
-                        .collect();
-                    listed_models.push(format!("None"));
+                    let mut listed_models = vec!["None".to_string()];
+                    listed_models.extend(
+                        self.model
+                            .submodels
+                            .iter()
+                            .filter(|smodel| smodel.parent().is_none() && !smodel.is_debris_model)
+                            .map(|smodel| smodel.name.clone()),
+                    );
 
-                    let mut combo_idx = listed_models.len() - 1;
+                    let mut combo_idx = 0;
                     if let Some(new_idx) = UiState::submodel_combo_box(
                         ui,
                         &listed_models,
@@ -1280,7 +1277,7 @@ impl PofToolsGui {
                         None,
                         None,
                     ) {
-                        if new_idx == listed_models.len() - 1 {
+                        if new_idx == 0 {
                             changed_detail = Some((self.model.header.detail_levels.len(), None));
                         } else {
                             changed_detail = Some((self.model.header.detail_levels.len(), self.model.get_model_id_by_name(&listed_models[new_idx])));
@@ -2683,13 +2680,10 @@ impl PofToolsGui {
 
                 // combo box list of path names
                 //  no valid bay selected -> a single empty string
-                //  valid bay, without a path -> list of paths, followed by a single empty string
-                //  valid bay, with a path -> list of paths
-                let paths = if let Some(bay) = bay_num {
-                    let mut out: Vec<String> = self.model.paths.iter().map(|path| path.name.clone()).collect();
-                    if self.model.docking_bays[bay].path.is_none() {
-                        out.push(String::new());
-                    }
+                //  valid bay -> "None", followed by the list of paths
+                let paths = if bay_num.is_some() {
+                    let mut out = vec!["None".to_string()];
+                    out.extend(self.model.paths.iter().map(|path| path.name.clone()));
                     out
                 } else {
                     vec![String::new()]
@@ -2702,11 +2696,7 @@ impl PofToolsGui {
                         .changed()
                     {
                         let bay_num = bay_num.unwrap();
-                        let mut new_path = if *path_num == self.model.paths.len() {
-                            None
-                        } else {
-                            Some(PathId(*path_num as u32))
-                        };
+                        let mut new_path = if *path_num == 0 { None } else { Some(PathId(*path_num as u32 - 1)) };
 
                         model_action(
                             undo_history,
@@ -3542,18 +3532,18 @@ impl PofToolsGui {
 
                 ui.add_enabled_ui(eye_num.is_some(), |ui| {
                     if let Some(num) = eye_num {
-                        let mut name_list = self.model.get_smodel_names();
-                        name_list.push("None".to_string());
+                        let mut name_list = vec!["None".to_string()];
+                        name_list.extend(self.model.get_smodel_names());
 
                         let changed = egui::ComboBox::from_label("Attached submodel")
                             .show_index(ui, attached_submodel_idx, name_list.len(), |i| name_list[i].to_owned())
                             .changed();
 
                         if changed {
-                            let mut new_val = if *attached_submodel_idx < self.model.submodels.len() {
-                                Some(SubmodelId(*attached_submodel_idx as u32))
-                            } else {
+                            let mut new_val = if *attached_submodel_idx == 0 {
                                 None
+                            } else {
+                                Some(SubmodelId(*attached_submodel_idx as u32 - 1))
                             };
 
                             model_action(

@@ -4,7 +4,7 @@ use glium::{
     texture::{RawImage2d, SrgbTexture2d},
     Display,
 };
-use pof::{properties_get_field, Error, Set, Submodel, SubmodelVec, TextureId, Vec3d, Version, Warning, WeaponHardpoint};
+use pof::{properties_get_field, Error, PathId, Set, Submodel, SubmodelVec, TextureId, Vec3d, Version, Warning, WeaponHardpoint};
 use std::{
     collections::HashMap,
     f32::consts::{FRAC_PI_2, PI},
@@ -120,6 +120,7 @@ impl TreeValue {
             Warning::SubmodelTranslationInvalidVersion(id) => Some(TreeValue::Submodels(SubmodelTreeValue::Submodel(*id))),
             Warning::UntexturedPolygons => Some(TreeValue::Textures(TextureTreeValue::tex(model.untextured_idx))),
             Warning::DockingBayWithoutPath(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(*idx))),
+            Warning::ContestedPath(idx) => Some(TreeValue::Paths(PathTreeValue::Path(*idx))),
             Warning::ThrusterPropertiesInvalidVersion(idx) => Some(TreeValue::Thrusters(ThrusterTreeValue::Bank(*idx))),
             Warning::WeaponOffsetInvalidVersion { primary, bank, point } => {
                 if *primary {
@@ -517,6 +518,7 @@ pub struct UiState {
     pub display_uvec_fvec: bool,
     pub move_only_offset: bool,
     pub auto_gen_paths_confirm: bool,
+    pub auto_gen_paths_regen_existing: bool,
 }
 
 pub(crate) struct PofToolsGui {
@@ -786,6 +788,13 @@ pub fn model_action(undo_history: &mut undo::History<UndoAction>, model: &mut Mo
     let _ = undo_history.apply(model, UndoAction { function: func });
     model.recheck_warnings(Set::All);
     model.recheck_errors(Set::All);
+}
+
+/// `model_action` for widgets which fire on every keystroke. Rechecks only the warnings which depend on
+/// other objects' names, since a full recheck walks every vertex.
+pub fn model_edit_action(undo_history: &mut undo::History<UndoAction>, model: &mut Model, func: Box<dyn FnMut(&mut Model)>) {
+    let _ = undo_history.apply(model, UndoAction { function: func });
+    model.recheck_cross_object_warnings();
 }
 
 impl PofToolsGui {
@@ -1132,6 +1141,8 @@ impl PofToolsGui {
                             });
                         }
 
+                        let mut path_names = None;
+
                         for warning in &self.model.warnings {
                             let str = match warning {
                                 Warning::InvertedBBox(id_opt) => {
@@ -1141,6 +1152,24 @@ impl PofToolsGui {
                                     format!(
                                         "⚠ Docking bay {} cannot be used by ships without a path",
                                         self.model.docking_bays[*bay_num].get_name().unwrap_or(&(bay_num + 1).to_string())
+                                    )
+                                }
+                                Warning::ContestedPath(idx) => {
+                                    let index = path_names.get_or_insert_with(|| self.model.path_name_index());
+                                    let claimants = self
+                                        .model
+                                        .path_claimants(index, PathId(*idx as u32))
+                                        .into_iter()
+                                        .map(|target| match self.model.target_parent_name(target) {
+                                            // the kind too, since claimants often share a name
+                                            Some(name) => format!("{} ({})", name, target),
+                                            None => target.to_string(),
+                                        })
+                                        .collect::<Vec<_>>();
+                                    format!(
+                                        "⚠ Path {} is shared by {}, which should have different paths",
+                                        self.model.paths[*idx].name,
+                                        claimants.join(" and ")
                                     )
                                 }
                                 Warning::ThrusterPropertiesInvalidVersion(idx) => {

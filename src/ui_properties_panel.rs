@@ -1704,6 +1704,14 @@ impl PofToolsGui {
                     .changed()
                     {
                         self.model.recheck_warnings(One(Warning::SubmodelNameTooLong(id)));
+                        // a bay naming the old name may have lost its parent, and one naming the new name found it
+                        let new_name = self.model.submodels[id].name.clone();
+                        for bay in 0..self.model.docking_bays.len() {
+                            let parent = pof::properties_get_field(&self.model.docking_bays[bay].properties, "$parent_submodel");
+                            if parent == Some(old_name.as_str()) || parent == Some(new_name.as_str()) {
+                                self.model.recheck_warnings(One(Warning::InvalidDockParentSubmodel(bay)));
+                            }
+                        }
                         self.model.recheck_errors(One(Error::UnnamedSubmodel(id)));
                         self.model.recheck_errors(One(Error::DuplicateSubmodelName(old_name)));
                         self.model

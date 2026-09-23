@@ -2500,8 +2500,12 @@ impl Model {
 
         let sobj_name_map: HashMap<String, usize> = self.submodels.iter().map(|s| (normalize_path_parent(&s.name), s.id.0 as usize)).collect();
 
-        let spcl_name_map: HashMap<String, usize> =
-            self.special_points.iter().enumerate().map(|(i, s)| (normalize_path_parent(&s.name), i)).collect();
+        let spcl_name_map: HashMap<String, usize> = self
+            .special_points
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (normalize_path_parent(&s.name), i))
+            .collect();
 
         // Track which objects already have paths (true = skip)
         let mut turret_has_path = vec![false; self.turrets.len()];
@@ -2951,9 +2955,12 @@ impl Model {
 
             let point_mass = self.header.mass as f64 / num_verts as f64;
             new_moi *= point_mass;
-            new_moi = new_moi.try_inverse().unwrap();
-
-            Some(new_moi.cast::<f32>().into())
+            if let Some(final_moi) = new_moi.try_inverse() {
+                Some(final_moi.cast::<f32>().into())
+            } else {
+                warn!("This model is weird, and pof tools couldn't make a proper moment of inertia for it :(");
+                Some(Mat3d::IDENTITY)
+            }
         } else {
             None
         }

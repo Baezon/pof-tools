@@ -15,7 +15,7 @@ use pof::{
     Warning,
 };
 
-use crate::Model;
+use crate::{GlBufferedInsignia, GlBufferedShield, GlMeshBuffers, Model};
 
 use crate::ui::{
     model_action, DockingTreeValue, EyeTreeValue, GlowTreeValue, InsigniaTreeValue, PathTreeValue, PofToolsGui, SpecialPointTreeValue,
@@ -1343,7 +1343,30 @@ impl PofToolsGui {
                 if let Some(matrix) = UiState::show_transform_window(ctx, transform_window, Some(text)) {
                     // this is way too complicated to undo...
                     undo_history.clear();
+
+                    // the submodel transforms still waiting to be applied come before this one
+                    for id in 0..self.model.pof_model.submodels.len() {
+                        let id = SubmodelId(id as u32);
+                        self.model
+                            .pof_model
+                            .apply_submodel_transform_mesh(id, &self.model.submodel_transform_matrix[id]);
+                        self.model.submodel_transform_matrix[id] = glm::identity();
+                    }
                     self.model.apply_transform(&matrix);
+
+                    // polygons keep their original texture ids until saving, which a merge leaves beyond the texture list
+                    let num_textures = self.model.texture_map.len();
+                    for (buffers, submodel) in self.model.buffer_meshes.0.iter_mut().zip(&self.model.pof_model.submodels) {
+                        *buffers = GlMeshBuffers::new(display, submodel, num_textures);
+                    }
+                    self.buffer_insignias = self
+                        .model
+                        .insignias
+                        .iter()
+                        .map(|insignia| GlBufferedInsignia::new(display, insignia))
+                        .collect();
+                    self.buffer_shield = self.model.shield_data.as_ref().map(|shield| GlBufferedShield::new(display, shield));
+
                     self.ui_state.viewport_3d_dirty = true;
                     self.ui_state.properties_panel_dirty = true;
                     self.model.recheck_warnings(One(Warning::Detail0NonZeroOffset));

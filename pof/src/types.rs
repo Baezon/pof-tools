@@ -13,7 +13,7 @@ use byteorder::{WriteBytesExt, LE};
 pub use dae_parser::UpAxis;
 use glm::{TMat3, TMat4, Vec3};
 use log::warn;
-use nalgebra::Matrix3;
+use nalgebra::{Matrix3, Vector3};
 use nalgebra_glm::Mat4;
 extern crate nalgebra_glm as glm;
 
@@ -1509,17 +1509,24 @@ impl Submodel {
         let mut surface_area = 0.0;
         let mut weighted_sum = Vec3d::ZERO;
         for (_, poly) in self.bsp_data.collision_tree.leaves() {
-            let v1 = self.bsp_data.verts[poly.verts[0].vertex_id.0 as usize];
-            let v2 = self.bsp_data.verts[poly.verts[1].vertex_id.0 as usize];
-            let v3 = self.bsp_data.verts[poly.verts[2].vertex_id.0 as usize];
+            if let [first, rest @ ..] = &poly.verts[..] {
+                let v1 = self.bsp_data.verts[first.vertex_id.0 as usize];
+                for pair in rest.windows(2) {
+                    let v2 = self.bsp_data.verts[pair[0].vertex_id.0 as usize];
+                    let v3 = self.bsp_data.verts[pair[1].vertex_id.0 as usize];
 
-            let v12 = v2 - v1;
-            let v13 = v3 - v1;
-            let this_area = v12.cross(&v13).magnitude();
-            weighted_sum += Vec3d::average([v1, v2, v3].into_iter()) * this_area;
-            surface_area += this_area;
+                    let this_area = 0.5 * (v2 - v1).cross(&(v3 - v1)).magnitude();
+                    weighted_sum += Vec3d::average([v1, v2, v3].into_iter()) * this_area;
+                    surface_area += this_area;
+                }
+            }
         }
-        (surface_area, weighted_sum / surface_area)
+
+        if surface_area > 0.0 {
+            (surface_area, weighted_sum / surface_area)
+        } else {
+            (0.0, Vec3d::ZERO)
+        }
     }
 }
 
@@ -2003,6 +2010,7 @@ impl Model {
                     properties_get_field(&dock.properties, "$parent_submodel").map_or(false, |name| self.get_model_id_by_name(name).is_none())
                 }),
                 Warning::Detail0NonZeroOffset => self.header.detail_levels.get(0).map_or(false, |id| !self.submodels[*id].offset.is_null()),
+                Warning::InvalidMomentOfInertia => self.moi_test_failed(),
             };
 
             let existing_warning = self.warnings.contains(&warning);
@@ -2141,6 +2149,10 @@ impl Model {
                 }
             }
 
+            if self.moi_test_failed() {
+                self.warnings.insert(Warning::InvalidMomentOfInertia);
+            }
+
             for duped_id in self.header.detail_levels.iter().duplicates() {
                 self.warnings.insert(Warning::DuplicateDetailLevel(*duped_id));
             }
@@ -2218,6 +2230,29 @@ impl Model {
             }
         }
 
+        false
+    }
+
+    // FSO rejects a moment of inertia containing a NaN or infinity, and treats one that is below 1e-36 throughout as missing
+    fn moi_test_failed(&self) -> bool {
+        let moi = glm::Mat3x3::from(self.header.moment_of_inertia);
+        !self.submodels.is_empty() && (moi.iter().any(|val| !val.is_finite()) || moi.iter().all(|val| val.abs() < 1e-36))
+    }
+
+    // whether this submodel is missing from an intact ship, as a destroyed version, live debris, or a descendant of either
+    fn is_hidden_when_intact(&self, id: SubmodelId) -> bool {
+        let mut id_opt = Some(id);
+        while let Some(id) = id_opt {
+            let smodel = &self.submodels[id];
+            if smodel
+                .name_links
+                .iter()
+                .any(|link| matches!(link, NameLink::DestroyedVersionOf(_) | NameLink::LiveDebrisOf(_)))
+            {
+                return true;
+            }
+            id_opt = smodel.parent;
+        }
         false
     }
 
@@ -2693,7 +2728,6 @@ impl Model {
         f(&self.submodels[id]);
 
         for &child_id in self.submodels[id].children() {
-            f(&self.submodels[child_id]);
             self.do_for_recursive_smodel_children(child_id, f);
         }
     }
@@ -2719,6 +2753,20 @@ impl Model {
 
         self.header.bbox = self.recalc_bbox();
         self.header.max_radius = self.recalc_radius();
+        self.header.center_of_mass = matrix * self.header.center_of_mass;
+
+        // the translation is left out, its effect on the moment of inertia depends on where the mass is
+        let linear = matrix.fixed_view::<3, 3>(0, 0).into_owned().cast::<f64>();
+        let inv_moi = glm::Mat3x3::from(self.header.moment_of_inertia).cast::<f64>();
+        if let Some(moi) = inv_moi.try_inverse() {
+            let second_moment = linear * (Matrix3::identity() * (0.5 * moi.trace()) - moi) * linear.transpose();
+            let new_moi = Matrix3::identity() * second_moment.trace() - second_moment;
+            if let Some(new_inv_moi) = new_moi.try_inverse().map(|mat| mat.cast::<f32>()) {
+                if new_inv_moi.iter().all(|val| val.is_finite()) {
+                    self.header.moment_of_inertia = new_inv_moi.into();
+                }
+            }
+        }
 
         for path in &mut self.paths {
             path.apply_transform(&matrix);
@@ -2796,8 +2844,17 @@ impl Model {
             *norm = (&norm_matrix * *norm).normalize();
         }
 
-        submodel.bsp_data.collision_tree =
-            BspData::recalculate(&submodel.bsp_data.verts, std::mem::take(&mut submodel.bsp_data.collision_tree).into_leaves().map(|(_, poly)| poly));
+        // a mirror would leave the polygons facing inwards, were their winding not reversed along with it
+        let mirrored = no_trans_matrix.determinant() < 0.0;
+        submodel.bsp_data.collision_tree = BspData::recalculate(
+            &submodel.bsp_data.verts,
+            std::mem::take(&mut submodel.bsp_data.collision_tree).into_leaves().map(|(_, mut poly)| {
+                if mirrored {
+                    poly.verts.reverse();
+                }
+                poly
+            }),
+        );
 
         submodel.bbox = *submodel.bsp_data.collision_tree.bbox();
 
@@ -2830,8 +2887,17 @@ impl Model {
             *norm = (&norm_matrix * *norm).normalize();
         }
 
-        submodel.bsp_data.collision_tree =
-            BspData::recalculate(&submodel.bsp_data.verts, std::mem::take(&mut submodel.bsp_data.collision_tree).into_leaves().map(|(_, poly)| poly));
+        // a mirror would leave the polygons facing inwards, were their winding not reversed along with it
+        let mirrored = no_trans_matrix.determinant() < 0.0;
+        submodel.bsp_data.collision_tree = BspData::recalculate(
+            &submodel.bsp_data.verts,
+            std::mem::take(&mut submodel.bsp_data.collision_tree).into_leaves().map(|(_, mut poly)| {
+                if mirrored {
+                    poly.verts.reverse();
+                }
+                poly
+            }),
+        );
     }
 
     pub fn recalc_submodel_offset(&mut self, id: SubmodelId) -> Vec3d {
@@ -2920,43 +2986,127 @@ impl Model {
         4.65 * (self.header.bbox.volume().powf(2.0 / 3.0))
     }
 
-    pub fn recalc_moi(&mut self) -> Option<Mat3d> {
-        fn sum_verts_recurse(submodels: &SubmodelVec<Submodel>, id: SubmodelId) -> usize {
-            submodels[id].bsp_data.verts.len() + submodels[id].children.iter().map(|id| sum_verts_recurse(submodels, *id)).sum::<usize>()
+    // the total weight of detail0 and its children, their first moment and their second moment, along with the open submodels left out;
+    // the weight is area for a shell, and volume for a solid
+    #[allow(clippy::type_complexity)]
+    fn mass_integrals(&self, mass_model: MassModel) -> Result<(f64, Vector3<f64>, Matrix3<f64>, Vec<SubmodelId>), MassPropertiesError> {
+        let mut total = 0.0;
+        let mut first_moment = Vector3::zeros();
+        let mut second_moment = Matrix3::zeros();
+        let mut open = vec![];
+        let mut inside_out = vec![];
+
+        for smodel in &self.submodels {
+            let in_detail_0 = self
+                .header
+                .detail_levels
+                .first()
+                .is_some_and(|&detail_0| self.is_model_id_ancestor(smodel.id, detail_0));
+            if !in_detail_0 || self.is_hidden_when_intact(smodel.id) {
+                continue;
+            }
+
+            if matches!(mass_model, MassModel::Solid { .. }) {
+                // the polygons only enclose a volume if each of their edges is met by one running the other way
+                let mut edges: HashMap<[[u32; 3]; 2], i32> = HashMap::new();
+                for (_, poly) in smodel.bsp_data.collision_tree.leaves() {
+                    // verts are told apart by position, with -0.0 taken as 0.0
+                    let keys: Vec<_> = poly
+                        .verts
+                        .iter()
+                        .map(|vert| <[f32; 3]>::from(smodel.bsp_data.verts[vert.vertex_id.0 as usize]).map(|val| (val + 0.0).to_bits()))
+                        .collect();
+                    for (i, &key) in keys.iter().enumerate() {
+                        let next_key = keys[(i + 1) % keys.len()];
+                        *edges.entry([key, next_key]).or_default() += 1;
+                        *edges.entry([next_key, key]).or_default() -= 1;
+                    }
+                }
+
+                if edges.values().any(|&count| count != 0) {
+                    open.push(smodel.id);
+                    continue;
+                }
+            }
+
+            let offset = self.get_total_submodel_offset(smodel.id);
+            let get_vert = |vert: &PolyVertex| Vec3::from(smodel.bsp_data.verts[vert.vertex_id.0 as usize] + offset).cast::<f64>();
+            let mut this_total = 0.0;
+            let mut this_unsigned_total = 0.0;
+            let mut this_first_moment = Vector3::zeros();
+            let mut this_second_moment = Matrix3::zeros();
+            for (_, poly) in smodel.bsp_data.collision_tree.leaves() {
+                if let [first, rest @ ..] = &poly.verts[..] {
+                    let v1 = get_vert(first);
+                    for pair in rest.windows(2) {
+                        let v2 = get_vert(&pair[0]);
+                        let v3 = get_vert(&pair[1]);
+
+                        // for a solid, each triangle stands for the tetrahedron between it and the origin
+                        let (weight, first_scale, second_scale) = match mass_model {
+                            MassModel::Solid { .. } => (v1.dot(&v2.cross(&v3)) / 6.0, 1.0 / 4.0, 1.0 / 20.0),
+                            MassModel::Shell => (0.5 * (v2 - v1).cross(&(v3 - v1)).magnitude(), 1.0 / 3.0, 1.0 / 12.0),
+                        };
+                        let sum = v1 + v2 + v3;
+                        this_total += weight;
+                        this_unsigned_total += weight.abs();
+                        this_first_moment += sum * (weight * first_scale);
+                        this_second_moment +=
+                            (v1 * v1.transpose() + v2 * v2.transpose() + v3 * v3.transpose() + sum * sum.transpose()) * (weight * second_scale);
+                    }
+                }
+            }
+
+            // the margin is for a mesh with no volume to it, like a two sided fin, which won't quite sum to zero
+            if this_total < -1e-9 * this_unsigned_total {
+                inside_out.push(smodel.id);
+                continue;
+            }
+
+            total += this_total;
+            first_moment += this_first_moment;
+            second_moment += this_second_moment;
         }
 
-        if let Some(&detail_0) = self.header.detail_levels.first() {
-            let num_verts = sum_verts_recurse(&self.submodels, detail_0);
-
-            fn add_point_mass_moi(moi: &mut Matrix3<f64>, pos: Vec3d) {
-                moi.column_mut(0).x += (pos.y * pos.y + pos.z * pos.z) as f64;
-                moi.column_mut(0).y -= (pos.x * pos.y) as f64;
-                moi.column_mut(0).z -= (pos.x * pos.z) as f64;
-                moi.column_mut(1).x -= (pos.x * pos.y) as f64;
-                moi.column_mut(1).y += (pos.x * pos.x + pos.z * pos.z) as f64;
-                moi.column_mut(1).z -= (pos.y * pos.z) as f64;
-                moi.column_mut(2).x -= (pos.x * pos.z) as f64;
-                moi.column_mut(2).y -= (pos.y * pos.z) as f64;
-                moi.column_mut(2).z += (pos.x * pos.x + pos.y * pos.y) as f64;
+        if mass_model == (MassModel::Solid { skip_open: true }) {
+            if !inside_out.is_empty() {
+                return Err(MassPropertiesError::BadMesh { open: vec![], inside_out });
             }
+        } else if !open.is_empty() || !inside_out.is_empty() {
+            return Err(MassPropertiesError::BadMesh { open, inside_out });
+        }
 
-            fn accumulate_moi_recurse(submodels: &SubmodelVec<Submodel>, id: SubmodelId, moi: &mut Matrix3<f64>) {
-                submodels[id].bsp_data.verts.iter().for_each(|vert| add_point_mass_moi(moi, *vert));
-                submodels[id].children.iter().for_each(|id| accumulate_moi_recurse(submodels, *id, moi));
-            }
-
-            let mut new_moi: Matrix3<f64> = Matrix3::zeros();
-
-            accumulate_moi_recurse(&self.submodels, detail_0, &mut new_moi);
-
-            let point_mass = self.header.mass as f64 / num_verts as f64;
-            new_moi *= point_mass;
-            new_moi = new_moi.try_inverse().unwrap();
-
-            Some(new_moi.cast::<f32>().into())
+        if total > 0.0 {
+            Ok((total, first_moment, second_moment, open))
         } else {
-            None
+            Err(MassPropertiesError::NothingToWeigh)
         }
+    }
+
+    /// The inverse inertia tensor about the model origin, which is the form FSO uses it in,
+    /// along with the open submodels that were left out of it.
+    pub fn recalc_moi(&self, mass_model: MassModel) -> Result<(Mat3d, Vec<SubmodelId>), MassPropertiesError> {
+        let (total, _, mut second_moment, skipped) = self.mass_integrals(mass_model)?;
+
+        let mass = self.header.mass as f64;
+        if !(mass > 0.0 && mass.is_finite()) {
+            return Err(MassPropertiesError::InvalidMass);
+        }
+
+        second_moment *= mass / total;
+        let moi = Matrix3::identity() * second_moment.trace() - second_moment;
+        let inv_moi = moi.try_inverse().ok_or(MassPropertiesError::Degenerate)?.cast::<f32>();
+        if inv_moi.iter().all(|val| val.is_finite()) {
+            Ok((inv_moi.into(), skipped))
+        } else {
+            Err(MassPropertiesError::Degenerate)
+        }
+    }
+
+    /// The center of mass, along with the open submodels that were left out of it.
+    pub fn recalc_center_of_mass(&self, mass_model: MassModel) -> Result<(Vec3d, Vec<SubmodelId>), MassPropertiesError> {
+        let (total, first_moment, _, skipped) = self.mass_integrals(mass_model)?;
+        Ok(((first_moment / total).cast::<f32>().into(), skipped))
     }
 
     /// returns the surface area of detail0 and its children, and the average surface area position
@@ -2969,13 +3119,21 @@ impl Model {
             return (0.0, Vec3d::ZERO);
         };
 
-        self.do_for_recursive_smodel_children(*detail0, &mut |smodel| {
-            let (this_area, this_avg) = smodel.surface_area_average_pos();
-            weighted_avg += this_avg * this_area;
-            surface_area += this_area;
-        });
+        for smodel in &self.submodels {
+            if !self.is_model_id_ancestor(smodel.id, *detail0) || self.is_hidden_when_intact(smodel.id) {
+                continue;
+            }
 
-        (surface_area, weighted_avg / surface_area)
+            let (this_area, this_avg) = smodel.surface_area_average_pos();
+            weighted_avg += (this_avg + self.get_total_submodel_offset(smodel.id)) * this_area;
+            surface_area += this_area;
+        }
+
+        if surface_area > 0.0 {
+            (surface_area, weighted_avg / surface_area)
+        } else {
+            (0.0, Vec3d::ZERO)
+        }
     }
 
     pub fn recalc_all_children_ids(&mut self) {
@@ -3079,6 +3237,7 @@ impl Model {
 
     pub fn global_import(&mut self, mut import_model: Box<Model>) {
         self.header.mass = import_model.header.mass;
+        self.header.center_of_mass = import_model.header.center_of_mass;
         self.header.moment_of_inertia = import_model.header.moment_of_inertia;
         self.primary_weps = import_model.primary_weps;
         self.secondary_weps = import_model.secondary_weps;
@@ -3134,6 +3293,32 @@ pub enum Set<T> {
     One(T),
 }
 
+/// How the mass is taken to be distributed through the model.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum MassModel {
+    /// Evenly through its volume, which only a closed mesh has. `skip_open` leaves out the submodels that aren't closed.
+    Solid { skip_open: bool },
+    /// Evenly over its surface.
+    Shell,
+}
+impl Default for MassModel {
+    fn default() -> Self {
+        MassModel::Solid { skip_open: false }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum MassPropertiesError {
+    /// Submodels that can't be treated as solid.
+    BadMesh {
+        open: Vec<SubmodelId>,
+        inside_out: Vec<SubmodelId>,
+    },
+    NothingToWeigh,
+    InvalidMass,
+    Degenerate,
+}
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone)]
 pub enum Error {
     InvalidTurretGunSubmodel(usize), // turret index
@@ -3165,6 +3350,7 @@ pub enum Warning {
     TooManyTextures,
     InvalidDockParentSubmodel(usize),
     Detail0NonZeroOffset,
+    InvalidMomentOfInertia,
 
     PathNameTooLong(usize),
     SpecialPointNameTooLong(usize),

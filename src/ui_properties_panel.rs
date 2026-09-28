@@ -11,8 +11,8 @@ use glium::glutin::surface::WindowSurface;
 use glium::Display;
 use nalgebra_glm::TMat4;
 use pof::{
-    Dock, Error, NormalVec3, PathId, Set::*, SubmodelId, SubsysRotationAxis, SubsysRotationType, SubsysTranslationAxis, SubsysTranslationType, Vec3d,
-    Warning,
+    Dock, Error, MassModel, MassPropertiesError, NormalVec3, PathId, Set::*, SubmodelId, SubsysRotationAxis, SubsysRotationType,
+    SubsysTranslationAxis, SubsysTranslationType, Vec3d, Warning,
 };
 
 use crate::Model;
@@ -372,6 +372,45 @@ impl UiState {
         ret
     }
 
+    // what to tell the user of a recalculated center of mass or moment of inertia; a note of the submodels skipped, or the error
+    fn mass_recalc_message(model: &pof::Model, skipped: Result<&[SubmodelId], &MassPropertiesError>) -> Option<Result<String, String>> {
+        let names = |ids: &[SubmodelId]| {
+            let mut names = ids
+                .iter()
+                .take(5)
+                .map(|&id| format!("'{}'", model.submodels[id].name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if ids.len() > 5 {
+                names += &format!(" and {} more", ids.len() - 5);
+            }
+            names
+        };
+
+        match skipped {
+            Ok([]) => None,
+            Ok(skipped) => Some(Ok(format!("Left out for not being closed: {}", names(skipped)))),
+            Err(MassPropertiesError::BadMesh { open, inside_out }) => {
+                let mut message = format!("⊗ A solid needs closed meshes that face outwards.");
+                if !open.is_empty() {
+                    message += &format!(" With open or unwelded edges: {}.", names(open));
+                }
+                if !inside_out.is_empty() {
+                    message += &format!(" Facing inwards: {}.", names(inside_out));
+                }
+                message += if open.is_empty() {
+                    " Fix the mesh or switch to Shell."
+                } else {
+                    " Fix the mesh, skip the open submodels, or switch to Shell."
+                };
+                Some(Err(message))
+            }
+            Err(MassPropertiesError::NothingToWeigh) => Some(Err(format!("⊗ There is no geometry to work it out from"))),
+            Err(MassPropertiesError::InvalidMass) => Some(Err(format!("⊗ The mass must be more than zero"))),
+            Err(MassPropertiesError::Degenerate) => Some(Err(format!("⊗ The geometry is too thin to have a moment of inertia about every axis"))),
+        }
+    }
+
     // model_value_edit but with a custom undo function
     #[allow(clippy::too_many_arguments)]
     fn model_value_edit_custom<T: FromStr + Clone + 'static, F: FnMut(&Model, T) -> UndoFunction>(
@@ -587,6 +626,8 @@ impl UiState {
                     bbox_max_string: format!("{}", model.header.bbox.max),
                     radius_string: format!("{}", model.header.max_radius),
                     mass_string: format!("{}", model.header.mass),
+                    com_string: format!("{}", model.header.center_of_mass),
+                    recalc_message: None,
                     moir_string: format!(
                         "{:e}, {:e}, {:e}",
                         model.header.moment_of_inertia.rvec.x, model.header.moment_of_inertia.rvec.y, model.header.moment_of_inertia.rvec.z
@@ -817,6 +858,9 @@ pub enum PropertiesPanel {
         bbox_max_string: String,
         radius_string: String,
         mass_string: String,
+        com_string: String,
+        /// the outcome of the last center of mass or moment of inertia recalculation, where there's something to say of it
+        recalc_message: Option<Result<String, String>>,
         moir_string: String,
         moiu_string: String,
         moif_string: String,
@@ -904,6 +948,8 @@ impl Default for PropertiesPanel {
             bbox_max_string: Default::default(),
             radius_string: Default::default(),
             mass_string: Default::default(),
+            com_string: Default::default(),
+            recalc_message: None,
             moir_string: Default::default(),
             moiu_string: Default::default(),
             moif_string: Default::default(),
@@ -1046,6 +1092,8 @@ impl PofToolsGui {
                 bbox_min_string,
                 bbox_max_string,
                 mass_string,
+                com_string,
+                recalc_message,
                 radius_string,
                 moir_string,
                 moiu_string,
@@ -1154,28 +1202,120 @@ impl PofToolsGui {
                     ui.add(egui::Label::new("Mass:"));
                     if ui.button("Recalculate").clicked() {
                         let mut mass = self.model.recalc_mass();
+                        let mut moi = self.model.header.moment_of_inertia;
+                        let ratio = self.model.header.mass / mass;
+                        if ratio > 0.0 && ratio.is_finite() {
+                            moi *= ratio;
+                        }
                         model_action(
                             undo_history,
                             &mut self.model,
                             undo_func(move |model| {
                                 swap(&mut model.header.mass, &mut mass);
+                                swap(&mut model.header.moment_of_inertia, &mut moi);
                             }),
                         );
                         self.ui_state.properties_panel_dirty = true;
                     }
                 });
-                model_value_widget!(
+
+                // the moment of inertia is stored inverted, so it scales against the mass
+                let mass_change = parse_func(|model: &Model, mut new_mass: f32| {
+                    let mut moi = model.header.moment_of_inertia;
+                    let ratio = model.header.mass / new_mass;
+                    if ratio > 0.0 && ratio.is_finite() {
+                        moi *= ratio;
+                    }
+                    undo_func(move |model| {
+                        swap(&mut model.header.mass, &mut new_mass);
+                        swap(&mut model.header.moment_of_inertia, &mut moi);
+                        info!("Modifying: Header - mass");
+                    })
+                });
+                let response = UiState::model_value_edit_custom(
                     format!("{} mass", current_tree_selection),
+                    &mut self.ui_state.viewport_3d_dirty,
                     ui,
                     false,
-                    Some(path_func(|model| &mut model.header.mass)),
-                    mass_string
+                    Some(mass_change),
+                    mass_string,
+                    undo_history,
+                    &mut self.model,
+                );
+                let mut moi_changed = response.changed();
+                if response.changed() {
+                    self.model.recheck_warnings(One(Warning::InvalidMomentOfInertia));
+                }
+
+                ui.separator();
+
+                let solid = matches!(self.ui_state.mass_model, MassModel::Solid { .. });
+                ui.horizontal(|ui| {
+                    ui.label("Mass Distribution:");
+                    if ui
+                        .selectable_label(solid, "Solid")
+                        .on_hover_text("Evenly through the volume, which is closest to retail. Needs closed meshes.")
+                        .clicked()
+                        && !solid
+                    {
+                        self.ui_state.mass_model = MassModel::default();
+                        *recalc_message = None;
+                    }
+                    if ui.selectable_label(!solid, "Shell").on_hover_text("Evenly over the surface").clicked() && solid {
+                        self.ui_state.mass_model = MassModel::Shell;
+                        *recalc_message = None;
+                    }
+                });
+                let mut skip_open = self.ui_state.mass_model == MassModel::Solid { skip_open: true };
+                if ui
+                    .add_enabled(solid, egui::Checkbox::new(&mut skip_open, "Skip open submodels"))
+                    .on_hover_text("Leaves out the submodels whose meshes aren't closed")
+                    .changed()
+                {
+                    self.ui_state.mass_model = MassModel::Solid { skip_open };
+                    *recalc_message = None;
+                }
+
+                // a recalculation refreshes its own strings, as refreshing the panel would lose the message
+                ui.horizontal(|ui| {
+                    ui.add(egui::Label::new("Center of Mass:"));
+                    if ui
+                        .button("Recalculate")
+                        .on_hover_text(if solid {
+                            "Chooses the center of its volume"
+                        } else {
+                            "Chooses the average position of its surface area"
+                        })
+                        .clicked()
+                    {
+                        let result = self.model.recalc_center_of_mass(self.ui_state.mass_model);
+                        *recalc_message = UiState::mass_recalc_message(&self.model, result.as_ref().map(|(_, skipped)| &skipped[..]));
+                        if let Ok((mut center, _)) = result {
+                            model_action(
+                                undo_history,
+                                &mut self.model,
+                                undo_func(move |model| {
+                                    swap(&mut model.header.center_of_mass, &mut center);
+                                }),
+                            );
+                            *com_string = format!("{}", self.model.header.center_of_mass);
+                        }
+                    }
+                });
+                model_value_widget!(
+                    format!("{} center of mass", current_tree_selection),
+                    ui,
+                    false,
+                    Some(path_func(|model| &mut model.header.center_of_mass)),
+                    com_string
                 );
 
                 ui.horizontal(|ui| {
                     ui.add(egui::Label::new("Moment of Inertia:"));
                     if ui.button("Recalculate").clicked() {
-                        if let Some(mut moi) = self.model.recalc_moi() {
+                        let result = self.model.recalc_moi(self.ui_state.mass_model);
+                        *recalc_message = UiState::mass_recalc_message(&self.model, result.as_ref().map(|(_, skipped)| &skipped[..]));
+                        if let Ok((mut moi, _)) = result {
                             model_action(
                                 undo_history,
                                 &mut self.model,
@@ -1183,31 +1323,56 @@ impl PofToolsGui {
                                     swap(&mut model.header.moment_of_inertia, &mut moi);
                                 }),
                             );
-                            self.ui_state.properties_panel_dirty = true;
+                            moi_changed = true;
                         }
                     }
                 });
-                model_value_widget!(
+                if moi_changed {
+                    let moi = &self.model.header.moment_of_inertia;
+                    *moir_string = format!("{:e}, {:e}, {:e}", moi.rvec.x, moi.rvec.y, moi.rvec.z);
+                    *moiu_string = format!("{:e}, {:e}, {:e}", moi.uvec.x, moi.uvec.y, moi.uvec.z);
+                    *moif_string = format!("{:e}, {:e}, {:e}", moi.fvec.x, moi.fvec.y, moi.fvec.z);
+                }
+                let response = model_value_widget!(
                     format!("{} moment of inertia rvec", current_tree_selection),
                     ui,
-                    false,
+                    self.model.warnings.contains(&Warning::InvalidMomentOfInertia),
                     Some(path_func(|model| &mut model.header.moment_of_inertia.rvec)),
                     moir_string
                 );
-                model_value_widget!(
+                if response.changed() {
+                    self.model.recheck_warnings(One(Warning::InvalidMomentOfInertia));
+                }
+                let response = model_value_widget!(
                     format!("{} moment of inertia uvec", current_tree_selection),
                     ui,
-                    false,
+                    self.model.warnings.contains(&Warning::InvalidMomentOfInertia),
                     Some(path_func(|model| &mut model.header.moment_of_inertia.uvec)),
                     moiu_string
                 );
-                model_value_widget!(
+                if response.changed() {
+                    self.model.recheck_warnings(One(Warning::InvalidMomentOfInertia));
+                }
+                let response = model_value_widget!(
                     format!("{} moment of inertia fvec", current_tree_selection),
                     ui,
-                    false,
+                    self.model.warnings.contains(&Warning::InvalidMomentOfInertia),
                     Some(path_func(|model| &mut model.header.moment_of_inertia.fvec)),
                     moif_string
                 );
+                if response.changed() {
+                    self.model.recheck_warnings(One(Warning::InvalidMomentOfInertia));
+                }
+
+                match recalc_message {
+                    Some(Ok(note)) => {
+                        ui.label(&*note);
+                    }
+                    Some(Err(error)) => {
+                        ui.label(RichText::new(&*error).color(ERROR_RED));
+                    }
+                    None => {}
+                }
 
                 ui.separator();
 
@@ -1347,6 +1512,7 @@ impl PofToolsGui {
                     self.ui_state.viewport_3d_dirty = true;
                     self.ui_state.properties_panel_dirty = true;
                     self.model.recheck_warnings(One(Warning::Detail0NonZeroOffset));
+                    self.model.recheck_warnings(One(Warning::InvalidMomentOfInertia));
                 }
 
                 ui.add_space(10.0);

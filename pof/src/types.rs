@@ -1396,6 +1396,8 @@ impl Default for SubsysRotationAxis {
 }
 
 pub const MAX_DEBRIS_MODELS: u32 = 32;
+/// how far the verts around a hole may stray from a plane for it to count as flat, against how far they spread within it
+const FLAT_HOLE_TOLERANCE: f64 = 0.01;
 
 /// "semantic name links", fields derived specifically from their names
 /// recalculated by recalc_semantic_name_links
@@ -3006,7 +3008,11 @@ impl Model {
                 continue;
             }
 
-            if matches!(mass_model, MassModel::Solid { .. }) {
+            let offset = self.get_total_submodel_offset(smodel.id);
+            let get_vert = |vert: Vec3d| Vec3::from(vert + offset).cast::<f64>();
+            let mut triangles = vec![];
+
+            if let MassModel::Solid { cap_flat_holes, .. } = mass_model {
                 // the polygons only enclose a volume if each of their edges is met by one running the other way
                 let mut edges: HashMap<[[u32; 3]; 2], i32> = HashMap::new();
                 for (_, poly) in smodel.bsp_data.collision_tree.leaves() {
@@ -3023,38 +3029,81 @@ impl Model {
                     }
                 }
 
-                if edges.values().any(|&count| count != 0) {
+                // those that aren't run around the holes, a hole being the edges that are joined to each other
+                let unmatched: Vec<_> = edges.into_iter().filter(|&(_, count)| count > 0).collect();
+                fn hole_of(hole_of_vert: &mut HashMap<[u32; 3], usize>, merged_into: &mut Vec<usize>, key: [u32; 3]) -> usize {
+                    let mut hole = *hole_of_vert.entry(key).or_insert_with(|| {
+                        merged_into.push(merged_into.len());
+                        merged_into.len() - 1
+                    });
+                    while merged_into[hole] != hole {
+                        merged_into[hole] = merged_into[merged_into[hole]];
+                        hole = merged_into[hole];
+                    }
+                    hole
+                }
+                let mut hole_of_vert = HashMap::new();
+                let mut merged_into = vec![];
+                for ([start, end], _) in &unmatched {
+                    let start_hole = hole_of(&mut hole_of_vert, &mut merged_into, *start);
+                    merged_into[start_hole] = hole_of(&mut hole_of_vert, &mut merged_into, *end);
+                }
+                let mut holes: HashMap<usize, Vec<([Vector3<f64>; 2], i32)>> = HashMap::new();
+                for ([start, end], count) in unmatched {
+                    let ends = [start, end].map(|key| get_vert(key.map(f32::from_bits).into()));
+                    holes
+                        .entry(hole_of(&mut hole_of_vert, &mut merged_into, start))
+                        .or_default()
+                        .push((ends, count));
+                }
+
+                // a hole that lies in a plane can be closed with no guessing at the shape of what is missing
+                let mut all_flat = true;
+                for hole in holes.values() {
+                    let center = hole.iter().map(|([start, _], _)| start).sum::<Vector3<f64>>() / hole.len() as f64;
+                    let spread = hole
+                        .iter()
+                        .map(|([start, _], _)| (start - center) * (start - center).transpose())
+                        .sum::<Matrix3<f64>>();
+                    let spreads = spread.symmetric_eigenvalues();
+                    all_flat &= spreads.min() <= FLAT_HOLE_TOLERANCE * FLAT_HOLE_TOLERANCE * spreads.max();
+
+                    for &([start, end], count) in hole {
+                        triangles.extend((0..count).map(|_| [center, end, start]));
+                    }
+                }
+
+                if !holes.is_empty() && !(cap_flat_holes && all_flat) {
                     open.push(smodel.id);
                     continue;
                 }
             }
 
-            let offset = self.get_total_submodel_offset(smodel.id);
-            let get_vert = |vert: &PolyVertex| Vec3::from(smodel.bsp_data.verts[vert.vertex_id.0 as usize] + offset).cast::<f64>();
+            for (_, poly) in smodel.bsp_data.collision_tree.leaves() {
+                if let [first, rest @ ..] = &poly.verts[..] {
+                    triangles.extend(
+                        rest.windows(2)
+                            .map(|pair| [first, &pair[0], &pair[1]].map(|vert| get_vert(smodel.bsp_data.verts[vert.vertex_id.0 as usize]))),
+                    );
+                }
+            }
+
             let mut this_total = 0.0;
             let mut this_unsigned_total = 0.0;
             let mut this_first_moment = Vector3::zeros();
             let mut this_second_moment = Matrix3::zeros();
-            for (_, poly) in smodel.bsp_data.collision_tree.leaves() {
-                if let [first, rest @ ..] = &poly.verts[..] {
-                    let v1 = get_vert(first);
-                    for pair in rest.windows(2) {
-                        let v2 = get_vert(&pair[0]);
-                        let v3 = get_vert(&pair[1]);
-
-                        // for a solid, each triangle stands for the tetrahedron between it and the origin
-                        let (weight, first_scale, second_scale) = match mass_model {
-                            MassModel::Solid { .. } => (v1.dot(&v2.cross(&v3)) / 6.0, 1.0 / 4.0, 1.0 / 20.0),
-                            MassModel::Shell => (0.5 * (v2 - v1).cross(&(v3 - v1)).magnitude(), 1.0 / 3.0, 1.0 / 12.0),
-                        };
-                        let sum = v1 + v2 + v3;
-                        this_total += weight;
-                        this_unsigned_total += weight.abs();
-                        this_first_moment += sum * (weight * first_scale);
-                        this_second_moment +=
-                            (v1 * v1.transpose() + v2 * v2.transpose() + v3 * v3.transpose() + sum * sum.transpose()) * (weight * second_scale);
-                    }
-                }
+            for [v1, v2, v3] in triangles {
+                // for a solid, each triangle stands for the tetrahedron between it and the origin
+                let (weight, first_scale, second_scale) = match mass_model {
+                    MassModel::Solid { .. } => (v1.dot(&v2.cross(&v3)) / 6.0, 1.0 / 4.0, 1.0 / 20.0),
+                    MassModel::Shell => (0.5 * (v2 - v1).cross(&(v3 - v1)).magnitude(), 1.0 / 3.0, 1.0 / 12.0),
+                };
+                let sum = v1 + v2 + v3;
+                this_total += weight;
+                this_unsigned_total += weight.abs();
+                this_first_moment += sum * (weight * first_scale);
+                this_second_moment +=
+                    (v1 * v1.transpose() + v2 * v2.transpose() + v3 * v3.transpose() + sum * sum.transpose()) * (weight * second_scale);
             }
 
             // the margin is for a mesh with no volume to it, like a two sided fin, which won't quite sum to zero
@@ -3068,12 +3117,9 @@ impl Model {
             second_moment += this_second_moment;
         }
 
-        if mass_model == (MassModel::Solid { skip_open: true }) {
-            if !inside_out.is_empty() {
-                return Err(MassPropertiesError::BadMesh { open: vec![], inside_out });
-            }
-        } else if !open.is_empty() || !inside_out.is_empty() {
-            return Err(MassPropertiesError::BadMesh { open, inside_out });
+        let skip_open = matches!(mass_model, MassModel::Solid { skip_open: true, .. });
+        if !inside_out.is_empty() || (!open.is_empty() && !skip_open) {
+            return Err(MassPropertiesError::BadMesh { open: if skip_open { vec![] } else { open }, inside_out });
         }
 
         if total > 0.0 {
@@ -3296,14 +3342,15 @@ pub enum Set<T> {
 /// How the mass is taken to be distributed through the model.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum MassModel {
-    /// Evenly through its volume, which only a closed mesh has. `skip_open` leaves out the submodels that aren't closed.
-    Solid { skip_open: bool },
+    /// Evenly through its volume, which only a closed mesh has. `cap_flat_holes` closes the holes that lie in a plane,
+    /// and `skip_open` leaves out the submodels that still aren't closed.
+    Solid { cap_flat_holes: bool, skip_open: bool },
     /// Evenly over its surface.
     Shell,
 }
 impl Default for MassModel {
     fn default() -> Self {
-        MassModel::Solid { skip_open: false }
+        MassModel::Solid { cap_flat_holes: true, skip_open: false }
     }
 }
 

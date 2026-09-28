@@ -6,8 +6,10 @@ use pof::*;
 
 type Box3 = ([f32; 3], [f32; 3]);
 
-const SOLID: MassModel = MassModel::Solid { skip_open: false };
-const SOLID_SKIPPING: MassModel = MassModel::Solid { skip_open: true };
+const SOLID: MassModel = MassModel::Solid { cap_flat_holes: false, skip_open: false };
+const SOLID_SKIPPING: MassModel = MassModel::Solid { cap_flat_holes: false, skip_open: true };
+const SOLID_CAPPING: MassModel = MassModel::Solid { cap_flat_holes: true, skip_open: false };
+const SOLID_CAPPING_AND_SKIPPING: MassModel = MassModel::Solid { cap_flat_holes: true, skip_open: true };
 const SHELL: MassModel = MassModel::Shell;
 
 /// The faces of a box whose corners are numbered by which of x, y and z are at their maximum,
@@ -60,6 +62,16 @@ fn mesh(boxes: &[Box3], triangulate: bool) -> BspData {
         }
     }
     mesh_of(verts, faces)
+}
+
+/// A box with some of its faces missing. They're numbered in the order of x, y and z, the minimum before the maximum.
+fn box_without(a_box: &Box3, missing: &[usize]) -> BspData {
+    let faces = FACES
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !missing.contains(i))
+        .map(|(_, face)| face.to_vec());
+    mesh_of(corners(a_box).collect(), faces.collect())
 }
 
 /// A box that shares no vert between its faces, each having four of its own.
@@ -455,6 +467,134 @@ fn verts_that_only_nearly_meet_leave_the_mesh_open() {
     model.submodels.0[0].bsp_data.verts[0].x += 1e-5;
 
     assert_eq!(model.recalc_moi(SOLID).err(), Some(bad_mesh(&[0], &[])));
+}
+
+// ---------------------------------------------------------------- capping the holes
+
+#[test]
+fn holes_are_capped_unless_asked_otherwise() {
+    assert_eq!(MassModel::default(), SOLID_CAPPING);
+}
+
+#[test]
+fn a_flat_hole_is_capped_with_what_was_missing() {
+    let hull = ([-2.0, -1.0, -4.0], [2.0, 1.0, 4.0]);
+    let turret = ([-1.0, 0.0, -1.0], [1.0, 1.0, 1.5]);
+    let closed = model_of(
+        vec![
+            submodel("detail0", None, [0.0; 3], &[hull]),
+            submodel("turret01", Some(0), [3.0, 1.0, -2.0], &[turret]),
+        ],
+        75.0,
+    );
+
+    for (hull_missing, turret_missing) in [(vec![3], vec![]), (vec![], vec![2]), (vec![0, 1], vec![5]), (vec![4], vec![2, 3])] {
+        let mut model = model_of(
+            vec![
+                submodel("detail0", None, [0.0; 3], &[]),
+                submodel("turret01", Some(0), [3.0, 1.0, -2.0], &[]),
+            ],
+            75.0,
+        );
+        model.submodels.0[0].bsp_data = box_without(&hull, &hull_missing);
+        model.submodels.0[1].bsp_data = box_without(&turret, &turret_missing);
+
+        assert!(matches!(model.recalc_moi(SOLID), Err(MassPropertiesError::BadMesh { .. })));
+        assert_close(moi(&model, SOLID_CAPPING), moi(&closed, SOLID));
+        assert_vec_close(center_of_mass(&model, SOLID_CAPPING), center_of_mass(&closed, SOLID));
+        assert_eq!(model.recalc_moi(SOLID_CAPPING_AND_SKIPPING).unwrap().1, []);
+    }
+}
+
+#[test]
+fn a_hole_that_bends_is_left_open() {
+    // two faces that share an edge leave a hole that runs around a corner
+    let mut model = model_of(vec![submodel("detail0", None, [0.0; 3], &[])], 75.0);
+    model.submodels.0[0].bsp_data = box_without(&([-2.0, -1.0, -4.0], [2.0, 1.0, 4.0]), &[1, 3]);
+
+    assert_eq!(model.recalc_moi(SOLID_CAPPING).err(), Some(bad_mesh(&[0], &[])));
+    assert_eq!(model.recalc_moi(SOLID_CAPPING_AND_SKIPPING).err(), Some(MassPropertiesError::NothingToWeigh));
+}
+
+#[test]
+fn a_hole_is_flat_to_within_a_little() {
+    for (lift, flat) in [(0.0, true), (0.01, true), (1.0, false)] {
+        let mut model = model_of(vec![submodel("detail0", None, [0.0; 3], &[])], 75.0);
+        model.submodels.0[0].bsp_data = box_without(&([-2.0, -1.0, -4.0], [2.0, 1.0, 4.0]), &[3]);
+        model.submodels.0[0].bsp_data.verts[7].y += lift;
+
+        assert_eq!(model.recalc_moi(SOLID_CAPPING).is_ok(), flat, "lifted by {}", lift);
+    }
+}
+
+#[test]
+fn every_hole_has_to_be_flat() {
+    // a flat hole in the one box, and a bent one in the other
+    let mut model = model_of(vec![submodel("detail0", None, [0.0; 3], &[])], 75.0);
+    let mut bsp_data = box_without(&([-2.0, -1.0, -4.0], [2.0, 1.0, 4.0]), &[2]);
+    let bent = box_without(&([5.0, -1.0, -4.0], [7.0, 1.0, 4.0]), &[1, 3]);
+    let polygons = bent.collision_tree.into_leaves().map(|(_, mut poly)| {
+        poly.verts.iter_mut().for_each(|vert| vert.vertex_id.0 += 8);
+        poly
+    });
+    bsp_data.verts.extend(bent.verts);
+    let polygons: Vec<_> = std::mem::take(&mut bsp_data.collision_tree)
+        .into_leaves()
+        .map(|(_, poly)| poly)
+        .chain(polygons)
+        .collect();
+    bsp_data.collision_tree = BspData::recalculate(&bsp_data.verts, polygons.into_iter());
+    model.submodels.0[0].bsp_data = bsp_data;
+
+    assert_eq!(model.recalc_moi(SOLID_CAPPING).err(), Some(bad_mesh(&[0], &[])));
+}
+
+#[test]
+fn a_one_sided_sheet_is_capped_with_its_other_side() {
+    let hull = ([-2.0, -1.0, -4.0], [2.0, 1.0, 4.0]);
+    let alone = model_of(vec![submodel("detail0", None, [0.0; 3], &[hull])], 75.0);
+    let mut with_sheet = model_of(
+        vec![
+            submodel("detail0", None, [0.0; 3], &[hull]),
+            submodel("fin", Some(0), [1.7, 2.0, 2.1], &[]),
+        ],
+        75.0,
+    );
+    let sheet = vec![
+        Vec3d::new(0.3, 1.1, 0.7),
+        Vec3d::new(0.3, 3.7, 0.9),
+        Vec3d::new(0.3, 3.3, 2.9),
+        Vec3d::new(0.3, 1.3, 2.3),
+    ];
+    with_sheet.submodels.0[1].bsp_data = mesh_of(sheet, vec![vec![0, 1, 2, 3]]);
+
+    assert_eq!(with_sheet.recalc_moi(SOLID).err(), Some(bad_mesh(&[1], &[])));
+    assert_close(moi(&with_sheet, SOLID_CAPPING), moi(&alone, SOLID));
+}
+
+#[test]
+fn an_edge_met_by_two_shorter_ones_is_capped_with_nothing() {
+    // the top is split in two down the middle, and the sides it meets aren't
+    let a_box = ([-2.0, -1.0, -4.0], [2.0, 1.0, 4.0]);
+    let closed = model_of(vec![submodel("detail0", None, [0.0; 3], &[a_box])], 75.0);
+    let mut split = model_of(vec![submodel("detail0", None, [0.0; 3], &[])], 75.0);
+    let mut verts: Vec<_> = corners(&a_box).collect();
+    verts.extend([Vec3d::new(0.0, 1.0, 4.0), Vec3d::new(0.0, 1.0, -4.0)]);
+    let mut faces: Vec<_> = FACES.iter().map(|face| face.to_vec()).collect();
+    faces[3] = vec![6, 8, 9, 2];
+    faces.push(vec![8, 7, 3, 9]);
+    split.submodels.0[0].bsp_data = mesh_of(verts, faces);
+
+    assert_eq!(split.recalc_moi(SOLID).err(), Some(bad_mesh(&[0], &[])));
+    assert_close(moi(&split, SOLID_CAPPING), moi(&closed, SOLID));
+}
+
+#[test]
+fn a_capped_mesh_can_still_face_inwards() {
+    let mut model = model_of(vec![submodel("detail0", None, [0.0; 3], &[])], 75.0);
+    model.submodels.0[0].bsp_data = box_without(&([2.0, -1.0, -4.0], [-2.0, 1.0, 4.0]), &[3]);
+
+    assert_eq!(model.recalc_moi(SOLID_CAPPING).err(), Some(bad_mesh(&[], &[0])));
 }
 
 // ---------------------------------------------------------------- center of mass

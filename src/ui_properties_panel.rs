@@ -373,7 +373,10 @@ impl UiState {
     }
 
     // what to tell the user of a recalculated center of mass or moment of inertia; a note of the submodels skipped, or the error
-    fn mass_recalc_message(model: &pof::Model, skipped: Result<&[SubmodelId], &MassPropertiesError>) -> Option<Result<String, String>> {
+    fn mass_recalc_message(
+        model: &pof::Model, mass_model: MassModel, skipped: Result<&[SubmodelId], &MassPropertiesError>,
+    ) -> Option<Result<String, String>> {
+        let capping = matches!(mass_model, MassModel::Solid { cap_flat_holes: true, .. });
         let names = |ids: &[SubmodelId]| {
             let mut names = ids
                 .iter()
@@ -392,7 +395,9 @@ impl UiState {
             Ok(skipped) => Some(Ok(format!("Left out for not being closed: {}", names(skipped)))),
             Err(MassPropertiesError::BadMesh { open, inside_out }) => {
                 let mut message = format!("⊗ A solid needs closed meshes that face outwards.");
-                if !open.is_empty() {
+                if !open.is_empty() && capping {
+                    message += &format!(" With holes that aren't flat: {}.", names(open));
+                } else if !open.is_empty() {
                     message += &format!(" With open or unwelded edges: {}.", names(open));
                 }
                 if !inside_out.is_empty() {
@@ -400,8 +405,10 @@ impl UiState {
                 }
                 message += if open.is_empty() {
                     " Fix the mesh or switch to Shell."
-                } else {
+                } else if capping {
                     " Fix the mesh, skip the open submodels, or switch to Shell."
+                } else {
+                    " Fix the mesh, cap the flat holes, skip the open submodels, or switch to Shell."
                 };
                 Some(Err(message))
             }
@@ -1266,13 +1273,18 @@ impl PofToolsGui {
                         *recalc_message = None;
                     }
                 });
-                let mut skip_open = self.ui_state.mass_model == MassModel::Solid { skip_open: true };
-                if ui
+                let (mut cap_flat_holes, mut skip_open) = match self.ui_state.mass_model {
+                    MassModel::Solid { cap_flat_holes, skip_open } => (cap_flat_holes, skip_open),
+                    MassModel::Shell => (false, false),
+                };
+                let cap_response = ui
+                    .add_enabled(solid, egui::Checkbox::new(&mut cap_flat_holes, "Cap flat holes"))
+                    .on_hover_text("Closes the holes that lie in a plane, such as the missing base of a turret");
+                let skip_response = ui
                     .add_enabled(solid, egui::Checkbox::new(&mut skip_open, "Skip open submodels"))
-                    .on_hover_text("Leaves out the submodels whose meshes aren't closed")
-                    .changed()
-                {
-                    self.ui_state.mass_model = MassModel::Solid { skip_open };
+                    .on_hover_text("Leaves out the submodels whose meshes aren't closed");
+                if cap_response.changed() || skip_response.changed() {
+                    self.ui_state.mass_model = MassModel::Solid { cap_flat_holes, skip_open };
                     *recalc_message = None;
                 }
 
@@ -1288,8 +1300,9 @@ impl PofToolsGui {
                         })
                         .clicked()
                     {
-                        let result = self.model.recalc_center_of_mass(self.ui_state.mass_model);
-                        *recalc_message = UiState::mass_recalc_message(&self.model, result.as_ref().map(|(_, skipped)| &skipped[..]));
+                        let mass_model = self.ui_state.mass_model;
+                        let result = self.model.recalc_center_of_mass(mass_model);
+                        *recalc_message = UiState::mass_recalc_message(&self.model, mass_model, result.as_ref().map(|(_, skipped)| &skipped[..]));
                         if let Ok((mut center, _)) = result {
                             model_action(
                                 undo_history,
@@ -1313,8 +1326,9 @@ impl PofToolsGui {
                 ui.horizontal(|ui| {
                     ui.add(egui::Label::new("Moment of Inertia:"));
                     if ui.button("Recalculate").clicked() {
-                        let result = self.model.recalc_moi(self.ui_state.mass_model);
-                        *recalc_message = UiState::mass_recalc_message(&self.model, result.as_ref().map(|(_, skipped)| &skipped[..]));
+                        let mass_model = self.ui_state.mass_model;
+                        let result = self.model.recalc_moi(mass_model);
+                        *recalc_message = UiState::mass_recalc_message(&self.model, mass_model, result.as_ref().map(|(_, skipped)| &skipped[..]));
                         if let Ok((mut moi, _)) = result {
                             model_action(
                                 undo_history,

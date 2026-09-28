@@ -1456,6 +1456,8 @@ impl PofToolsGui {
                                         undo = !undo;
                                     }),
                                 );
+                                // the copy came with the links of the original
+                                self.model.recalc_semantic_name_links();
 
                                 ui.close_menu();
                             }
@@ -1567,6 +1569,7 @@ impl PofToolsGui {
 
                                 let mut buffer_mesh = Some(self.model.buffer_meshes.remove(index));
                                 let mut matrix = Some(self.model.submodel_transform_matrix.remove(index));
+                                let mut duped = self.model.submodel_duplicated.remove(index);
                                 let (x, child_list_idx) = self.model.delete_submodel_only(id);
                                 let mut submodel = Some(x);
 
@@ -1582,11 +1585,13 @@ impl PofToolsGui {
                                                 model.insert_submodel_only(submodel.take().unwrap(), child_list_idx);
 
                                                 model.submodel_transform_matrix.insert(index, matrix.take().unwrap());
+                                                model.submodel_duplicated.insert(index, duped);
                                                 model.buffer_meshes.insert(index, buffer_mesh.take().unwrap());
                                             } else {
                                                 submodel = Some(model.delete_submodel_only(deleted_id).0);
 
                                                 matrix = Some(model.submodel_transform_matrix.remove(index));
+                                                duped = model.submodel_duplicated.remove(index);
                                                 buffer_mesh = Some(model.buffer_meshes.remove(index));
                                             }
 
@@ -1603,6 +1608,8 @@ impl PofToolsGui {
                                         }
                                     }),
                                 );
+                                // the links still hold the ids from before the deletion
+                                self.model.recalc_semantic_name_links();
 
                                 selected_id = reset_id;
                                 self.ui_state.tree_view_selection = TreeValue::Submodels(SubmodelTreeValue::smodel(reset_id));

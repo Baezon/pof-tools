@@ -630,6 +630,13 @@ pub const WARNING_YELLOW: Color32 = Color32::from_rgb(255, 255, 0);
 pub const LIGHT_ORANGE: Color32 = Color32::from_rgb(210, 150, 128);
 pub const LIGHT_BLUE: Color32 = Color32::from_rgb(0xA0, 0xD8, 0xFF);
 
+const OPEN_SHORTCUT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::O);
+const SAVE_SHORTCUT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::S);
+const SAVE_AS_SHORTCUT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::CTRL.plus(egui::Modifiers::SHIFT), egui::Key::S);
+const UNDO_SHORTCUT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::Z);
+const REDO_SHORTCUT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::Y);
+const REDO_SHORTCUT_ALT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::CTRL.plus(egui::Modifiers::SHIFT), egui::Key::Z);
+
 impl UiState {
     /// returns the RichText for a given tree value to be displayed, mostly for the purposes of coloring it specially
     fn tree_val_text(&self, model: &Model, tree_value: TreeValue, this_name: &str) -> RichText {
@@ -789,6 +796,22 @@ pub fn model_action(undo_history: &mut undo::History<UndoAction>, model: &mut Mo
 }
 
 impl PofToolsGui {
+    // an undo or redo can change anything in the model, including how many submodels there are and what they're named
+    pub fn refresh_after_undo(&mut self) {
+        self.model.recalc_semantic_name_links();
+        self.model.recheck_warnings(Set::All);
+        self.model.recheck_errors(Set::All);
+        self.sanitize_ui_state();
+        self.ui_state.refresh_properties_panel(&self.model);
+        if self
+            .ui_state
+            .last_selected_smodel
+            .is_some_and(|id| id.0 as usize >= self.model.submodels.len())
+        {
+            self.ui_state.last_selected_smodel = self.model.header.detail_levels.first().copied();
+        }
+    }
+
     pub fn sanitize_ui_state(&mut self) {
         let (idx, len) = match self.tree_view_selection {
             TreeValue::Submodels(SubmodelTreeValue::Submodel(id)) => (id.0 as usize, self.model.submodels.len()),
@@ -858,26 +881,34 @@ impl PofToolsGui {
         egui::TopBottomPanel::top("menu").default_height(33.0).min_height(33.0).show(ctx, |ui| {
             Ui::add_space(ui, 6.0);
             ui.horizontal(|ui| {
+                // egui ignores an extra shift when matching, so a shortcut with shift has to be taken before the one without
+                let mut open = ctx.input_mut(|i| i.consume_shortcut(&OPEN_SHORTCUT));
+                let mut save_as = ctx.input_mut(|i| i.consume_shortcut(&SAVE_AS_SHORTCUT));
+                let mut save = ctx.input_mut(|i| i.consume_shortcut(&SAVE_SHORTCUT));
+
                 ui.menu_button("File", |ui| {
                     ui.style_mut().spacing.item_spacing.y = 1.0;
 
-                    if ui.button("Open").clicked() {
-                        self.start_loading_model(None);
-                        // ui.output().cursor_icon = egui::CursorIcon::Wait;
+                    if ui.add(Button::new("Open").shortcut_text(ctx.format_shortcut(&OPEN_SHORTCUT))).clicked() {
+                        open = true;
                         ui.close_menu();
                     }
 
                     if ui
-                        .add_enabled(self.model.errors.is_empty(), Button::new("Save"))
+                        .add_enabled(self.model.errors.is_empty(), Button::new("Save").shortcut_text(ctx.format_shortcut(&SAVE_SHORTCUT)))
                         .on_disabled_hover_text("All errors must be corrected before saving.")
                         .clicked()
                     {
-                        self.model.clean_up();
+                        save = true;
+                        ui.close_menu();
+                    }
 
-                        let new_filename = PofToolsGui::save_model(&self.model);
-                        if let Some(filename) = new_filename {
-                            window.set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, filename));
-                        }
+                    if ui
+                        .add_enabled(self.model.errors.is_empty(), Button::new("Save As").shortcut_text(ctx.format_shortcut(&SAVE_AS_SHORTCUT)))
+                        .on_disabled_hover_text("All errors must be corrected before saving.")
+                        .clicked()
+                    {
+                        save_as = true;
                         ui.close_menu();
                     }
 
@@ -886,6 +917,22 @@ impl PofToolsGui {
                         ui.close_menu();
                     }
                 });
+
+                if open {
+                    self.start_loading_model(None);
+                }
+
+                if self.model.errors.is_empty() && (save || save_as) {
+                    self.model.clean_up();
+
+                    // only save in place over a pof; a model from another format, or never loaded from a file, goes through the dialog
+                    let path = Some(self.model.path_to_file.clone())
+                        .filter(|path| !save_as && path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("pof")));
+                    if let Some(path) = PofToolsGui::save_model(&self.model, path) {
+                        window.set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, path.file_name().unwrap_or_default().to_string_lossy()));
+                        self.model.path_to_file = path;
+                    }
+                }
 
                 if self.ui_state.show_import_window(&self.model, ctx) {
                     self.merge_import_model();
@@ -955,28 +1002,26 @@ impl PofToolsGui {
 
                 ui.separator();
 
-                if ui
+                // egui ignores an extra shift when matching, so redo's shortcuts have to be taken before undo's
+                let redo_pressed = ctx.input_mut(|i| i.consume_shortcut(&REDO_SHORTCUT_ALT) || i.consume_shortcut(&REDO_SHORTCUT));
+                let undo_pressed = ctx.input_mut(|i| i.consume_shortcut(&UNDO_SHORTCUT));
+
+                let undo_clicked = ui
                     .add_enabled(undo_history.can_undo(), egui::Button::new("⎗"))
-                    .on_hover_text("Undo")
-                    .clicked()
-                {
+                    .on_hover_text(format!("Undo ({})", ctx.format_shortcut(&UNDO_SHORTCUT)))
+                    .clicked();
+                if undo_history.can_undo() && (undo_clicked || undo_pressed) {
                     undo_history.undo(&mut *self.model);
-                    self.model.recheck_warnings(Set::All);
-                    self.model.recheck_errors(Set::All);
-                    self.sanitize_ui_state();
-                    self.ui_state.refresh_properties_panel(&self.model);
+                    self.refresh_after_undo();
                 }
 
-                if ui
+                let redo_clicked = ui
                     .add_enabled(undo_history.can_redo(), egui::Button::new("⎘"))
-                    .on_hover_text("Redo")
-                    .clicked()
-                {
+                    .on_hover_text(format!("Redo ({})", ctx.format_shortcut(&REDO_SHORTCUT)))
+                    .clicked();
+                if undo_history.can_redo() && (redo_clicked || redo_pressed) {
                     undo_history.redo(&mut *self.model);
-                    self.model.recheck_warnings(Set::All);
-                    self.model.recheck_errors(Set::All);
-                    self.sanitize_ui_state();
-                    self.ui_state.refresh_properties_panel(&self.model);
+                    self.refresh_after_undo();
                 }
 
                 ui.separator();

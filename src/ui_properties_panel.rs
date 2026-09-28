@@ -1343,6 +1343,15 @@ impl PofToolsGui {
                 if let Some(matrix) = UiState::show_transform_window(ctx, transform_window, Some(text)) {
                     // this is way too complicated to undo...
                     undo_history.clear();
+
+                    // the submodel transforms still waiting to be applied come before this one
+                    for id in 0..self.model.pof_model.submodels.len() {
+                        let id = SubmodelId(id as u32);
+                        self.model
+                            .pof_model
+                            .apply_submodel_transform_mesh(id, &self.model.submodel_transform_matrix[id]);
+                        self.model.submodel_transform_matrix[id] = glm::identity();
+                    }
                     self.model.apply_transform(&matrix);
 
                     // polygons keep their original texture ids until saving, which a merge leaves beyond the texture list

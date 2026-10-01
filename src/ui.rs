@@ -403,8 +403,8 @@ impl WeaponTreeValue {
     }
     pub fn current_weapons_vec(self, model: &mut Model) -> Option<&mut Vec<Vec<WeaponHardpoint>>> {
         match self {
-            WeaponTreeValue::PriBank(_) | WeaponTreeValue::PriBankPoint(..) => Some(&mut model.primary_weps),
-            WeaponTreeValue::SecBank(_) | WeaponTreeValue::SecBankPoint(..) => Some(&mut model.secondary_weps),
+            WeaponTreeValue::PriHeader | WeaponTreeValue::PriBank(_) | WeaponTreeValue::PriBankPoint(..) => Some(&mut model.primary_weps),
+            WeaponTreeValue::SecHeader | WeaponTreeValue::SecBank(_) | WeaponTreeValue::SecBankPoint(..) => Some(&mut model.secondary_weps),
             _ => None,
         }
     }

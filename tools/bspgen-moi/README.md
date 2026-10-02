@@ -379,17 +379,20 @@ Before the lattice was found, some thirty schemes were tried against the asteroi
 
 pof-tools' own calculation weighs the whole of detail 0's tree, takes the tensor about the model origin, and integrates exactly. That is the sounder calculation, and it is why it comes out a median of 13% from the retail numbers and not closer.
 
-To come within about 0.2% of retail, pof-tools would have to do as `lattice.py` does:
+There are two ways to bring it nearer.
 
-1. take the detail 0 submodel alone, with its polygons as they are in the POF
-2. lay the lattice over its bounding box
-3. judge each sample by a ray along z, cast by the test of `fvi.py`
-4. add up the volume and the nine sums in floats
-5. take the mass as `4.65 * volume^0.6667`, the center of mass as the sums of the places over the count, and the tensor as the one about the origin less the volume times `identity - c * cT`, scaled by the mass over the volume and inverted
+**The whole of BSPGEN's method, faults and all,** which is `lattice.py`. Worked from the POF alone it comes within 0.2% of the retail tensor on the median model. On one model in seven it is more than 1% out, where a fault falls otherwise than BSPGEN's did.
 
-That reproduces what are very likely three bugs, so it belongs behind a choice of its own and not in place of what is there.
+**BSPGEN's formulas with its sampling put right,** which is what was chosen for pof-tools' Retail mass model. The faults of the ray test and the drift of the float are errors of 2% that no new model has any reason to share, and with them gone the lattice is only a rough way to an integral that pof-tools can do exactly. What is kept is what makes a retail number a retail number:
 
-It will not give the retail numbers to the digit. On one model in seven it will be more than 1% out, where a fault falls otherwise than BSPGEN's did.
+1. the detail 0 submodel alone is weighed
+2. the mass is `4.65 * volume^0.6667`
+3. the center of mass is the centroid of that volume
+4. the tensor is the one about the origin less the mass times `identity - c * cT`, which is `I_central + m * (|c|^2 - 1) * identity`, inverted
+
+The fourth is very likely a bug, so the model stands beside Solid and Shell and not in place of them. It leaves no tensor at all for a model so small that, about some axis, the square of its radius of gyration and the square of the distance of its center of mass from the origin come to less than a square metre between them.
+
+`check_retail_mode.py` works this out for every POF of a folder. Over the 158 models of FreeSpace 2 that aren't weapons, 133 can be weighed, 15 have a hole that isn't flat, 3 face inwards and enclose no volume, and 7 are too small. The tensor is a median 1.5% from the header's, and within 3% on 90.
 
 ## What isn't known
 
@@ -425,6 +428,7 @@ They need Python 3 and numpy. Each takes a folder of models, or two, and prints 
 | `check_lumps.py` | Where is the error, and where is what changed between the two games? |
 | `check_lattice.py` | Does the lattice give what BSPGEN stored? Takes ten minutes |
 | `check_pof_alone.py` | How near does it come with nothing but the POF? Takes ten minutes |
+| `check_retail_mode.py` | What should pof-tools' Retail mass model give, and how near the header is that? |
 
 ```
 python check_lattice.py D:/tmp/fs1_pof

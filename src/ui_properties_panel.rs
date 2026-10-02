@@ -372,11 +372,12 @@ impl UiState {
         ret
     }
 
-    // what to tell the user of a recalculated center of mass or moment of inertia; a note of the submodels skipped, or the error
+    // what to tell the user of a recalculated mass, center of mass or moment of inertia; a note of the submodels skipped, or the error
     fn mass_recalc_message(
         model: &pof::Model, mass_model: MassModel, skipped: Result<&[SubmodelId], &MassPropertiesError>,
     ) -> Option<Result<String, String>> {
-        let capping = matches!(mass_model, MassModel::Solid { cap_flat_holes: true, .. });
+        let capping = matches!(mass_model, MassModel::Solid { cap_flat_holes: true, .. } | MassModel::Retail { cap_flat_holes: true });
+        let retail = matches!(mass_model, MassModel::Retail { .. });
         let names = |ids: &[SubmodelId]| {
             let mut names = ids
                 .iter()
@@ -403,18 +404,20 @@ impl UiState {
                 if !inside_out.is_empty() {
                     message += &format!(" Facing inwards: {}.", names(inside_out));
                 }
-                message += if open.is_empty() {
-                    " Fix the mesh or switch to Shell."
-                } else if capping {
-                    " Fix the mesh, skip the open submodels, or switch to Shell."
-                } else {
-                    " Fix the mesh, cap the flat holes, skip the open submodels, or switch to Shell."
+                message += match (open.is_empty(), capping, retail) {
+                    (true, _, _) | (false, true, true) => " Fix the mesh or switch to Shell.",
+                    (false, false, true) => " Fix the mesh, cap the flat holes, or switch to Shell.",
+                    (false, true, false) => " Fix the mesh, skip the open submodels, or switch to Shell.",
+                    (false, false, false) => " Fix the mesh, cap the flat holes, skip the open submodels, or switch to Shell.",
                 };
                 Some(Err(message))
             }
             Err(MassPropertiesError::NothingToWeigh) => Some(Err(format!("⊗ There is no geometry to work it out from"))),
             Err(MassPropertiesError::InvalidMass) => Some(Err(format!("⊗ The mass must be more than zero"))),
             Err(MassPropertiesError::Degenerate) => Some(Err(format!("⊗ The geometry is too thin to have a moment of inertia about every axis"))),
+            Err(MassPropertiesError::TooSmall) => {
+                Some(Err(format!("⊗ Too small for the retail formula, which takes a square metre off each moment. Use Solid.")))
+            }
         }
     }
 
@@ -1205,24 +1208,83 @@ impl PofToolsGui {
 
                 ui.separator();
 
+                let solid = matches!(self.ui_state.mass_model, MassModel::Solid { .. });
+                let retail = matches!(self.ui_state.mass_model, MassModel::Retail { .. });
+                ui.horizontal(|ui| {
+                    ui.label("Mass Distribution:");
+                    if ui
+                        .selectable_label(solid, "Solid")
+                        .on_hover_text("Evenly through the volume. Needs closed meshes.")
+                        .clicked()
+                        && !solid
+                    {
+                        self.ui_state.mass_model = MassModel::default();
+                        *recalc_message = None;
+                    }
+                    if ui
+                        .selectable_label(retail, "Retail")
+                        .on_hover_text(
+                            "As Volition's converter meant to work it out: the detail 0 hull alone, with its own formula for the tensor. \
+                            For matching retail models. Needs a closed mesh.",
+                        )
+                        .clicked()
+                        && !retail
+                    {
+                        self.ui_state.mass_model = MassModel::Retail { cap_flat_holes: true };
+                        *recalc_message = None;
+                    }
+                    if ui
+                        .selectable_label(!solid && !retail, "Shell")
+                        .on_hover_text("Evenly over the surface")
+                        .clicked()
+                        && (solid || retail)
+                    {
+                        self.ui_state.mass_model = MassModel::Shell;
+                        *recalc_message = None;
+                    }
+                });
+                let (mut cap_flat_holes, mut skip_open) = match self.ui_state.mass_model {
+                    MassModel::Solid { cap_flat_holes, skip_open } => (cap_flat_holes, skip_open),
+                    MassModel::Retail { cap_flat_holes } => (cap_flat_holes, false),
+                    MassModel::Shell => (false, false),
+                };
+                let cap_response = ui
+                    .add_enabled(solid || retail, egui::Checkbox::new(&mut cap_flat_holes, "Cap flat holes"))
+                    .on_hover_text("Closes the holes that lie in a plane, such as the missing base of a turret");
+                let skip_response = ui
+                    .add_enabled(solid, egui::Checkbox::new(&mut skip_open, "Skip open submodels"))
+                    .on_hover_text("Leaves out the submodels whose meshes aren't closed");
+                if cap_response.changed() || skip_response.changed() {
+                    self.ui_state.mass_model = if retail {
+                        MassModel::Retail { cap_flat_holes }
+                    } else {
+                        MassModel::Solid { cap_flat_holes, skip_open }
+                    };
+                    *recalc_message = None;
+                }
+
                 ui.horizontal(|ui| {
                     ui.add(egui::Label::new("Mass:"));
                     if ui.button("Recalculate").clicked() {
-                        let mut mass = self.model.recalc_mass();
-                        let mut moi = self.model.header.moment_of_inertia;
-                        let ratio = self.model.header.mass / mass;
-                        if ratio > 0.0 && ratio.is_finite() {
-                            moi *= ratio;
+                        let mass_model = self.ui_state.mass_model;
+                        let result = self.model.recalc_mass(mass_model);
+                        *recalc_message = UiState::mass_recalc_message(&self.model, mass_model, result.as_ref().map(|_| &[][..]));
+                        if let Ok(mut mass) = result {
+                            let mut moi = self.model.header.moment_of_inertia;
+                            let ratio = self.model.header.mass / mass;
+                            if ratio > 0.0 && ratio.is_finite() {
+                                moi *= ratio;
+                            }
+                            model_action(
+                                undo_history,
+                                &mut self.model,
+                                undo_func(move |model| {
+                                    swap(&mut model.header.mass, &mut mass);
+                                    swap(&mut model.header.moment_of_inertia, &mut moi);
+                                }),
+                            );
+                            self.ui_state.properties_panel_dirty = true;
                         }
-                        model_action(
-                            undo_history,
-                            &mut self.model,
-                            undo_func(move |model| {
-                                swap(&mut model.header.mass, &mut mass);
-                                swap(&mut model.header.moment_of_inertia, &mut moi);
-                            }),
-                        );
-                        self.ui_state.properties_panel_dirty = true;
                     }
                 });
 
@@ -1254,40 +1316,6 @@ impl PofToolsGui {
                     self.model.recheck_warnings(One(Warning::InvalidMomentOfInertia));
                 }
 
-                ui.separator();
-
-                let solid = matches!(self.ui_state.mass_model, MassModel::Solid { .. });
-                ui.horizontal(|ui| {
-                    ui.label("Mass Distribution:");
-                    if ui
-                        .selectable_label(solid, "Solid")
-                        .on_hover_text("Evenly through the volume, which is closest to retail. Needs closed meshes.")
-                        .clicked()
-                        && !solid
-                    {
-                        self.ui_state.mass_model = MassModel::default();
-                        *recalc_message = None;
-                    }
-                    if ui.selectable_label(!solid, "Shell").on_hover_text("Evenly over the surface").clicked() && solid {
-                        self.ui_state.mass_model = MassModel::Shell;
-                        *recalc_message = None;
-                    }
-                });
-                let (mut cap_flat_holes, mut skip_open) = match self.ui_state.mass_model {
-                    MassModel::Solid { cap_flat_holes, skip_open } => (cap_flat_holes, skip_open),
-                    MassModel::Shell => (false, false),
-                };
-                let cap_response = ui
-                    .add_enabled(solid, egui::Checkbox::new(&mut cap_flat_holes, "Cap flat holes"))
-                    .on_hover_text("Closes the holes that lie in a plane, such as the missing base of a turret");
-                let skip_response = ui
-                    .add_enabled(solid, egui::Checkbox::new(&mut skip_open, "Skip open submodels"))
-                    .on_hover_text("Leaves out the submodels whose meshes aren't closed");
-                if cap_response.changed() || skip_response.changed() {
-                    self.ui_state.mass_model = MassModel::Solid { cap_flat_holes, skip_open };
-                    *recalc_message = None;
-                }
-
                 // a recalculation refreshes its own strings, as refreshing the panel would lose the message
                 ui.horizontal(|ui| {
                     ui.add(egui::Label::new("Center of Mass:"));
@@ -1295,6 +1323,8 @@ impl PofToolsGui {
                         .button("Recalculate")
                         .on_hover_text(if solid {
                             "Chooses the center of its volume"
+                        } else if retail {
+                            "Chooses the center of the hull's volume"
                         } else {
                             "Chooses the average position of its surface area"
                         })

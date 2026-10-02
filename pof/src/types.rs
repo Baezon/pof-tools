@@ -2984,12 +2984,16 @@ impl Model {
         bbox
     }
 
-    pub fn recalc_mass(&mut self) -> f32 {
-        4.65 * (self.header.bbox.volume().powf(2.0 / 3.0))
+    pub fn recalc_mass(&self, mass_model: MassModel) -> Result<f32, MassPropertiesError> {
+        match mass_model {
+            // the power is the one FSO's loader uses, which isn't quite two thirds
+            MassModel::Retail { .. } => Ok((4.65 * self.mass_integrals(mass_model)?.0.powf(0.6667)) as f32),
+            MassModel::Solid { .. } | MassModel::Shell => Ok(4.65 * (self.header.bbox.volume().powf(2.0 / 3.0))),
+        }
     }
 
     // the total weight of detail0 and its children, their first moment and their second moment, along with the open submodels left out;
-    // the weight is area for a shell, and volume for a solid
+    // the weight is area for a shell, and volume for a solid; the retail model weighs detail0 alone
     #[allow(clippy::type_complexity)]
     fn mass_integrals(&self, mass_model: MassModel) -> Result<(f64, Vector3<f64>, Matrix3<f64>, Vec<SubmodelId>), MassPropertiesError> {
         let mut total = 0.0;
@@ -2999,12 +3003,13 @@ impl Model {
         let mut inside_out = vec![];
 
         for smodel in &self.submodels {
-            let in_detail_0 = self
-                .header
-                .detail_levels
-                .first()
-                .is_some_and(|&detail_0| self.is_model_id_ancestor(smodel.id, detail_0));
-            if !in_detail_0 || self.is_hidden_when_intact(smodel.id) {
+            let weighed = self.header.detail_levels.first().is_some_and(|&detail_0| match mass_model {
+                MassModel::Retail { .. } => smodel.id == detail_0,
+                MassModel::Solid { .. } | MassModel::Shell => {
+                    self.is_model_id_ancestor(smodel.id, detail_0) && !self.is_hidden_when_intact(smodel.id)
+                }
+            });
+            if !weighed {
                 continue;
             }
 
@@ -3012,7 +3017,7 @@ impl Model {
             let get_vert = |vert: Vec3d| Vec3::from(vert + offset).cast::<f64>();
             let mut triangles = vec![];
 
-            if let MassModel::Solid { cap_flat_holes, .. } = mass_model {
+            if let MassModel::Solid { cap_flat_holes, .. } | MassModel::Retail { cap_flat_holes } = mass_model {
                 // the polygons only enclose a volume if each of their edges is met by one running the other way
                 let mut edges: HashMap<[[u32; 3]; 2], i32> = HashMap::new();
                 for (_, poly) in smodel.bsp_data.collision_tree.leaves() {
@@ -3095,7 +3100,7 @@ impl Model {
             for [v1, v2, v3] in triangles {
                 // for a solid, each triangle stands for the tetrahedron between it and the origin
                 let (weight, first_scale, second_scale) = match mass_model {
-                    MassModel::Solid { .. } => (v1.dot(&v2.cross(&v3)) / 6.0, 1.0 / 4.0, 1.0 / 20.0),
+                    MassModel::Solid { .. } | MassModel::Retail { .. } => (v1.dot(&v2.cross(&v3)) / 6.0, 1.0 / 4.0, 1.0 / 20.0),
                     MassModel::Shell => (0.5 * (v2 - v1).cross(&(v3 - v1)).magnitude(), 1.0 / 3.0, 1.0 / 12.0),
                 };
                 let sum = v1 + v2 + v3;
@@ -3129,10 +3134,10 @@ impl Model {
         }
     }
 
-    /// The inverse inertia tensor about the model origin, which is the form FSO uses it in,
-    /// along with the open submodels that were left out of it.
+    /// The inertia tensor, inverted as the POF header stores it and FSO uses it, along with the open submodels that were left out of it.
+    /// Solid and Shell take it about the model origin. Retail takes it about the center of mass and adds to the diagonal.
     pub fn recalc_moi(&self, mass_model: MassModel) -> Result<(Mat3d, Vec<SubmodelId>), MassPropertiesError> {
-        let (total, _, mut second_moment, skipped) = self.mass_integrals(mass_model)?;
+        let (total, first_moment, mut second_moment, skipped) = self.mass_integrals(mass_model)?;
 
         let mass = self.header.mass as f64;
         if !(mass > 0.0 && mass.is_finite()) {
@@ -3140,7 +3145,15 @@ impl Model {
         }
 
         second_moment *= mass / total;
-        let moi = Matrix3::identity() * second_moment.trace() - second_moment;
+        let mut moi = Matrix3::identity() * second_moment.trace() - second_moment;
+        if let MassModel::Retail { .. } = mass_model {
+            // Volition's converter moved the tensor to the center of mass with the identity where |c|^2 times the identity belongs
+            let center = first_moment / total;
+            moi -= (Matrix3::identity() - center * center.transpose()) * mass;
+            if moi.symmetric_eigenvalues().min() <= 0.0 {
+                return Err(MassPropertiesError::TooSmall);
+            }
+        }
         let inv_moi = moi.try_inverse().ok_or(MassPropertiesError::Degenerate)?.cast::<f32>();
         if inv_moi.iter().all(|val| val.is_finite()) {
             Ok((inv_moi.into(), skipped))
@@ -3347,6 +3360,8 @@ pub enum MassModel {
     Solid { cap_flat_holes: bool, skip_open: bool },
     /// Evenly over its surface.
     Shell,
+    /// As Volition's converter weighed the retail models: detail0 alone, as a solid, with its own formula for the tensor.
+    Retail { cap_flat_holes: bool },
 }
 impl Default for MassModel {
     fn default() -> Self {
@@ -3364,6 +3379,8 @@ pub enum MassPropertiesError {
     NothingToWeigh,
     InvalidMass,
     Degenerate,
+    /// The retail formula takes a square metre off each moment, which leaves a small model with no tensor.
+    TooSmall,
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone)]

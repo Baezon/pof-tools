@@ -11,6 +11,8 @@ const SOLID_SKIPPING: MassModel = MassModel::Solid { cap_flat_holes: false, skip
 const SOLID_CAPPING: MassModel = MassModel::Solid { cap_flat_holes: true, skip_open: false };
 const SOLID_CAPPING_AND_SKIPPING: MassModel = MassModel::Solid { cap_flat_holes: true, skip_open: true };
 const SHELL: MassModel = MassModel::Shell;
+const RETAIL: MassModel = MassModel::Retail { cap_flat_holes: false };
+const RETAIL_CAPPING: MassModel = MassModel::Retail { cap_flat_holes: true };
 
 /// The faces of a box whose corners are numbered by which of x, y and z are at their maximum,
 /// wound to face outwards.
@@ -258,7 +260,7 @@ fn a_lower_detail_level_is_left_out() {
     let alone = model_of(vec![hull.clone()], 75.0);
     let with_lod = model_of(vec![hull, opened(submodel("detail1", None, [0.0; 3], &[([-9.0; 3], [9.0; 3])]))], 75.0);
 
-    for mass_model in [SOLID, SHELL] {
+    for mass_model in [SOLID, SHELL, RETAIL] {
         assert_close(moi(&with_lod, mass_model), moi(&alone, mass_model));
     }
 }
@@ -268,7 +270,7 @@ fn a_model_with_nothing_to_weigh_has_no_tensor() {
     let no_geometry = model_of(vec![submodel("detail0", None, [0.0; 3], &[])], 100.0);
     let cube = [([-1.0; 3], [1.0; 3])];
 
-    for mass_model in [SOLID, SOLID_SKIPPING, SHELL] {
+    for mass_model in [SOLID, SOLID_SKIPPING, SHELL, RETAIL] {
         assert_eq!(Model::default().recalc_moi(mass_model).err(), Some(MassPropertiesError::NothingToWeigh));
         assert_eq!(no_geometry.recalc_moi(mass_model).err(), Some(MassPropertiesError::NothingToWeigh));
         assert_eq!(no_geometry.recalc_center_of_mass(mass_model).err(), Some(MassPropertiesError::NothingToWeigh));
@@ -629,6 +631,119 @@ fn a_solid_is_centered_by_volume_and_a_shell_by_area() {
 
     assert_vec_close(center_of_mass(&model, SOLID), Vec3d::new(10.0 * 64.0 / 72.0, 0.0, 0.0));
     assert_vec_close(center_of_mass(&model, SHELL), Vec3d::new(10.0 * 96.0 / 120.0, 0.0, 0.0));
+}
+
+// ---------------------------------------------------------------- the retail model
+
+#[test]
+fn a_retail_cube_has_a_square_metre_taken_off_each_moment() {
+    let model = model_of(vec![submodel("detail0", None, [0.0; 3], &[([-3.0; 3], [3.0; 3])])], 250.0);
+
+    // 1/6 m L^2 about each axis, less m
+    let retail = 1.0 / (250.0 * (6.0 - 1.0));
+    assert_close(moi(&model, RETAIL), diagonal(retail, retail, retail));
+}
+
+#[test]
+fn a_retail_box_off_center_gains_the_same_about_every_axis() {
+    let model = model_of(vec![submodel("detail0", None, [0.0; 3], &[([1.0, 2.0, -1.0], [4.0, 3.0, 5.0])])], 40.0);
+
+    // the box is 3 by 1 by 6 with its middle at (2.5, 2.5, 2), which is the square root of 16.5 from the origin
+    let [x, y, z] = [37.0, 45.0, 10.0].map(|sides| 1.0 / (40.0 * (sides / 12.0 + 16.5 - 1.0)));
+    assert_close(moi(&model, RETAIL), diagonal(x, y, z));
+    assert_vec_close(center_of_mass(&model, RETAIL), Vec3d::new(2.5, 2.5, 2.0));
+}
+
+#[test]
+fn a_retail_tensor_scales_against_the_mass() {
+    let boxes = [([1.0, 2.0, -1.0], [4.0, 3.0, 5.0])];
+    let light = model_of(vec![submodel("detail0", None, [0.0; 3], &boxes)], 40.0);
+    let heavy = model_of(vec![submodel("detail0", None, [0.0; 3], &boxes)], 80.0);
+
+    let mut halved = moi(&light, RETAIL);
+    halved *= 0.5;
+    assert_close(moi(&heavy, RETAIL), halved);
+}
+
+#[test]
+fn retail_weighs_the_hull_alone() {
+    let hull = submodel("detail0", None, [0.0; 3], &[([-3.0, -1.0, -6.0], [2.0, 1.5, 5.0])]);
+    let turret = submodel("turret01", Some(0), [1.5, 2.0, -3.0], &[([-0.5, -0.5, -1.0], [1.0, 0.5, 2.0])]);
+    let alone = model_of(vec![hull.clone()], 250.0);
+    let with_turret = model_of(vec![hull.clone(), turret.clone()], 250.0);
+    let with_open_turret = model_of(vec![hull, opened(turret)], 250.0);
+
+    for model in [&with_turret, &with_open_turret] {
+        assert_close(moi(model, RETAIL), moi(&alone, RETAIL));
+        assert_vec_close(center_of_mass(model, RETAIL), center_of_mass(&alone, RETAIL));
+        assert_eq!(model.recalc_mass(RETAIL), alone.recalc_mass(RETAIL));
+    }
+    assert!((center_of_mass(&with_turret, RETAIL) - center_of_mass(&with_turret, SOLID)).magnitude() > 0.01);
+}
+
+#[test]
+fn a_model_too_small_for_the_square_metre_has_no_retail_tensor() {
+    let cube = [([-0.5; 3], [0.5; 3])];
+    let model = model_of(vec![submodel("detail0", None, [0.0; 3], &cube)], 100.0);
+
+    assert_eq!(model.recalc_moi(RETAIL).err(), Some(MassPropertiesError::TooSmall));
+    assert_vec_close(center_of_mass(&model, RETAIL), Vec3d::ZERO);
+    assert!(model.recalc_mass(RETAIL).is_ok());
+    assert!(model.recalc_moi(SOLID).is_ok());
+
+    // the distance from the origin counts towards it too
+    let far_off = model_of(vec![submodel("detail0", None, [3.0, 0.0, 0.0], &cube)], 100.0);
+    let expected = 1.0 / (100.0 * (1.0 / 6.0 + 9.0 - 1.0));
+    assert_close(moi(&far_off, RETAIL), diagonal(expected, expected, expected));
+}
+
+#[test]
+fn a_retail_hull_has_to_be_closed() {
+    let hull = ([-2.0, -1.0, -4.0], [2.0, 1.0, 4.0]);
+    let closed = model_of(vec![submodel("detail0", None, [0.0; 3], &[hull])], 75.0);
+    let mut model = model_of(vec![submodel("detail0", None, [0.0; 3], &[])], 75.0);
+
+    model.submodels.0[0].bsp_data = box_without(&hull, &[3]);
+    assert_eq!(model.recalc_moi(RETAIL).err(), Some(bad_mesh(&[0], &[])));
+    assert_eq!(model.recalc_center_of_mass(RETAIL).err(), Some(bad_mesh(&[0], &[])));
+    assert_eq!(model.recalc_mass(RETAIL).err(), Some(bad_mesh(&[0], &[])));
+    assert_close(moi(&model, RETAIL_CAPPING), moi(&closed, RETAIL));
+    assert_vec_close(center_of_mass(&model, RETAIL_CAPPING), center_of_mass(&closed, RETAIL));
+
+    // a hole that runs around a corner
+    model.submodels.0[0].bsp_data = box_without(&hull, &[1, 3]);
+    assert_eq!(model.recalc_moi(RETAIL_CAPPING).err(), Some(bad_mesh(&[0], &[])));
+}
+
+#[test]
+fn a_retail_hull_has_to_face_outwards() {
+    let model = model_of(vec![submodel("detail0", None, [0.0; 3], &[([3.0, -3.0, -3.0], [-3.0, 3.0, 3.0])])], 100.0);
+
+    assert_eq!(model.recalc_moi(RETAIL).err(), Some(bad_mesh(&[], &[0])));
+    assert_eq!(model.recalc_mass(RETAIL).err(), Some(bad_mesh(&[], &[0])));
+}
+
+#[test]
+fn the_retail_mass_comes_of_the_hulls_volume() {
+    let mut model = model_of(
+        vec![
+            submodel("detail0", None, [0.0; 3], &[([-1.0; 3], [1.0; 3])]),
+            submodel("pod", Some(0), [4.0, 0.0, 0.0], &[([-1.0; 3], [1.0; 3])]),
+        ],
+        100.0,
+    );
+    model.header.bbox = BoundingBox {
+        min: Vec3d::new(-1.0, -1.0, -1.0),
+        max: Vec3d::new(5.0, 1.0, 1.0),
+    };
+
+    assert!((model.recalc_mass(RETAIL).unwrap() - 4.65 * 8f32.powf(0.6667)).abs() <= 1e-4);
+    // the others go by the bounding box
+    for mass_model in [SOLID, SHELL] {
+        assert!((model.recalc_mass(mass_model).unwrap() - 4.65 * 24f32.powf(2.0 / 3.0)).abs() <= 1e-4);
+    }
+
+    assert_eq!(Model::default().recalc_mass(RETAIL).err(), Some(MassPropertiesError::NothingToWeigh));
 }
 
 // ---------------------------------------------------------------- transforming the model

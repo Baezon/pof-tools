@@ -2984,11 +2984,16 @@ impl Model {
         bbox
     }
 
-    pub fn recalc_mass(&self, mass_model: MassModel) -> Result<f32, MassPropertiesError> {
+    /// The mass FSO would expect of a model of this volume, along with the open submodels that were left out of it.
+    /// A shell has no volume, so its bounding box stands in for it.
+    pub fn recalc_mass(&self, mass_model: MassModel) -> Result<(f32, Vec<SubmodelId>), MassPropertiesError> {
         match mass_model {
-            // the power is the one FSO's loader uses, which isn't quite two thirds
-            MassModel::Retail { .. } => Ok((4.65 * self.mass_integrals(mass_model)?.0.powf(0.6667)) as f32),
-            MassModel::Solid { .. } | MassModel::Shell => Ok(4.65 * (self.header.bbox.volume().powf(2.0 / 3.0))),
+            MassModel::Solid { .. } | MassModel::Retail { .. } => {
+                let (volume, _, _, skipped) = self.mass_integrals(mass_model)?;
+                // the power is the one FSO's loader uses, which isn't quite two thirds
+                Ok(((4.65 * volume.powf(0.6667)) as f32, skipped))
+            }
+            MassModel::Shell => Ok((4.65 * (self.header.bbox.volume().powf(2.0 / 3.0)), vec![])),
         }
     }
 

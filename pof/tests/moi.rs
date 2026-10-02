@@ -633,6 +633,45 @@ fn a_solid_is_centered_by_volume_and_a_shell_by_area() {
     assert_vec_close(center_of_mass(&model, SHELL), Vec3d::new(10.0 * 96.0 / 120.0, 0.0, 0.0));
 }
 
+// ---------------------------------------------------------------- mass
+
+#[test]
+fn a_solid_is_weighed_by_its_volume_and_a_shell_by_its_bounding_box() {
+    // two cubes of side 2, in a box of 6 by 2 by 2
+    let mut model = model_of(
+        vec![
+            submodel("detail0", None, [0.0; 3], &[([-1.0; 3], [1.0; 3])]),
+            submodel("pod", Some(0), [4.0, 0.0, 0.0], &[([-1.0; 3], [1.0; 3])]),
+        ],
+        100.0,
+    );
+    model.header.bbox = BoundingBox {
+        min: Vec3d::new(-1.0, -1.0, -1.0),
+        max: Vec3d::new(5.0, 1.0, 1.0),
+    };
+
+    assert!((model.recalc_mass(SOLID).unwrap().0 - 4.65 * 16f32.powf(0.6667)).abs() <= 1e-4);
+    assert!((model.recalc_mass(SHELL).unwrap().0 - 4.65 * 24f32.powf(2.0 / 3.0)).abs() <= 1e-4);
+}
+
+#[test]
+fn a_solids_mass_needs_closed_meshes_as_its_tensor_does() {
+    let hull = submodel("detail0", None, [0.0; 3], &[([-2.0, -1.0, -4.0], [2.0, 1.0, 4.0])]);
+    let alone = model_of(vec![hull.clone()], 75.0);
+    let with_turret = model_of(
+        vec![
+            hull,
+            opened(submodel("turret01", Some(0), [3.0, 1.0, -2.0], &[([-1.0, 0.0, -1.0], [1.0, 1.0, 1.0])])),
+        ],
+        75.0,
+    );
+
+    assert_eq!(with_turret.recalc_mass(SOLID).err(), Some(bad_mesh(&[1], &[])));
+    assert_eq!(with_turret.recalc_mass(SOLID_SKIPPING), Ok((alone.recalc_mass(SOLID).unwrap().0, vec![SubmodelId(1)])));
+    assert!(with_turret.recalc_mass(SOLID_CAPPING).unwrap().0 > alone.recalc_mass(SOLID).unwrap().0);
+    assert!(with_turret.recalc_mass(SHELL).is_ok());
+}
+
 // ---------------------------------------------------------------- the retail model
 
 #[test]
@@ -725,23 +764,17 @@ fn a_retail_hull_has_to_face_outwards() {
 
 #[test]
 fn the_retail_mass_comes_of_the_hulls_volume() {
-    let mut model = model_of(
+    let model = model_of(
         vec![
             submodel("detail0", None, [0.0; 3], &[([-1.0; 3], [1.0; 3])]),
             submodel("pod", Some(0), [4.0, 0.0, 0.0], &[([-1.0; 3], [1.0; 3])]),
         ],
         100.0,
     );
-    model.header.bbox = BoundingBox {
-        min: Vec3d::new(-1.0, -1.0, -1.0),
-        max: Vec3d::new(5.0, 1.0, 1.0),
-    };
 
-    assert!((model.recalc_mass(RETAIL).unwrap() - 4.65 * 8f32.powf(0.6667)).abs() <= 1e-4);
-    // the others go by the bounding box
-    for mass_model in [SOLID, SHELL] {
-        assert!((model.recalc_mass(mass_model).unwrap() - 4.65 * 24f32.powf(2.0 / 3.0)).abs() <= 1e-4);
-    }
+    assert!((model.recalc_mass(RETAIL).unwrap().0 - 4.65 * 8f32.powf(0.6667)).abs() <= 1e-4);
+    // a solid weighs the pod as well
+    assert!((model.recalc_mass(SOLID).unwrap().0 - 4.65 * 16f32.powf(0.6667)).abs() <= 1e-4);
 
     assert_eq!(Model::default().recalc_mass(RETAIL).err(), Some(MassPropertiesError::NothingToWeigh));
 }

@@ -1263,13 +1263,25 @@ impl PofToolsGui {
                     *recalc_message = None;
                 }
 
+                // a recalculation refreshes its own strings, as refreshing the panel would lose the message
+                let mut mass_recalculated = false;
                 ui.horizontal(|ui| {
                     ui.add(egui::Label::new("Mass:"));
-                    if ui.button("Recalculate").clicked() {
+                    if ui
+                        .button("Recalculate")
+                        .on_hover_text(if solid {
+                            "Works it out from its volume, as a retail model's was"
+                        } else if retail {
+                            "Works it out from the hull's volume, as a retail model's was"
+                        } else {
+                            "Works it out from its bounding box, which comes out several times heavier than a retail model"
+                        })
+                        .clicked()
+                    {
                         let mass_model = self.ui_state.mass_model;
                         let result = self.model.recalc_mass(mass_model);
-                        *recalc_message = UiState::mass_recalc_message(&self.model, mass_model, result.as_ref().map(|_| &[][..]));
-                        if let Ok(mut mass) = result {
+                        *recalc_message = UiState::mass_recalc_message(&self.model, mass_model, result.as_ref().map(|(_, skipped)| &skipped[..]));
+                        if let Ok((mut mass, _)) = result {
                             let mut moi = self.model.header.moment_of_inertia;
                             let ratio = self.model.header.mass / mass;
                             if ratio > 0.0 && ratio.is_finite() {
@@ -1283,7 +1295,8 @@ impl PofToolsGui {
                                     swap(&mut model.header.moment_of_inertia, &mut moi);
                                 }),
                             );
-                            self.ui_state.properties_panel_dirty = true;
+                            *mass_string = format!("{}", self.model.header.mass);
+                            mass_recalculated = true;
                         }
                     }
                 });
@@ -1311,12 +1324,11 @@ impl PofToolsGui {
                     undo_history,
                     &mut self.model,
                 );
-                let mut moi_changed = response.changed();
-                if response.changed() {
+                let mut moi_changed = response.changed() || mass_recalculated;
+                if moi_changed {
                     self.model.recheck_warnings(One(Warning::InvalidMomentOfInertia));
                 }
 
-                // a recalculation refreshes its own strings, as refreshing the panel would lose the message
                 ui.horizontal(|ui| {
                     ui.add(egui::Label::new("Center of Mass:"));
                     if ui

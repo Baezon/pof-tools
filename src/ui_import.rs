@@ -2,7 +2,7 @@ use egui::{collapsing_header::CollapsingState, Button, Color32, Id, Response, Ri
 use pof::{properties_delete_field, PathId, Submodel, SubmodelId, TextureId};
 
 use crate::{
-    start_loading_import_model,
+    display_path, start_loading_import_model,
     ui::{
         DockingTreeValue, EyeTreeValue, GlowTreeValue, InsigniaTreeValue, PathTreeValue, PofToolsGui, SpecialPointTreeValue, SubmodelTreeValue,
         ThrusterTreeValue, TreeValue, TurretTreeValue, UiState, WeaponTreeValue, ERROR_RED, WARNING_YELLOW,
@@ -133,7 +133,7 @@ impl UiState {
                             .import_window
                             .model
                             .as_ref()
-                            .map_or(String::new(), |model| model.path_to_file.display().to_string());
+                            .map_or(String::new(), |model| display_path(&model.path_to_file));
                         let path_string = match path_string.char_indices().nth_back(36) {
                             Some((n, _)) => format!("...{}", &path_string[(n + 3)..]),
                             None => path_string,

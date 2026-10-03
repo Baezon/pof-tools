@@ -145,6 +145,8 @@ impl TreeValue {
             Warning::SpecialPointPropertiesTooLong(idx) => Some(TreeValue::SpecialPoints(SpecialPointTreeValue::Point(*idx))),
             Warning::InvalidDockParentSubmodel(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(*idx))),
             Warning::Detail0NonZeroOffset => Some(TreeValue::Submodels(SubmodelTreeValue::Submodel(model.header.detail_levels[0]))),
+            Warning::InvalidMomentOfInertia => Some(TreeValue::Header),
+            Warning::InvalidMass => Some(TreeValue::Header),
         }
     }
 
@@ -516,6 +518,7 @@ pub struct UiState {
     pub display_origin: bool,
     pub display_uvec_fvec: bool,
     pub move_only_offset: bool,
+    pub mass_model: pof::MassModel,
     pub auto_gen_paths_confirm: bool,
 }
 
@@ -1212,6 +1215,12 @@ impl PofToolsGui {
                                 Warning::Detail0NonZeroOffset => {
                                     let id = self.model.header.detail_levels[0];
                                     format!("⚠ Detail0 submodel '{}' should have a (0, 0, 0) offset.", self.model.submodels[id].name)
+                                }
+                                Warning::InvalidMomentOfInertia => {
+                                    format!("⚠ The moment of inertia is zero or invalid, so FSO will not rotate this ship when it is hit")
+                                }
+                                Warning::InvalidMass => {
+                                    format!("⚠ The mass is zero or invalid, and FSO divides by it when this ship is hit")
                                 }
                                 Warning::PathNameTooLong(_)
                                 | Warning::SubmodelNameTooLong(_)

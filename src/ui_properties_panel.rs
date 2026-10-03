@@ -393,22 +393,25 @@ impl UiState {
 
         match skipped {
             Ok([]) => None,
-            Ok(skipped) => Some(Ok(format!("Left out for not being closed: {}", names(skipped)))),
+            Ok(skipped) => Some(Ok(format!("Some of the submodels were left out of this calculation:\n- Not closed: {}.", names(skipped)))),
             Err(MassPropertiesError::BadMesh { open, inside_out }) => {
-                let mut message = format!("⊗ A solid needs closed meshes that face outwards.");
+                let mut message = format!(
+                    "⊗ A solid needs closed meshes that face outwards. {} issues that block this calculation:",
+                    if retail { "The hull has" } else { "Some of the submodels have" }
+                );
                 if !open.is_empty() && capping {
-                    message += &format!(" With holes that aren't flat: {}.", names(open));
+                    message += &format!("\n- Holes that aren't flat: {}.", names(open));
                 } else if !open.is_empty() {
-                    message += &format!(" With open or unwelded edges: {}.", names(open));
+                    message += &format!("\n- Open or unwelded edges: {}.", names(open));
                 }
                 if !inside_out.is_empty() {
-                    message += &format!(" Facing inwards: {}.", names(inside_out));
+                    message += &format!("\n- Facing inwards: {}.", names(inside_out));
                 }
                 message += match (open.is_empty(), capping, retail) {
-                    (true, _, _) | (false, true, true) => " Fix the mesh or switch to Shell.",
-                    (false, false, true) => " Fix the mesh, cap the flat holes, or switch to Shell.",
-                    (false, true, false) => " Fix the mesh, skip the open submodels, or switch to Shell.",
-                    (false, false, false) => " Fix the mesh, cap the flat holes, skip the open submodels, or switch to Shell.",
+                    (true, _, _) | (false, true, true) => "\nFix the mesh or switch to Shell.",
+                    (false, false, true) => "\nFix the mesh, cap the flat holes, or switch to Shell.",
+                    (false, true, false) => "\nFix the mesh, skip the open submodels, or switch to Shell.",
+                    (false, false, false) => "\nFix the mesh, cap the flat holes, skip the open submodels, or switch to Shell.",
                 };
                 Some(Err(message))
             }
@@ -1214,7 +1217,8 @@ impl PofToolsGui {
                     ui.label("Mass Distribution:");
                     if ui
                         .selectable_label(solid, "Solid")
-                        .on_hover_text("Evenly through the volume. Needs closed meshes.")
+                        .on_hover_text("Treats the model as a filled volume. Includes the LOD0 hull \
+                        and its submodels. Needs closed meshes.")
                         .clicked()
                         && !solid
                     {
@@ -1224,8 +1228,9 @@ impl PofToolsGui {
                     if ui
                         .selectable_label(retail, "Retail")
                         .on_hover_text(
-                            "As Volition's converter meant to work it out: the detail 0 hull alone, with its own formula for the tensor. \
-                            For matching retail models. Needs a closed mesh.",
+                            "Approximates Volition's BSPGEN algorithm: the LOD0 hull alone, with \
+                            idiosyncrasies that typically vary about 10% from what Solid would generate. \
+                            Needs a closed mesh.",
                         )
                         .clicked()
                         && !retail
@@ -1235,7 +1240,8 @@ impl PofToolsGui {
                     }
                     if ui
                         .selectable_label(!solid && !retail, "Shell")
-                        .on_hover_text("Evenly over the surface")
+                        .on_hover_text("Treats the model as a hollow surface. Includes the LOD0 hull \
+                        and its submodels. Tolerates open meshes.")
                         .clicked()
                         && (solid || retail)
                     {
@@ -1270,11 +1276,11 @@ impl PofToolsGui {
                     if ui
                         .button("Recalculate")
                         .on_hover_text(if solid {
-                            "Works it out from its volume, as a retail model's was"
+                            "Considers the hull and its submodels"
                         } else if retail {
-                            "Works it out from the hull's volume, as a retail model's was"
+                            "Considers only the hull, which approximates retail"
                         } else {
-                            "Works it out from its bounding box, which comes out several times heavier than a retail model"
+                            "Considers the bounding box, which comes out several times heavier than retail"
                         })
                         .clicked()
                     {
@@ -1334,11 +1340,11 @@ impl PofToolsGui {
                     if ui
                         .button("Recalculate")
                         .on_hover_text(if solid {
-                            "Chooses the center of its volume"
+                            "Chooses the center of the combined volume"
                         } else if retail {
                             "Chooses the center of the hull's volume"
                         } else {
-                            "Chooses the average position of its surface area"
+                            "Chooses the average position of the combined surface"
                         })
                         .clicked()
                     {

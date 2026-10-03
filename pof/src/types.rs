@@ -2013,6 +2013,7 @@ impl Model {
                 }),
                 Warning::Detail0NonZeroOffset => self.header.detail_levels.get(0).map_or(false, |id| !self.submodels[*id].offset.is_null()),
                 Warning::InvalidMomentOfInertia => self.moi_test_failed(),
+                Warning::InvalidMass => self.mass_test_failed(),
             };
 
             let existing_warning = self.warnings.contains(&warning);
@@ -2155,6 +2156,10 @@ impl Model {
                 self.warnings.insert(Warning::InvalidMomentOfInertia);
             }
 
+            if self.mass_test_failed() {
+                self.warnings.insert(Warning::InvalidMass);
+            }
+
             for duped_id in self.header.detail_levels.iter().duplicates() {
                 self.warnings.insert(Warning::DuplicateDetailLevel(*duped_id));
             }
@@ -2239,6 +2244,11 @@ impl Model {
     fn moi_test_failed(&self) -> bool {
         let moi = glm::Mat3x3::from(self.header.moment_of_inertia);
         !self.submodels.is_empty() && (moi.iter().any(|val| !val.is_finite()) || moi.iter().all(|val| val.abs() < 1e-36))
+    }
+
+    // FSO divides by the mass when a ship is hit
+    fn mass_test_failed(&self) -> bool {
+        !self.submodels.is_empty() && !(self.header.mass > 0.0 && self.header.mass.is_finite())
     }
 
     // whether this submodel is missing from an intact ship, as a destroyed version, live debris, or a descendant of either
@@ -3420,6 +3430,7 @@ pub enum Warning {
     InvalidDockParentSubmodel(usize),
     Detail0NonZeroOffset,
     InvalidMomentOfInertia,
+    InvalidMass,
 
     PathNameTooLong(usize),
     SpecialPointNameTooLong(usize),

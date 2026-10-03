@@ -1375,9 +1375,8 @@ trait ParseCtx<'a> {
 
         model.header.max_radius = model.recalc_radius();
         model.header.bbox = model.recalc_bbox();
-        // a mesh that can't be weighed as a solid still gets a mass, from its bounding box
-        let mass = model.recalc_mass(MassModel::default()).or_else(|_| model.recalc_mass(MassModel::Shell));
-        model.header.mass = mass.unwrap_or_default().0;
+        // a mesh that can't be weighed as a solid is left with all three at zero, which the invalid mass and tensor warnings point out
+        model.header.mass = model.recalc_mass(MassModel::default()).unwrap_or_default().0;
         model.header.center_of_mass = model.recalc_center_of_mass(MassModel::default()).unwrap_or_default().0;
         model.header.moment_of_inertia = model.recalc_moi(MassModel::default()).unwrap_or_default().0;
     }

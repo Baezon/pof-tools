@@ -968,9 +968,28 @@ fn a_tensor_fso_would_complain_about_is_warned_of() {
 }
 
 #[test]
+fn a_mass_fso_would_divide_by_is_warned_of() {
+    let mut model = lopsided_model(SOLID);
+
+    model.recheck_warnings(Set::All);
+    assert!(!model.warnings.contains(&Warning::InvalidMass));
+
+    for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        model.header.mass = bad;
+        model.recheck_warnings(Set::One(Warning::InvalidMass));
+        assert!(model.warnings.contains(&Warning::InvalidMass), "{}", bad);
+    }
+
+    model.header.mass = 250.0;
+    model.recheck_warnings(Set::One(Warning::InvalidMass));
+    assert!(!model.warnings.contains(&Warning::InvalidMass));
+}
+
+#[test]
 fn a_blank_model_isnt_warned_about() {
     let mut model = Model::default();
     model.recheck_warnings(Set::All);
 
     assert!(!model.warnings.contains(&Warning::InvalidMomentOfInertia));
+    assert!(!model.warnings.contains(&Warning::InvalidMass));
 }

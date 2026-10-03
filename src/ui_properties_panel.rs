@@ -641,6 +641,7 @@ impl UiState {
                     mass_string: format!("{}", model.header.mass),
                     com_string: format!("{}", model.header.center_of_mass),
                     recalc_message: None,
+                    moi_mass: model.header.mass,
                     moir_string: format!(
                         "{:e}, {:e}, {:e}",
                         model.header.moment_of_inertia.rvec.x, model.header.moment_of_inertia.rvec.y, model.header.moment_of_inertia.rvec.z
@@ -874,6 +875,8 @@ pub enum PropertiesPanel {
         com_string: String,
         /// the outcome of the last center of mass or moment of inertia recalculation, where there's something to say of it
         recalc_message: Option<Result<String, String>>,
+        /// the mass the moment of inertia is scaled for; the mass field passes through values that it can't be scaled for
+        moi_mass: f32,
         moir_string: String,
         moiu_string: String,
         moif_string: String,
@@ -963,6 +966,7 @@ impl Default for PropertiesPanel {
             mass_string: Default::default(),
             com_string: Default::default(),
             recalc_message: None,
+            moi_mass: 0.0,
             moir_string: Default::default(),
             moiu_string: Default::default(),
             moif_string: Default::default(),
@@ -1107,6 +1111,7 @@ impl PofToolsGui {
                 mass_string,
                 com_string,
                 recalc_message,
+                moi_mass,
                 radius_string,
                 moir_string,
                 moiu_string,
@@ -1289,10 +1294,11 @@ impl PofToolsGui {
                         *recalc_message = UiState::mass_recalc_message(&self.model, mass_model, result.as_ref().map(|(_, skipped)| &skipped[..]));
                         if let Ok((mut mass, _)) = result {
                             let mut moi = self.model.header.moment_of_inertia;
-                            let ratio = self.model.header.mass / mass;
+                            let ratio = *moi_mass / mass;
                             if ratio > 0.0 && ratio.is_finite() {
                                 moi *= ratio;
                             }
+                            *moi_mass = mass;
                             model_action(
                                 undo_history,
                                 &mut self.model,
@@ -1310,9 +1316,10 @@ impl PofToolsGui {
                 // the moment of inertia is stored inverted, so it scales against the mass
                 let mass_change = parse_func(|model: &Model, mut new_mass: f32| {
                     let mut moi = model.header.moment_of_inertia;
-                    let ratio = model.header.mass / new_mass;
+                    let ratio = *moi_mass / new_mass;
                     if ratio > 0.0 && ratio.is_finite() {
                         moi *= ratio;
+                        *moi_mass = new_mass;
                     }
                     undo_func(move |model| {
                         swap(&mut model.header.mass, &mut new_mass);
@@ -1324,7 +1331,7 @@ impl PofToolsGui {
                     format!("{} mass", current_tree_selection),
                     &mut self.ui_state.viewport_3d_dirty,
                     ui,
-                    false,
+                    self.model.warnings.contains(&Warning::InvalidMass),
                     Some(mass_change),
                     mass_string,
                     undo_history,
@@ -1332,6 +1339,7 @@ impl PofToolsGui {
                 );
                 let mut moi_changed = response.changed() || mass_recalculated;
                 if moi_changed {
+                    self.model.recheck_warnings(One(Warning::InvalidMass));
                     self.model.recheck_warnings(One(Warning::InvalidMomentOfInertia));
                 }
 
@@ -1385,6 +1393,7 @@ impl PofToolsGui {
                                     swap(&mut model.header.moment_of_inertia, &mut moi);
                                 }),
                             );
+                            *moi_mass = self.model.header.mass;
                             moi_changed = true;
                         }
                     }
@@ -1403,6 +1412,7 @@ impl PofToolsGui {
                     moir_string
                 );
                 if response.changed() {
+                    *moi_mass = self.model.header.mass;
                     self.model.recheck_warnings(One(Warning::InvalidMomentOfInertia));
                 }
                 let response = model_value_widget!(
@@ -1413,6 +1423,7 @@ impl PofToolsGui {
                     moiu_string
                 );
                 if response.changed() {
+                    *moi_mass = self.model.header.mass;
                     self.model.recheck_warnings(One(Warning::InvalidMomentOfInertia));
                 }
                 let response = model_value_widget!(
@@ -1423,6 +1434,7 @@ impl PofToolsGui {
                     moif_string
                 );
                 if response.changed() {
+                    *moi_mass = self.model.header.mass;
                     self.model.recheck_warnings(One(Warning::InvalidMomentOfInertia));
                 }
 

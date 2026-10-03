@@ -146,6 +146,7 @@ impl TreeValue {
             Warning::InvalidDockParentSubmodel(idx) => Some(TreeValue::DockingBays(DockingTreeValue::Bay(*idx))),
             Warning::Detail0NonZeroOffset => Some(TreeValue::Submodels(SubmodelTreeValue::Submodel(model.header.detail_levels[0]))),
             Warning::InvalidMomentOfInertia => Some(TreeValue::Header),
+            Warning::InvalidMass => Some(TreeValue::Header),
         }
     }
 
@@ -1217,6 +1218,9 @@ impl PofToolsGui {
                                 }
                                 Warning::InvalidMomentOfInertia => {
                                     format!("⚠ The moment of inertia is zero or invalid, so FSO will not rotate this ship when it is hit")
+                                }
+                                Warning::InvalidMass => {
+                                    format!("⚠ The mass is zero or invalid, and FSO divides by it when this ship is hit")
                                 }
                                 Warning::PathNameTooLong(_)
                                 | Warning::SubmodelNameTooLong(_)

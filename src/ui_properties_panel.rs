@@ -1639,39 +1639,7 @@ impl PofToolsGui {
                     if let Some(id) = selected_id {
                         // even though the header version of this actually modifies the mesh, this just modifies the transform matrix
                         // ideally this would allow it to be undoable, but that's still really complicated...
-                        pub fn transform_submodel(model: &mut Model, id: SubmodelId, matrix: &TMat4<f32>, transform_offset: bool) {
-                            let no_trans_matrix = glm::set_row(matrix, 3, &glm::vec4(0.0, 0.0, 0.0, 1.0));
-                            let rot_matrix = no_trans_matrix.normalize();
-
-                            if !transform_offset {
-                                model.submodel_transform_matrix[id] *= matrix;
-                            } else {
-                                model.submodel_transform_matrix[id] *= no_trans_matrix;
-                            }
-
-                            for turret in &mut model.turrets {
-                                if id == turret.base_model {
-                                    for firepoint in &mut turret.fire_points {
-                                        *firepoint = &no_trans_matrix * *firepoint;
-                                    }
-                                    turret.normal.0 = &rot_matrix * turret.normal.0;
-                                }
-                            }
-
-                            if let Some((mut uvec, mut fvec)) = model.submodels[id].uvec_fvec() {
-                                uvec = &rot_matrix * uvec;
-                                fvec = &rot_matrix * fvec;
-                                pof::properties_update_field(&mut model.submodels[id].properties, "$uvec", &uvec.to_string());
-                                pof::properties_update_field(&mut model.submodels[id].properties, "$fvec", &fvec.to_string());
-                            }
-
-                            let children: Vec<_> = model.submodels[id].children().copied().collect();
-                            for child_id in children {
-                                transform_submodel(model, child_id, &no_trans_matrix, true)
-                            }
-                        }
-
-                        transform_submodel(&mut self.model, id, &matrix, false);
+                        self.model.transform_submodel(id, &matrix, false);
 
                         transform_window.open = false;
                     }

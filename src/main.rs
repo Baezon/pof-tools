@@ -12,8 +12,9 @@ extern crate simplelog;
 use crate::{
     primitives::OCTAHEDRON_VERTS,
     ui::{
-        DisplayMode, DockingTreeValue, DragAxis, EyeTreeValue, GlowTreeValue, InsigniaTreeValue, PathTreeValue, SpecialPointTreeValue,
-        SubmodelTreeValue, TextureTreeValue, ThrusterTreeValue, TurretTreeValue, UndoAction, WeaponTreeValue,
+        DisplayMode, DockingTreeValue, DragAxis, EyeTreeValue, GizmoAxis, GizmoDrag, GizmoMode, GizmoSnapshot, GizmoSubmodelSnapshot, GizmoTarget,
+        GizmoTurretSnapshot, GlowTreeValue, InsigniaTreeValue, PathTreeValue, SpecialPointTreeValue, SubmodelTreeValue, TextureTreeValue,
+        ThrusterTreeValue, TurretTreeValue, UndoAction, WeaponTreeValue,
     },
 };
 use eframe::egui::PointerButton;
@@ -412,6 +413,152 @@ impl DerefMut for Model {
     }
 }
 impl Model {
+    pub(crate) fn transform_submodel(&mut self, id: SubmodelId, matrix: &TMat4<f32>, transform_offset: bool) {
+        let no_trans_matrix = pof::mat4_rotation_and_scaling_only(matrix);
+        let rot_matrix = pof::mat4_rotation_only(&no_trans_matrix);
+
+        if !transform_offset {
+            self.submodel_transform_matrix[id] *= matrix;
+        } else {
+            self.submodel_transform_matrix[id] *= no_trans_matrix;
+            self.submodels[id].offset = &no_trans_matrix * self.submodels[id].offset;
+        }
+
+        self.transform_submodel_data(id, &no_trans_matrix, &rot_matrix);
+
+        let children: Vec<_> = self.submodels[id].children().copied().collect();
+        for child_id in children {
+            self.transform_submodel(child_id, &no_trans_matrix, true);
+        }
+    }
+
+    fn transform_submodel_data(&mut self, id: SubmodelId, matrix: &TMat4<f32>, rot_matrix: &TMat4<f32>) {
+        for turret in &mut self.turrets {
+            if id == turret.gun_model {
+                for firepoint in &mut turret.fire_points {
+                    *firepoint = matrix * *firepoint;
+                }
+            }
+            if id == turret.base_model {
+                turret.normal.0 = rot_matrix * turret.normal.0;
+            }
+        }
+
+        if let Some((uvec, fvec)) = self.submodels[id].uvec_fvec() {
+            pof::properties_update_field(&mut self.submodels[id].properties, "$uvec", &(rot_matrix * uvec).to_string());
+            pof::properties_update_field(&mut self.submodels[id].properties, "$fvec", &(rot_matrix * fvec).to_string());
+        }
+    }
+
+    fn gizmo_snapshot(&mut self, target: GizmoTarget) -> Option<GizmoSnapshot> {
+        match target {
+            GizmoTarget::Point(tree_value) => Some(GizmoSnapshot::Point(*tree_value.get_position_ref(self)?)),
+            GizmoTarget::Submodel(root) => {
+                if root.0 as usize >= self.submodels.len() {
+                    return None;
+                }
+
+                let mut ids = vec![root];
+                let mut cursor = 0;
+                while let Some(id) = ids.get(cursor).copied() {
+                    ids.extend(self.submodels[id].children().copied());
+                    cursor += 1;
+                }
+
+                let mut affected = vec![false; self.submodels.len()];
+                let submodels = ids
+                    .into_iter()
+                    .map(|id| {
+                        affected[id.0 as usize] = true;
+                        GizmoSubmodelSnapshot {
+                            id,
+                            transform: self.submodel_transform_matrix[id],
+                            offset: self.submodels[id].offset,
+                            properties: self.submodels[id].properties.clone(),
+                        }
+                    })
+                    .collect();
+                let turrets = self
+                    .turrets
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, turret)| {
+                        let transform_firepoints = affected.get(turret.gun_model.0 as usize).copied().unwrap_or(false);
+                        let transform_normal = affected.get(turret.base_model.0 as usize).copied().unwrap_or(false);
+                        (transform_firepoints || transform_normal).then(|| GizmoTurretSnapshot {
+                            index,
+                            value: turret.clone(),
+                            transform_firepoints,
+                            transform_normal,
+                        })
+                    })
+                    .collect();
+                Some(GizmoSnapshot::Submodels { submodels, turrets })
+            }
+        }
+    }
+
+    fn swap_gizmo_snapshot(&mut self, target: GizmoTarget, snapshot: &mut GizmoSnapshot) -> bool {
+        match (target, snapshot) {
+            (GizmoTarget::Point(tree_value), GizmoSnapshot::Point(position)) => {
+                let Some(current) = tree_value.get_position_ref(self) else {
+                    return false;
+                };
+                std::mem::swap(current, position);
+            }
+            (GizmoTarget::Submodel(_), GizmoSnapshot::Submodels { submodels, turrets }) => {
+                if submodels
+                    .iter()
+                    .any(|state| state.id.0 as usize >= self.submodels.len() || state.id.0 as usize >= self.submodel_transform_matrix.len())
+                    || turrets.iter().any(|state| state.index >= self.turrets.len())
+                {
+                    return false;
+                }
+                for state in submodels {
+                    std::mem::swap(&mut self.submodel_transform_matrix[state.id], &mut state.transform);
+                    std::mem::swap(&mut self.submodels[state.id].offset, &mut state.offset);
+                    std::mem::swap(&mut self.submodels[state.id].properties, &mut state.properties);
+                }
+                for state in turrets {
+                    std::mem::swap(&mut self.turrets[state.index], &mut state.value);
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn transform_submodels_world(&mut self, root: SubmodelId, snapshot: &GizmoSnapshot, matrix: &TMat4<f32>, rot_matrix: &TMat4<f32>) -> bool {
+        let GizmoSnapshot::Submodels { submodels, turrets } = snapshot else {
+            return false;
+        };
+        let matrix = pof::mat4_rotation_and_scaling_only(matrix);
+
+        for state in submodels {
+            let id = state.id;
+            self.submodel_transform_matrix[id] = matrix * self.submodel_transform_matrix[id];
+            if id != root {
+                self.submodels[id].offset = &matrix * self.submodels[id].offset;
+            }
+            if let Some((uvec, fvec)) = self.submodels[id].uvec_fvec() {
+                pof::properties_update_field(&mut self.submodels[id].properties, "$uvec", &(rot_matrix * uvec).to_string());
+                pof::properties_update_field(&mut self.submodels[id].properties, "$fvec", &(rot_matrix * fvec).to_string());
+            }
+        }
+        for state in turrets {
+            let turret = &mut self.turrets[state.index];
+            if state.transform_firepoints {
+                for firepoint in &mut turret.fire_points {
+                    *firepoint = &matrix * *firepoint;
+                }
+            }
+            if state.transform_normal {
+                turret.normal.0 = rot_matrix * turret.normal.0;
+            }
+        }
+        true
+    }
+
     pub fn clean_up(&mut self) {
         // apply changes form the texture map
         for smodel in self.pof_model.submodels.iter_mut() {
@@ -741,6 +888,8 @@ fn main() {
                 // handle whether the thread which handles loading has responded (if it exists)
                 if pt_gui.handle_model_loading_thread(&window, &display) {
                     undo_history.clear();
+                    pt_gui.gizmo_drag = None;
+                    pt_gui.gizmo_hover_axis = None;
                 }
 
                 pt_gui.handle_texture_loading_thread(&display);
@@ -748,6 +897,7 @@ fn main() {
                 pt_gui.handle_import_model_loading_thread();
 
                 egui.run(&window, |ctx| pt_gui.show_ui(ctx, &window, &display, &mut undo_history));
+                pt_gui.normalize_gizmo_mode();
 
                 let next_frame_time = std::time::Instant::now().checked_add(Duration::from_millis(1000 / 60)).unwrap();
                 target.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(next_frame_time));
@@ -760,7 +910,12 @@ fn main() {
 
                     // undo/redo
                     if egui.egui_ctx().input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Z)) {
-                        undo_history.undo(&mut *pt_gui.model);
+                        if let Some(drag) = pt_gui.gizmo_drag.take().filter(gizmo_drag_changed) {
+                            let _ = undo_history.apply(&mut *pt_gui.model, gizmo_undo_action(drag.target, drag.snapshot));
+                            let _ = undo_history.undo(&mut *pt_gui.model);
+                        } else {
+                            undo_history.undo(&mut *pt_gui.model);
+                        }
 
                         pt_gui.model.recalc_semantic_name_links();
                         pt_gui.model.recheck_warnings(Set::All);
@@ -837,7 +992,8 @@ fn main() {
                                 }
                             }
                             if mouse_in_3d_viewport && !pt_gui.import_window.open {
-                                pt_gui.camera_scale *= 1.0 + (input.raw_scroll_delta.y * -0.001)
+                                pt_gui.camera_scale =
+                                    (pt_gui.camera_scale * (1.0 + input.raw_scroll_delta.y * -0.001)).max(pt_gui.model.header.max_radius * 0.001);
                             }
                         }
                     });
@@ -850,19 +1006,56 @@ fn main() {
                     view_mat.prepend_translation_mut(&glm::vec3(-pt_gui.camera_offset.x, -pt_gui.camera_offset.y, -pt_gui.camera_offset.z));
                     view_mat.prepend_translation_mut(&glm::vec3(-model.visual_center.x, -model.visual_center.y, -model.visual_center.z));
 
-                    let mouse_pos = egui.egui_ctx().input(|i| {
-                        i.pointer.hover_pos().map(|pos| {
-                            ((pos.x / target.get_dimensions().0 as f32) * 2.0 - 1.0, (pos.y / target.get_dimensions().1 as f32) * 2.0 - 1.0)
-                        })
-                    });
-                    let mouse_vec = {
-                        mouse_pos.map(|pos| {
-                            let matrix = (perspective_matrix * view_mat).try_inverse().unwrap();
-                            let pos1 = &matrix * Vec3d::new(pos.0, -pos.1, 0.0);
-                            let pos2 = &matrix * Vec3d::new(pos.0, -pos.1, 1.0);
-                            (pos1, pos2)
-                        })
+                    let pixels_per_point = egui.egui_ctx().pixels_per_point();
+                    let (hover_pos, press_origin, primary_pressed) = egui
+                        .egui_ctx()
+                        .input(|i| (i.pointer.hover_pos(), i.pointer.press_origin(), i.pointer.button_pressed(PointerButton::Primary)));
+                    let matrix = (perspective_matrix * view_mat).try_inverse().unwrap();
+                    let pointer_ray = |pos| {
+                        let pos = pointer_to_ndc(pos, pixels_per_point, target.get_dimensions());
+                        let pos1 = &matrix * Vec3d::new(pos.0, -pos.1, 0.0);
+                        let pos2 = &matrix * Vec3d::new(pos.0, -pos.1, 1.0);
+                        (pos1, pos2)
                     };
+                    let mouse_vec = hover_pos.map(pointer_ray);
+                    let gizmo_pointer = gizmo_pointer_pos(primary_pressed, hover_pos, press_origin);
+                    let gizmo_mouse_vec = gizmo_pointer.map(pointer_ray);
+                    let inverse_view_rotation = rot_only_view_mat.transpose();
+                    let view_right: Vec3d = inverse_view_rotation.transform_vector(&glm::vec3(1.0, 0.0, 0.0)).normalize().into();
+                    let view_up: Vec3d = inverse_view_rotation.transform_vector(&glm::vec3(0.0, 1.0, 0.0)).normalize().into();
+
+                    // Transform gizmo hotkeys and current-frame hit ownership.
+                    if mouse_in_3d_viewport && !egui.egui_ctx().wants_keyboard_input() && pt_gui.gizmo_drag.is_none() {
+                        if let Some(gizmo_target) = pt_gui.gizmo_target() {
+                            egui.egui_ctx().input(|input| {
+                                for (key, mode) in [
+                                    (egui::Key::G, GizmoMode::Translate),
+                                    (egui::Key::R, GizmoMode::Rotate),
+                                    (egui::Key::S, GizmoMode::Scale),
+                                ] {
+                                    let applicable = mode.allowed_on(gizmo_target);
+                                    if applicable && input.modifiers.is_none() && input.key_pressed(key) {
+                                        pt_gui.gizmo_mode = if pt_gui.gizmo_mode == Some(mode) { None } else { Some(mode) };
+                                    }
+                                }
+                            });
+                        }
+                    }
+
+                    // ponytail: screen-constant-ish handle size; ignores camera panning, fine in practice
+                    let gizmo_len = pt_gui.camera_scale * 0.15;
+                    pt_gui.gizmo_hover_axis = None;
+                    // (target, center, axes) from hover-testing, reused when a drag starts; a hovered axis means no
+                    // lollipop click can change the selection or model in between, so the values stay valid
+                    let mut gizmo_ctx = None;
+                    if pt_gui.gizmo_drag.is_none() && pt_gui.drag_lollipop.is_none() && mouse_in_3d_viewport {
+                        if let (Some(gizmo_target), Some(mode), Some((ray_a, ray_b))) = (pt_gui.gizmo_target(), pt_gui.gizmo_mode, gizmo_mouse_vec) {
+                            let center = gizmo_center(&mut pt_gui.model, gizmo_target);
+                            let axes = gizmo_axes(&pt_gui.model, gizmo_target, pt_gui.gizmo_local);
+                            pt_gui.gizmo_hover_axis = gizmo_hit_axis(mode, center, &axes, gizmo_len, ray_a, ray_b);
+                            gizmo_ctx = Some((gizmo_target, center, axes));
+                        }
+                    }
 
                     if mouse_in_3d_viewport {
                         pt_gui.hover_lollipop = pt_gui.get_hover_lollipop(mouse_vec);
@@ -873,7 +1066,7 @@ fn main() {
                     // start the drag/selection if the user clicked on a lollipop
                     if let Some((vec1, vec2)) = mouse_vec {
                         egui.egui_ctx().input(|input| {
-                            if input.pointer.button_clicked(PointerButton::Primary) {
+                            if input.pointer.button_clicked(PointerButton::Primary) && pt_gui.gizmo_hover_axis.is_none() {
                                 if let Some(lollipop) = pt_gui.hover_lollipop {
                                     pt_gui.drag_lollipop = Some(lollipop);
                                     let vec = (vec1 - vec2).normalize();
@@ -951,7 +1144,7 @@ fn main() {
                                 };
 
                                 let in_3d_viewport = hover_pos.is_some_and(|hover_pos| availble_rect.contains(hover_pos));
-                                if mouse_pos.is_none() || !(-1.0..=1.0).contains(&t) || !primary_down || !in_3d_viewport {
+                                if hover_pos.is_none() || !(-1.0..=1.0).contains(&t) || !primary_down || !in_3d_viewport {
                                     // awkward but this will immediately apply the action, even though its already been done (we just need to push it to the stack)
                                     // so filter out its first invocation
                                     let mut delta_vec =
@@ -985,6 +1178,94 @@ fn main() {
                             pt_gui.drag_lollipop = None;
                             pt_gui.actually_dragging = false;
                         }
+                    }
+
+                    // Start a gizmo drag using the hit result calculated before lollipop click handling.
+                    if pt_gui.gizmo_drag.is_none() && pt_gui.drag_lollipop.is_none() && mouse_in_3d_viewport {
+                        if let (Some((gizmo_target, center, axes)), Some(mode), Some((ray_a, ray_b))) =
+                            (gizmo_ctx, pt_gui.gizmo_mode, gizmo_mouse_vec)
+                        {
+                            if let Some(axis) = pt_gui.gizmo_hover_axis {
+                                if primary_pressed {
+                                    let last_pointer = gizmo_pointer.unwrap();
+                                    let drag_params = if let Some(i) = axis.index() {
+                                        let axis_vec = axes[i];
+                                        match mode {
+                                            GizmoMode::Translate | GizmoMode::Scale => axis_ray_param(center, axis_vec, ray_a, ray_b)
+                                                .filter(|s| mode == GizmoMode::Translate || s.abs() > gizmo_len * 1e-3)
+                                                .map(|s| (axis_vec, s, if mode == GizmoMode::Scale { 1.0 } else { s }, Vec3d::ZERO)),
+                                            GizmoMode::Rotate => ray_plane_intersect(center, axis_vec, ray_a, ray_b)
+                                                .or_else(|| gizmo_ring_fallback(center, axis_vec, gizmo_len, ray_a, ray_b).map(|(point, _)| point))
+                                                .filter(|hit| (*hit - center).magnitude() > gizmo_len * 1e-3)
+                                                .map(|hit| (axis_vec, 0.0, 0.0, (hit - center).normalize())),
+                                        }
+                                    } else {
+                                        Some((Vec3d::ZERO, 0.0, if mode == GizmoMode::Scale { 1.0 } else { 0.0 }, Vec3d::ZERO))
+                                    };
+                                    if let (Some((axis_vec, start_param, last_param, last_vec)), Some(snapshot)) =
+                                        (drag_params, pt_gui.model.gizmo_snapshot(gizmo_target))
+                                    {
+                                        pt_gui.gizmo_drag = Some(GizmoDrag {
+                                            mode,
+                                            target: gizmo_target,
+                                            axis,
+                                            axis_vec,
+                                            center,
+                                            gizmo_len,
+                                            start_param,
+                                            last_param,
+                                            last_vec,
+                                            last_pointer,
+                                            view_right,
+                                            view_up,
+                                            world_per_point: pt_gui.camera_scale * 0.003,
+                                            accum_offset: Vec3d::ZERO,
+                                            accum_mat: glm::identity(),
+                                            snapshot,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(mut drag) = pt_gui.gizmo_drag.take() {
+                        let (primary_down, escape, snap) = egui
+                            .egui_ctx()
+                            .input(|input| (input.pointer.primary_down(), input.key_pressed(egui::Key::Escape), input.modifiers.shift));
+                        let target_gone = match drag.target {
+                            GizmoTarget::Submodel(id) => !submodel_exists(&pt_gui.model, id),
+                            GizmoTarget::Point(tree_value) => tree_value.get_position_ref(&mut pt_gui.model).is_none(),
+                        };
+
+                        if target_gone {
+                            // The model changed underneath the drag.
+                        } else if escape {
+                            pt_gui.revert_gizmo_drag(&mut drag);
+                        } else if !primary_down {
+                            update_gizmo_drag(&mut pt_gui.model, &mut drag, mouse_vec, hover_pos, snap);
+                            let changed = gizmo_drag_changed(&drag);
+                            if changed {
+                                let _ = undo_history.apply(&mut pt_gui.model, gizmo_undo_action(drag.target, drag.snapshot));
+                                pt_gui.model.recheck_warnings(Set::One(pof::Warning::Detail0NonZeroOffset));
+                                pt_gui.ui_state.refresh_properties_panel(&pt_gui.model);
+                                pt_gui.ui_state.viewport_3d_dirty = true;
+                            } else {
+                                pt_gui.model.swap_gizmo_snapshot(drag.target, &mut drag.snapshot);
+                            }
+                        } else {
+                            update_gizmo_drag(&mut pt_gui.model, &mut drag, mouse_vec, hover_pos, snap);
+                            pt_gui.ui_state.refresh_properties_panel(&pt_gui.model);
+                            pt_gui.ui_state.viewport_3d_dirty = true;
+                            pt_gui.gizmo_drag = Some(drag);
+                        }
+                    }
+
+                    let mut gizmo_draw = None;
+                    if let (Some(gizmo_target), Some(mode)) = (pt_gui.gizmo_target(), pt_gui.gizmo_mode) {
+                        let center = gizmo_center(&mut pt_gui.model, gizmo_target);
+                        let axes = gizmo_axes(&pt_gui.model, gizmo_target, pt_gui.gizmo_local);
+                        gizmo_draw = Some((mode, center, axes));
                     }
 
                     //
@@ -1428,6 +1709,111 @@ fn main() {
                             .unwrap();
                     }
 
+                    // draw the transform gizmo (always on top, like the lollipop sticks)
+                    if let Some((mode, center, axes)) = gizmo_draw {
+                        let active_axis = pt_gui.gizmo_drag.as_ref().map(|drag| drag.axis).or(pt_gui.gizmo_hover_axis);
+                        let world_vert_matrix: [[f32; 4]; 4] = (perspective_matrix * view_mat).into();
+
+                        for (i, axis) in axes.iter().enumerate() {
+                            let color = if active_axis == Some(GizmoAxis::XYZ[i]) {
+                                GIZMO_HOVER_COLOR
+                            } else {
+                                GIZMO_AXIS_COLORS[i]
+                            };
+                            // the stick shader halves its color, so compensate
+                            let stick_color = color.map(|c| c * 2.0);
+
+                            match mode {
+                                GizmoMode::Translate | GizmoMode::Scale => {
+                                    let tip = center + *axis * gizmo_len;
+                                    let verts = [
+                                        Vertex { position: (center.x, center.y, center.z), uv: (0.0, 0.0) },
+                                        Vertex { position: (tip.x, tip.y, tip.z), uv: (0.0, 0.0) },
+                                    ];
+                                    let uniforms = glium::uniform! {
+                                        vert_matrix: world_vert_matrix,
+                                        lollipop_color: stick_color,
+                                    };
+                                    target
+                                        .draw(
+                                            &glium::VertexBuffer::new(&display, &verts).unwrap(),
+                                            glium::index::NoIndices(glium::index::PrimitiveType::LinesList),
+                                            &pt_gui.graphics.lollipop_stick_shader,
+                                            &uniforms,
+                                            &pt_gui.graphics.lollipop_stick_params,
+                                        )
+                                        .unwrap();
+
+                                    if mode == GizmoMode::Translate {
+                                        let mut mat = glm::translation::<f32>(&tip.into());
+                                        mat *= axis.to_rotation_matrix();
+                                        mat *= glm::scaling(&glm::vec3(gizmo_len * 0.15, gizmo_len * 0.15, gizmo_len * 0.15));
+                                        let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * view_mat * mat).into();
+                                        draw_gizmo_mesh(
+                                            &mut target,
+                                            &pt_gui.graphics.arrowhead_verts,
+                                            &pt_gui.graphics.arrowhead_indices,
+                                            &pt_gui.graphics.arrowhead_shader,
+                                            vert_matrix,
+                                            color,
+                                            &pt_gui.graphics.lollipop_stick_params,
+                                        );
+                                    } else {
+                                        let side = gizmo_len * 0.12;
+                                        let mut mat = glm::translation::<f32>(&glm::vec3(tip.x - side * 0.5, tip.y - side * 0.5, tip.z - side * 0.5));
+                                        mat *= glm::scaling(&glm::vec3(side, side, side));
+                                        let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * view_mat * mat).into();
+                                        draw_gizmo_mesh(
+                                            &mut target,
+                                            &pt_gui.graphics.box_verts,
+                                            &pt_gui.graphics.box_indices,
+                                            &pt_gui.graphics.lollipop_stick_shader,
+                                            vert_matrix,
+                                            stick_color,
+                                            &pt_gui.graphics.lollipop_stick_params,
+                                        );
+                                    }
+                                }
+                                GizmoMode::Rotate => {
+                                    let mut mat = glm::translation::<f32>(&center.into());
+                                    mat *= axis.to_rotation_matrix();
+                                    mat *= glm::rotation(-std::f32::consts::FRAC_PI_2, &glm::vec3(1.0, 0.0, 0.0));
+                                    mat *= glm::scaling(&glm::vec3(gizmo_len, gizmo_len, gizmo_len));
+                                    let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * view_mat * mat).into();
+                                    draw_gizmo_mesh(
+                                        &mut target,
+                                        &pt_gui.graphics.circle_verts,
+                                        &pt_gui.graphics.circle_indices,
+                                        &pt_gui.graphics.lollipop_stick_shader,
+                                        vert_matrix,
+                                        stick_color,
+                                        &pt_gui.graphics.lollipop_stick_params,
+                                    );
+                                }
+                            }
+                        }
+
+                        let center_color = (if active_axis == Some(GizmoAxis::Center) {
+                            GIZMO_HOVER_COLOR
+                        } else {
+                            GIZMO_CENTER_COLOR
+                        })
+                        .map(|c| c * 2.0);
+                        let side = gizmo_len * 0.18;
+                        let mut mat = glm::translation::<f32>(&glm::vec3(center.x - side * 0.5, center.y - side * 0.5, center.z - side * 0.5));
+                        mat *= glm::scaling(&glm::vec3(side, side, side));
+                        let vert_matrix: [[f32; 4]; 4] = (perspective_matrix * view_mat * mat).into();
+                        draw_gizmo_mesh(
+                            &mut target,
+                            &pt_gui.graphics.box_verts,
+                            &pt_gui.graphics.box_indices,
+                            &pt_gui.graphics.lollipop_stick_shader,
+                            vert_matrix,
+                            center_color,
+                            &pt_gui.graphics.lollipop_stick_params,
+                        );
+                    }
+
                     // don't display lollipops if you're in header or submodels, unless display_origin is on, since that's the only lollipop they have
 
                     let display_lollipops = (!matches!(pt_gui.ui_state.tree_view_selection, TreeValue::Header)
@@ -1681,6 +2067,14 @@ fn get_list_of_display_submodels(model: &Model, tree_selection: TreeValue, last_
 }
 
 impl PofToolsGui {
+    /// Revert a live-applied (but never history-pushed) gizmo drag.
+    fn revert_gizmo_drag(&mut self, drag: &mut GizmoDrag) {
+        if self.model.swap_gizmo_snapshot(drag.target, &mut drag.snapshot) {
+            self.ui_state.refresh_properties_panel(&self.model);
+            self.ui_state.viewport_3d_dirty = true;
+        }
+    }
+
     fn get_hover_lollipop(&mut self, mouse_vec: Option<(Vec3d, Vec3d)>) -> Option<TreeValue> {
         let (camera_vec, mouse_vec) = mouse_vec?;
 
@@ -2258,12 +2652,393 @@ fn closest_approach(line_a: Vec3d, line_b: Vec3d, point: Vec3d) -> Vec3d {
     (a2b * t) + line_a
 }
 
+fn pointer_to_ndc(pos: egui::Pos2, pixels_per_point: f32, dimensions: (u32, u32)) -> (f32, f32) {
+    let physical = pos * pixels_per_point;
+    ((physical.x / dimensions.0 as f32) * 2.0 - 1.0, (physical.y / dimensions.1 as f32) * 2.0 - 1.0)
+}
+
+fn gizmo_pointer_pos(primary_pressed: bool, hover_pos: Option<egui::Pos2>, press_origin: Option<egui::Pos2>) -> Option<egui::Pos2> {
+    if primary_pressed {
+        press_origin.or(hover_pos)
+    } else {
+        hover_pos
+    }
+}
+
+fn ray_point_distance(point: Vec3d, ray_a: Vec3d, ray_b: Vec3d) -> f32 {
+    let dir = ray_b - ray_a;
+    let dir_len = dir.magnitude_squared();
+    if !dir_len.is_finite() || dir_len <= f32::EPSILON {
+        return f32::INFINITY;
+    }
+    let t = (point - ray_a).dot(&dir) / dir_len;
+    if !t.is_finite() || t < 0.0 {
+        return f32::INFINITY;
+    }
+    let distance = (ray_a + dir * t - point).magnitude();
+    if distance.is_finite() {
+        distance
+    } else {
+        f32::INFINITY
+    }
+}
+
+fn gizmo_axis_distance(center: Vec3d, axis: Vec3d, gizmo_len: f32, ray_a: Vec3d, ray_b: Vec3d) -> f32 {
+    if !gizmo_len.is_finite() || gizmo_len <= 0.0 {
+        return f32::INFINITY;
+    }
+    axis_ray_param(center, axis, ray_a, ray_b)
+        .map(|s| {
+            let point = center + axis * s.clamp(0.0, gizmo_len);
+            ray_point_distance(point, ray_a, ray_b)
+        })
+        // A view-aligned shaft has no unique closest approach, but its visible tip is still clickable.
+        .unwrap_or_else(|| ray_point_distance(center + axis * gizmo_len, ray_a, ray_b))
+}
+
+fn axis_ray_param(center: Vec3d, axis: Vec3d, ray_a: Vec3d, ray_b: Vec3d) -> Option<f32> {
+    let dir = ray_b - ray_a;
+    let w = center - ray_a;
+    let a = axis.magnitude_squared();
+    let b = axis.dot(&dir);
+    let c = dir.magnitude_squared();
+    let d = axis.dot(&w);
+    let e = dir.dot(&w);
+    if !a.is_finite() || !c.is_finite() || a <= f32::EPSILON || c <= f32::EPSILON {
+        return None;
+    }
+    let denom = a * c - b * b;
+    if !denom.is_finite() || denom.abs() <= 1e-12 * a * c {
+        return None;
+    }
+    let s = (b * e - c * d) / denom;
+    let t = (a * e - b * d) / denom;
+    (s.is_finite() && t.is_finite() && t >= 0.0).then_some(s)
+}
+
+fn ray_plane_intersect(center: Vec3d, normal: Vec3d, ray_a: Vec3d, ray_b: Vec3d) -> Option<Vec3d> {
+    let dir = ray_b - ray_a;
+    let denom = dir.dot(&normal);
+    let scale = dir.magnitude() * normal.magnitude();
+    if !scale.is_finite() || scale <= f32::EPSILON || !denom.is_finite() || denom.abs() <= 1e-9 * scale {
+        return None;
+    }
+    let t = (center - ray_a).dot(&normal) / denom;
+    if !t.is_finite() || t < 0.0 {
+        return None;
+    }
+    let hit = ray_a + dir * t;
+    (hit.x.is_finite() && hit.y.is_finite() && hit.z.is_finite()).then_some(hit)
+}
+
+fn gizmo_ring_distance(center: Vec3d, normal: Vec3d, radius: f32, ray_a: Vec3d, ray_b: Vec3d) -> f32 {
+    if let Some(hit) = ray_plane_intersect(center, normal, ray_a, ray_b) {
+        return ((hit - center).magnitude() - radius).abs();
+    }
+    gizmo_ring_fallback(center, normal, radius, ray_a, ray_b).map_or(f32::INFINITY, |(_, distance)| distance)
+}
+
+fn gizmo_ring_fallback(center: Vec3d, normal: Vec3d, radius: f32, ray_a: Vec3d, ray_b: Vec3d) -> Option<(Vec3d, f32)> {
+    if !radius.is_finite() || radius <= 0.0 || !normal.magnitude_squared().is_finite() || normal.magnitude_squared() <= f32::EPSILON {
+        return None;
+    }
+
+    // When the ray lies in the ring plane, the rendered ring is edge-on but still visible.
+    let normal = normal.normalize();
+    let helper = if normal.x.abs() < 0.9 {
+        Vec3d::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3d::new(0.0, 1.0, 0.0)
+    };
+    let u = normal.cross(&helper).normalize();
+    let v = normal.cross(&u);
+    (0..64)
+        .map(|i| {
+            let angle = std::f32::consts::TAU * i as f32 / 64.0;
+            let point = center + (u * angle.cos() + v * angle.sin()) * radius;
+            (point, ray_point_distance(point, ray_a, ray_b))
+        })
+        .min_by(|(_, a), (_, b)| a.total_cmp(b))
+}
+
+fn gizmo_hit_axis(mode: GizmoMode, center: Vec3d, axes: &[Vec3d; 3], gizmo_len: f32, ray_a: Vec3d, ray_b: Vec3d) -> Option<GizmoAxis> {
+    if !gizmo_len.is_finite() || gizmo_len <= 0.0 {
+        return None;
+    }
+    if ray_point_distance(center, ray_a, ray_b) < gizmo_len * 0.15 {
+        return Some(GizmoAxis::Center);
+    }
+
+    let mut hit = None;
+    let mut best = gizmo_len * 0.2;
+    for (i, axis) in axes.iter().enumerate() {
+        let distance = match mode {
+            GizmoMode::Translate | GizmoMode::Scale => gizmo_axis_distance(center, *axis, gizmo_len, ray_a, ray_b),
+            GizmoMode::Rotate => gizmo_ring_distance(center, *axis, gizmo_len, ray_a, ray_b),
+        };
+        if distance < best {
+            best = distance;
+            hit = Some(GizmoAxis::XYZ[i]);
+        }
+    }
+    hit
+}
+
+fn axis_scaling(axis: Vec3d, factor: f32) -> TMat4<f32> {
+    let mut mat = glm::identity::<f32, 4>();
+    let factor_delta = factor - 1.0;
+    let axis = [axis.x, axis.y, axis.z];
+    for row in 0..3 {
+        for col in 0..3 {
+            mat[(row, col)] += factor_delta * axis[row] * axis[col];
+        }
+    }
+    mat
+}
+
+fn gizmo_center(model: &mut Model, target: GizmoTarget) -> Vec3d {
+    match target {
+        GizmoTarget::Submodel(id) => model.get_total_submodel_offset(id),
+        GizmoTarget::Point(tree_val) => {
+            let mut position = *tree_val.get_position_ref(model).unwrap();
+            if let TreeValue::Turrets(TurretTreeValue::TurretPoint(i, _)) = tree_val {
+                position += model.get_total_submodel_offset(model.turrets[i].gun_model);
+            }
+            position
+        }
+    }
+}
+
+fn apply_gizmo_translation(model: &mut Model, target: GizmoTarget, delta: Vec3d) {
+    match target {
+        GizmoTarget::Submodel(id) => model.submodels[id].offset += delta,
+        GizmoTarget::Point(tree_val) => *tree_val.get_position_ref(model).unwrap() += delta,
+    }
+}
+
+fn submodel_exists(model: &Model, id: SubmodelId) -> bool {
+    (id.0 as usize) < model.submodels.len()
+}
+
+fn draw_gizmo_mesh(
+    target: &mut glium::Frame, verts: &glium::VertexBuffer<Vertex>, indices: &glium::IndexBuffer<u16>, shader: &glium::Program,
+    vert_matrix: [[f32; 4]; 4], color: [f32; 4], params: &glium::DrawParameters<'_>,
+) {
+    use glium::Surface as _;
+    let uniforms = glium::uniform! {
+        vert_matrix: vert_matrix,
+        lollipop_color: color,
+    };
+    target.draw(verts, indices, shader, &uniforms, params).unwrap();
+}
+
+// Shift-snapping increments for gizmo drags.
+const GIZMO_SNAP_ANGLE: f32 = 5.0 * std::f32::consts::PI / 180.0;
+const GIZMO_SNAP_TRANSLATE: f32 = 1.0;
+const GIZMO_SNAP_SCALE: f32 = 0.05;
+
+fn snap_to(value: f32, step: f32) -> f32 {
+    (value / step).round() * step
+}
+
+fn update_gizmo_drag(model: &mut Model, drag: &mut GizmoDrag, mouse_vec: Option<(Vec3d, Vec3d)>, mouse_pos: Option<egui::Pos2>, snap: bool) {
+    if drag.axis == GizmoAxis::Center {
+        let Some(mouse_pos) = mouse_pos else { return };
+        let delta = mouse_pos - drag.last_pointer;
+        if !delta.x.is_finite() || !delta.y.is_finite() {
+            return;
+        }
+        let applied = match (drag.mode, drag.target) {
+            (GizmoMode::Translate, _) if drag.world_per_point.is_finite() && drag.world_per_point > 0.0 => {
+                let mut movement = (drag.view_right * delta.x - drag.view_up * delta.y) * drag.world_per_point;
+                if snap {
+                    let target = drag.accum_offset + movement;
+                    let target = Vec3d::new(
+                        snap_to(target.x, GIZMO_SNAP_TRANSLATE),
+                        snap_to(target.y, GIZMO_SNAP_TRANSLATE),
+                        snap_to(target.z, GIZMO_SNAP_TRANSLATE),
+                    );
+                    movement = target - drag.accum_offset;
+                    if movement == Vec3d::ZERO {
+                        // hold last_pointer so the mouse delta keeps accumulating toward the next snap step
+                        return;
+                    }
+                }
+                apply_gizmo_translation(model, drag.target, movement);
+                drag.accum_offset += movement;
+                true
+            }
+            // ponytail: no snapping for the trackball rotate, it has no single angle to snap
+            (GizmoMode::Rotate, GizmoTarget::Submodel(_)) => {
+                let rotation = glm::rotation(-delta.x * 0.01, &drag.view_up.into()) * glm::rotation(-delta.y * 0.01, &drag.view_right.into());
+                let applied = apply_world_transform(model, drag, &rotation);
+                if applied {
+                    drag.accum_mat = rotation * drag.accum_mat;
+                }
+                applied
+            }
+            (GizmoMode::Scale, GizmoTarget::Submodel(_)) => {
+                let exponent = (delta.x - delta.y) * 0.01;
+                if !exponent.is_finite() {
+                    return;
+                }
+                let mut total = (drag.last_param * exponent.exp()).clamp(0.01, 100.0);
+                if snap {
+                    total = snap_to(total, GIZMO_SNAP_SCALE).clamp(GIZMO_SNAP_SCALE, 100.0);
+                    if total == drag.last_param {
+                        // hold last_pointer so the mouse delta keeps accumulating toward the next snap step
+                        return;
+                    }
+                }
+                let step = total / drag.last_param;
+                let scale = glm::scaling(&glm::vec3(step, step, step));
+                let applied = apply_world_transform(model, drag, &scale);
+                if applied {
+                    drag.accum_mat = scale * drag.accum_mat;
+                    drag.last_param = total;
+                }
+                applied
+            }
+            _ => false,
+        };
+        if applied {
+            drag.last_pointer = mouse_pos;
+        }
+        return;
+    }
+
+    let Some((ray_a, ray_b)) = mouse_vec else { return };
+    match (drag.mode, drag.target) {
+        (GizmoMode::Translate, _) => {
+            if let Some(s) = axis_ray_param(drag.center, drag.axis_vec, ray_a, ray_b) {
+                let s = if snap {
+                    drag.start_param + snap_to(s - drag.start_param, GIZMO_SNAP_TRANSLATE)
+                } else {
+                    s
+                };
+                let delta = drag.axis_vec * (s - drag.last_param);
+                apply_gizmo_translation(model, drag.target, delta);
+                drag.accum_offset += delta;
+                drag.last_param = s;
+            }
+        }
+        (GizmoMode::Rotate, GizmoTarget::Submodel(_)) => {
+            if let Some(hit) = ray_plane_intersect(drag.center, drag.axis_vec, ray_a, ray_b)
+                .or_else(|| gizmo_ring_fallback(drag.center, drag.axis_vec, drag.gizmo_len, ray_a, ray_b).map(|(point, _)| point))
+            {
+                let v = hit - drag.center;
+                if v.magnitude() > 1e-6 {
+                    let v = v.normalize();
+                    let raw_angle = drag.last_vec.cross(&v).dot(&drag.axis_vec).atan2(drag.last_vec.dot(&v));
+                    if raw_angle.is_finite() {
+                        // for Rotate, last_param tracks the raw dragged angle and start_param the angle
+                        // actually applied to the model (snapping makes these differ)
+                        drag.last_param += raw_angle;
+                        drag.last_vec = v;
+                        let target = if snap {
+                            snap_to(drag.last_param, GIZMO_SNAP_ANGLE)
+                        } else {
+                            drag.last_param
+                        };
+                        let step = target - drag.start_param;
+                        if step != 0.0 {
+                            let rot = glm::rotation(step, &drag.axis_vec.into());
+                            if apply_world_transform(model, drag, &rot) {
+                                drag.accum_mat = rot * drag.accum_mat;
+                                drag.start_param = target;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        (GizmoMode::Scale, GizmoTarget::Submodel(_)) => {
+            if let Some(s) = axis_ray_param(drag.center, drag.axis_vec, ray_a, ray_b) {
+                let mut total = (s / drag.start_param).clamp(0.01, 100.0);
+                if snap {
+                    total = snap_to(total, GIZMO_SNAP_SCALE).clamp(GIZMO_SNAP_SCALE, 100.0);
+                }
+                let step = total / drag.last_param;
+                if step != 1.0 {
+                    let scale = axis_scaling(drag.axis_vec, step);
+                    if apply_world_transform(model, drag, &scale) {
+                        drag.accum_mat = scale * drag.accum_mat;
+                        drag.last_param = total;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn gizmo_axes(model: &Model, target: GizmoTarget, local: bool) -> [Vec3d; 3] {
+    let world = [Vec3d::new(1.0, 0.0, 0.0), Vec3d::new(0.0, 1.0, 0.0), Vec3d::new(0.0, 0.0, 1.0)];
+    let id = match target {
+        GizmoTarget::Submodel(id) if local => id,
+        _ => return world,
+    };
+    let mat = &model.submodel_transform_matrix[id];
+    let col = |i| Vec3d::new(mat[(0, i)], mat[(1, i)], mat[(2, i)]);
+    let x = col(0);
+    if x.magnitude() < 1e-6 {
+        return world;
+    }
+    let x = x.normalize();
+    let y = col(1) - x * col(1).dot(&x);
+    if y.magnitude() < 1e-6 {
+        return world;
+    }
+    let y = y.normalize();
+    let z = x.cross(&y);
+    let z = if col(2).dot(&z) < 0.0 { -z } else { z };
+    [x, y, z]
+}
+
+fn apply_world_transform(model: &mut Model, drag: &GizmoDrag, world_mat: &TMat4<f32>) -> bool {
+    let GizmoTarget::Submodel(id) = drag.target else { return false };
+    if world_mat.try_inverse().is_none() {
+        return false;
+    }
+    let rot_matrix = match drag.mode {
+        GizmoMode::Rotate => pof::mat4_rotation_only(world_mat),
+        GizmoMode::Scale => glm::identity(),
+        GizmoMode::Translate => return false,
+    };
+    model.transform_submodels_world(id, &drag.snapshot, world_mat, &rot_matrix)
+}
+
+fn gizmo_drag_changed(drag: &GizmoDrag) -> bool {
+    match drag.mode {
+        GizmoMode::Translate => drag.accum_offset.magnitude() > 1e-6,
+        GizmoMode::Rotate | GizmoMode::Scale => (drag.accum_mat - glm::identity::<f32, 4>()).abs().max() > 1e-6,
+    }
+}
+
+fn gizmo_undo_action(target: GizmoTarget, snapshot: GizmoSnapshot) -> UndoAction {
+    let mut snapshot = snapshot;
+    let mut first_time = true;
+    UndoAction {
+        function: Box::new(move |model: &mut Model| {
+            if first_time {
+                first_time = false;
+            } else {
+                model.swap_gizmo_snapshot(target, &mut snapshot);
+            }
+        }),
+    }
+}
+
 const LOLLIPOP_UNSELECTED_COLOR: [f32; 4] = [0.3, 0.3, 0.3, 0.15];
 const LOLLIPOP_SELECTED_BANK_COLOR: [f32; 4] = [0.15, 0.15, 1.0, 0.15];
 const LOLLIPOP_SELECTED_POINT_COLOR: [f32; 4] = [1.0, 0.15, 0.15, 0.15];
 
 const UVEC_COLOR: [f32; 4] = [0.15, 0.15, 1.0, 0.15];
 const FVEC_COLOR: [f32; 4] = [0.15, 1.0, 0.15, 0.15];
+
+const GIZMO_AXIS_COLORS: [[f32; 4]; 3] = [[0.9, 0.2, 0.2, 1.0], [0.2, 0.9, 0.2, 1.0], [0.25, 0.4, 1.0, 1.0]];
+const GIZMO_CENTER_COLOR: [f32; 4] = [0.85, 0.85, 0.85, 1.0];
+const GIZMO_HOVER_COLOR: [f32; 4] = [1.0, 1.0, 0.2, 1.0];
 
 const LOLLIPOP_UNSELECTED_PATH_COLOR: [f32; 4] = [0.3, 0.3, 0.3, 0.005];
 const LOLLIPOP_SELECTED_PATH_COLOR: [f32; 4] = [0.15, 0.15, 1.0, 0.05];

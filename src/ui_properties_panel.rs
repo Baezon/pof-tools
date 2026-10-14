@@ -2295,6 +2295,26 @@ impl PofToolsGui {
                 }
 
                 ui.add_space(5.0);
+                ui.label("Properties:");
+                if let TreeValue::Textures(TextureTreeValue::Texture(tex)) = current_tree_selection {
+                    // entries past the end are implicitly empty, so grow the list before handing out a path into it
+                    let num_textures = self.model.textures.len();
+                    if self.model.texture_properties.len() < num_textures {
+                        self.model.texture_properties.resize(num_textures, String::new());
+                    }
+                    text_edit_multi(
+                        ui,
+                        format!("{} properties", current_tree_selection),
+                        4,
+                        &mut self.model,
+                        path_func(move |model| &mut model.texture_properties[tex.0 as usize]),
+                        undo_history,
+                    );
+                } else {
+                    ui.add_enabled(false, egui::TextEdit::multiline(&mut blank_string).desired_rows(4));
+                }
+
+                ui.add_space(5.0);
                 if self
                     .model
                     .untextured_idx
@@ -3658,13 +3678,24 @@ impl PofToolsGui {
             let mut tex_name_map = HashMap::new();
             let mut changed_id_map = HashMap::new();
             let mut new_textures = vec![];
+            let mut new_properties: Vec<String> = vec![];
             for (i, tex) in self.model.textures.iter().enumerate() {
+                let props = self.model.texture_properties.get(i).cloned().unwrap_or_default();
                 if tex_name_map.contains_key(tex) {
+                    // the merged texture keeps the first non-empty properties among its duplicates
+                    let kept_id: TextureId = tex_name_map[tex];
+                    let kept = &mut new_properties[kept_id.0 as usize];
+                    if kept.is_empty() {
+                        *kept = props;
+                    } else if !props.is_empty() && *kept != props {
+                        warn!("Merging duplicates of texture {} discarded differing properties: {:?}", tex, props);
+                    }
                     changed_id_map.insert(TextureId(i as u32), tex_name_map[tex]);
                 } else {
                     changed_id_map.insert(TextureId(i as u32), TextureId(tex_name_map.len() as u32));
                     tex_name_map.insert(tex, TextureId(tex_name_map.len() as u32));
                     new_textures.push(tex.clone());
+                    new_properties.push(props);
                 }
             }
 
@@ -3679,6 +3710,7 @@ impl PofToolsGui {
                 undo_func(move |model: &mut Model| {
                     swap(&mut new_map, &mut model.texture_map);
                     swap(&mut new_textures, &mut model.textures);
+                    swap(&mut new_properties, &mut model.texture_properties);
                 }),
             );
 

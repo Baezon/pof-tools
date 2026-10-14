@@ -424,6 +424,11 @@ impl Model {
         })?;
         write_submodels(w, if self.version >= Version::V21_16 { b"OBJ2" } else { b"SOBJ" }, &self.submodels)?;
         write_chunk_vec(w, b"TXTR", &self.textures)?;
+        if self.texture_properties.iter().take(self.textures.len()).any(|props| !props.is_empty()) {
+            let mut texture_properties = self.texture_properties.clone();
+            texture_properties.resize(self.textures.len(), String::new());
+            write_chunk_vec(w, b"TXPR", &texture_properties)?;
+        }
         write_chunk_vec(w, b"PATH", &self.paths)?;
         write_chunk_vec(w, b"SPCL", &self.special_points)?;
         write_chunk_vec(w, b"EYE ", &self.eye_points)?;

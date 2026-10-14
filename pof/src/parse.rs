@@ -60,6 +60,7 @@ impl<R: Read + Seek> Parser<R> {
         let mut header = None;
         let mut submodels = vec![];
         let mut textures = None;
+        let mut texture_properties = None;
         let mut paths = None;
         let mut special_points = None;
         let mut eye_points = None;
@@ -244,6 +245,9 @@ impl<R: Read + Seek> Parser<R> {
 
                     textures = Some(self.read_list(|this| this.read_string())?);
                     //println!("{:#?}", textures);
+                }
+                b"TXPR" => {
+                    texture_properties = Some(self.read_list(|this| this.read_string())?);
                 }
                 b"PATH" => {
                     assert!(paths.is_none());
@@ -500,6 +504,12 @@ impl<R: Read + Seek> Parser<R> {
         });
 
         let mut textures = textures.unwrap_or_default();
+        let mut texture_properties = texture_properties.unwrap_or_default();
+        if !texture_properties.is_empty() && texture_properties.len() != textures.len() {
+            warn!("TXPR has properties for {} textures, but the model has {} textures", texture_properties.len(), textures.len());
+        }
+        // done before the untextured slot is added, so a stray extra entry can't attach to it
+        texture_properties.truncate(textures.len());
         let untextured_idx = post_parse_fill_untextured_slot(&mut submodels, &mut textures);
 
         let mut model = Model {
@@ -507,6 +517,7 @@ impl<R: Read + Seek> Parser<R> {
             header,
             submodels,
             textures,
+            texture_properties,
             paths: paths.unwrap_or_default(),
             special_points: special_points.unwrap_or_default(),
             eye_points: eye_points.unwrap_or_default(),

@@ -1422,6 +1422,12 @@ impl PofToolsGui {
                             } else {
                                 // still here, gotta add a slot i guess
                                 e.insert(TextureId(self.model.textures.len() as u32));
+                                let props = import_model.texture_properties.get(poly.texture.0 as usize).cloned().unwrap_or_default();
+                                if !props.is_empty() {
+                                    let num_textures = self.model.textures.len();
+                                    self.model.texture_properties.resize(num_textures, String::new());
+                                    self.model.texture_properties.push(props);
+                                }
                                 self.model.textures.push(import_model.textures[poly.texture.0 as usize].clone());
                             }
                         }

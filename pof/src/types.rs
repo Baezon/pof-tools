@@ -1836,6 +1836,9 @@ pub struct Model {
     pub header: ModelHeader,
     pub submodels: SubmodelVec<Submodel>,
     pub textures: Vec<String>,
+    /// per-texture properties, by texture index; may be shorter than `textures`, a missing entry is the same as an empty one,
+    /// and entries past the end of `textures` are ignored on write
+    pub texture_properties: Vec<String>,
     pub paths: Vec<Path>,
     pub special_points: Vec<SpecialPoint>,
     pub eye_points: Vec<EyePoint>,

@@ -2269,7 +2269,14 @@ impl PofToolsGui {
 
                 ui.separator();
 
-                if ui.button("🗐 Merge Duplicates").clicked() {
+                if ui
+                    .button("🗐 Merge Duplicates")
+                    .on_hover_text(
+                        "Merges textures with the same name and the same properties. Textures that share a name but have \
+                        different properties stay separate; make their properties match first to merge them.",
+                    )
+                    .clicked()
+                {
                     merge_duplicate_textures = true;
                 }
 
@@ -2295,7 +2302,11 @@ impl PofToolsGui {
                 }
 
                 ui.add_space(5.0);
-                ui.label("Properties:");
+                ui.label("Properties:").on_hover_text(
+                    "Settings for this texture wherever the model is used, saved in the model's TXPR chunk. Older \
+                    versions of POF Tools and PCS2 drop them when they re-save the model, and DAE/glTF export \
+                    doesn't carry them.",
+                );
                 if let TreeValue::Textures(TextureTreeValue::Texture(tex)) = current_tree_selection {
                     // entries past the end are implicitly empty, so grow the list before handing out a path into it
                     let num_textures = self.model.textures.len();
@@ -3680,22 +3691,15 @@ impl PofToolsGui {
             let mut new_textures = vec![];
             let mut new_properties: Vec<String> = vec![];
             for (i, tex) in self.model.textures.iter().enumerate() {
-                let props = self.model.texture_properties.get(i).cloned().unwrap_or_default();
-                if tex_name_map.contains_key(tex) {
-                    // the merged texture keeps the first non-empty properties among its duplicates
-                    let kept_id: TextureId = tex_name_map[tex];
-                    let kept = &mut new_properties[kept_id.0 as usize];
-                    if kept.is_empty() {
-                        *kept = props;
-                    } else if !props.is_empty() && *kept != props {
-                        warn!("Merging duplicates of texture {} discarded differing properties: {:?}", tex, props);
-                    }
-                    changed_id_map.insert(TextureId(i as u32), tex_name_map[tex]);
+                // the same image with different properties is deliberate, so both have to match to be a duplicate
+                let key = (tex, self.model.texture_properties.get(i).map_or("", String::as_str));
+                if tex_name_map.contains_key(&key) {
+                    changed_id_map.insert(TextureId(i as u32), tex_name_map[&key]);
                 } else {
                     changed_id_map.insert(TextureId(i as u32), TextureId(tex_name_map.len() as u32));
-                    tex_name_map.insert(tex, TextureId(tex_name_map.len() as u32));
+                    tex_name_map.insert(key, TextureId(tex_name_map.len() as u32));
                     new_textures.push(tex.clone());
-                    new_properties.push(props);
+                    new_properties.push(key.1.to_string());
                 }
             }
 

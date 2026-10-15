@@ -872,9 +872,12 @@ impl PofToolsGui {
                         .on_disabled_hover_text("All errors must be corrected before saving.")
                         .clicked()
                     {
+                        // the merged textures and submodel transforms remain pending afterwards, so they only go into what gets written
+                        let submodels = self.model.pof_model.submodels.0.clone();
                         self.model.clean_up();
 
                         let new_filename = PofToolsGui::save_model(&self.model);
+                        self.model.pof_model.submodels.0 = submodels;
                         if let Some(filename) = new_filename {
                             window.set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, filename));
                         }

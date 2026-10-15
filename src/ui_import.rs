@@ -649,7 +649,7 @@ impl UiState {
                         SelectionType::None
                     };
                     if selectable_label(ui, selection_status, "Header Geometry Data")
-                        .on_hover_text("Bound box, radius, mass and moment of inertia")
+                        .on_hover_text("Bound box, radius, mass, center of mass and moment of inertia")
                         .clicked()
                     {
                         toggle(&mut self.import_window.import_selection, TreeValue::Header);
@@ -1155,6 +1155,7 @@ impl PofToolsGui {
                     self.model.header.bbox = header.bbox;
                     self.model.header.max_radius = header.max_radius;
                     self.model.header.mass = header.mass;
+                    self.model.header.center_of_mass = header.center_of_mass;
                     self.model.header.moment_of_inertia = header.moment_of_inertia;
                 }
                 TreeValue::DockingBays(DockingTreeValue::Bay(idx)) => {

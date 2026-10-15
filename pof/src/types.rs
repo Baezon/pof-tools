@@ -13,7 +13,7 @@ use byteorder::{WriteBytesExt, LE};
 pub use dae_parser::UpAxis;
 use glm::{TMat3, TMat4, Vec3};
 use log::warn;
-use nalgebra::Matrix3;
+use nalgebra::{Matrix3, Vector3};
 use nalgebra_glm::Mat4;
 extern crate nalgebra_glm as glm;
 
@@ -1396,6 +1396,8 @@ impl Default for SubsysRotationAxis {
 }
 
 pub const MAX_DEBRIS_MODELS: u32 = 32;
+/// how far the verts around a hole may stray from a plane for it to count as flat, against how far they spread within it
+const FLAT_HOLE_TOLERANCE: f64 = 0.01;
 
 /// "semantic name links", fields derived specifically from their names
 /// recalculated by recalc_semantic_name_links
@@ -1509,17 +1511,24 @@ impl Submodel {
         let mut surface_area = 0.0;
         let mut weighted_sum = Vec3d::ZERO;
         for (_, poly) in self.bsp_data.collision_tree.leaves() {
-            let v1 = self.bsp_data.verts[poly.verts[0].vertex_id.0 as usize];
-            let v2 = self.bsp_data.verts[poly.verts[1].vertex_id.0 as usize];
-            let v3 = self.bsp_data.verts[poly.verts[2].vertex_id.0 as usize];
+            if let [first, rest @ ..] = &poly.verts[..] {
+                let v1 = self.bsp_data.verts[first.vertex_id.0 as usize];
+                for pair in rest.windows(2) {
+                    let v2 = self.bsp_data.verts[pair[0].vertex_id.0 as usize];
+                    let v3 = self.bsp_data.verts[pair[1].vertex_id.0 as usize];
 
-            let v12 = v2 - v1;
-            let v13 = v3 - v1;
-            let this_area = v12.cross(&v13).magnitude();
-            weighted_sum += Vec3d::average([v1, v2, v3].into_iter()) * this_area;
-            surface_area += this_area;
+                    let this_area = 0.5 * (v2 - v1).cross(&(v3 - v1)).magnitude();
+                    weighted_sum += Vec3d::average([v1, v2, v3].into_iter()) * this_area;
+                    surface_area += this_area;
+                }
+            }
         }
-        (surface_area, weighted_sum / surface_area)
+
+        if surface_area > 0.0 {
+            (surface_area, weighted_sum / surface_area)
+        } else {
+            (0.0, Vec3d::ZERO)
+        }
     }
 }
 
@@ -2003,6 +2012,8 @@ impl Model {
                     properties_get_field(&dock.properties, "$parent_submodel").map_or(false, |name| self.get_model_id_by_name(name).is_none())
                 }),
                 Warning::Detail0NonZeroOffset => self.header.detail_levels.get(0).map_or(false, |id| !self.submodels[*id].offset.is_null()),
+                Warning::InvalidMomentOfInertia => self.moi_test_failed(),
+                Warning::InvalidMass => self.mass_test_failed(),
             };
 
             let existing_warning = self.warnings.contains(&warning);
@@ -2141,6 +2152,14 @@ impl Model {
                 }
             }
 
+            if self.moi_test_failed() {
+                self.warnings.insert(Warning::InvalidMomentOfInertia);
+            }
+
+            if self.mass_test_failed() {
+                self.warnings.insert(Warning::InvalidMass);
+            }
+
             for duped_id in self.header.detail_levels.iter().duplicates() {
                 self.warnings.insert(Warning::DuplicateDetailLevel(*duped_id));
             }
@@ -2218,6 +2237,34 @@ impl Model {
             }
         }
 
+        false
+    }
+
+    // FSO rejects a moment of inertia containing a NaN or infinity, and treats one that is below 1e-36 throughout as missing
+    fn moi_test_failed(&self) -> bool {
+        let moi = glm::Mat3x3::from(self.header.moment_of_inertia);
+        !self.submodels.is_empty() && (moi.iter().any(|val| !val.is_finite()) || moi.iter().all(|val| val.abs() < 1e-36))
+    }
+
+    // FSO divides by the mass when a ship is hit
+    fn mass_test_failed(&self) -> bool {
+        !self.submodels.is_empty() && !(self.header.mass > 0.0 && self.header.mass.is_finite())
+    }
+
+    // whether this submodel is missing from an intact ship, as a destroyed version, live debris, or a descendant of either
+    fn is_hidden_when_intact(&self, id: SubmodelId) -> bool {
+        let mut id_opt = Some(id);
+        while let Some(id) = id_opt {
+            let smodel = &self.submodels[id];
+            if smodel
+                .name_links
+                .iter()
+                .any(|link| matches!(link, NameLink::DestroyedVersionOf(_) | NameLink::LiveDebrisOf(_)))
+            {
+                return true;
+            }
+            id_opt = smodel.parent;
+        }
         false
     }
 
@@ -2693,7 +2740,6 @@ impl Model {
         f(&self.submodels[id]);
 
         for &child_id in self.submodels[id].children() {
-            f(&self.submodels[child_id]);
             self.do_for_recursive_smodel_children(child_id, f);
         }
     }
@@ -2719,6 +2765,20 @@ impl Model {
 
         self.header.bbox = self.recalc_bbox();
         self.header.max_radius = self.recalc_radius();
+        self.header.center_of_mass = matrix * self.header.center_of_mass;
+
+        // the translation is left out, its effect on the moment of inertia depends on where the mass is
+        let linear = matrix.fixed_view::<3, 3>(0, 0).into_owned().cast::<f64>();
+        let inv_moi = glm::Mat3x3::from(self.header.moment_of_inertia).cast::<f64>();
+        if let Some(moi) = inv_moi.try_inverse() {
+            let second_moment = linear * (Matrix3::identity() * (0.5 * moi.trace()) - moi) * linear.transpose();
+            let new_moi = Matrix3::identity() * second_moment.trace() - second_moment;
+            if let Some(new_inv_moi) = new_moi.try_inverse().map(|mat| mat.cast::<f32>()) {
+                if new_inv_moi.iter().all(|val| val.is_finite()) {
+                    self.header.moment_of_inertia = new_inv_moi.into();
+                }
+            }
+        }
 
         for path in &mut self.paths {
             path.apply_transform(&matrix);
@@ -2796,8 +2856,17 @@ impl Model {
             *norm = (&norm_matrix * *norm).normalize();
         }
 
-        submodel.bsp_data.collision_tree =
-            BspData::recalculate(&submodel.bsp_data.verts, std::mem::take(&mut submodel.bsp_data.collision_tree).into_leaves().map(|(_, poly)| poly));
+        // a mirror would leave the polygons facing inwards, were their winding not reversed along with it
+        let mirrored = no_trans_matrix.determinant() < 0.0;
+        submodel.bsp_data.collision_tree = BspData::recalculate(
+            &submodel.bsp_data.verts,
+            std::mem::take(&mut submodel.bsp_data.collision_tree).into_leaves().map(|(_, mut poly)| {
+                if mirrored {
+                    poly.verts.reverse();
+                }
+                poly
+            }),
+        );
 
         submodel.bbox = *submodel.bsp_data.collision_tree.bbox();
 
@@ -2830,8 +2899,17 @@ impl Model {
             *norm = (&norm_matrix * *norm).normalize();
         }
 
-        submodel.bsp_data.collision_tree =
-            BspData::recalculate(&submodel.bsp_data.verts, std::mem::take(&mut submodel.bsp_data.collision_tree).into_leaves().map(|(_, poly)| poly));
+        // a mirror would leave the polygons facing inwards, were their winding not reversed along with it
+        let mirrored = no_trans_matrix.determinant() < 0.0;
+        submodel.bsp_data.collision_tree = BspData::recalculate(
+            &submodel.bsp_data.verts,
+            std::mem::take(&mut submodel.bsp_data.collision_tree).into_leaves().map(|(_, mut poly)| {
+                if mirrored {
+                    poly.verts.reverse();
+                }
+                poly
+            }),
+        );
     }
 
     pub fn recalc_submodel_offset(&mut self, id: SubmodelId) -> Vec3d {
@@ -2916,47 +2994,193 @@ impl Model {
         bbox
     }
 
-    pub fn recalc_mass(&mut self) -> f32 {
-        4.65 * (self.header.bbox.volume().powf(2.0 / 3.0))
+    /// The mass FSO would expect of a model of this volume, along with the open submodels that were left out of it.
+    /// A shell has no volume, so its bounding box stands in for it.
+    pub fn recalc_mass(&self, mass_model: MassModel) -> Result<(f32, Vec<SubmodelId>), MassPropertiesError> {
+        match mass_model {
+            MassModel::Solid { .. } | MassModel::Retail { .. } => {
+                let (volume, _, _, skipped) = self.mass_integrals(mass_model)?;
+                // the power is the one FSO's loader uses, which isn't quite two thirds
+                Ok(((4.65 * volume.powf(0.6667)) as f32, skipped))
+            }
+            MassModel::Shell => Ok((4.65 * (self.header.bbox.volume().powf(2.0 / 3.0)), vec![])),
+        }
     }
 
-    pub fn recalc_moi(&mut self) -> Option<Mat3d> {
-        fn sum_verts_recurse(submodels: &SubmodelVec<Submodel>, id: SubmodelId) -> usize {
-            submodels[id].bsp_data.verts.len() + submodels[id].children.iter().map(|id| sum_verts_recurse(submodels, *id)).sum::<usize>()
+    // the total weight of detail0 and its children, their first moment and their second moment, along with the open submodels left out;
+    // the weight is area for a shell, and volume for a solid; the retail model weighs detail0 alone
+    #[allow(clippy::type_complexity)]
+    fn mass_integrals(&self, mass_model: MassModel) -> Result<(f64, Vector3<f64>, Matrix3<f64>, Vec<SubmodelId>), MassPropertiesError> {
+        let mut total = 0.0;
+        let mut first_moment = Vector3::zeros();
+        let mut second_moment = Matrix3::zeros();
+        let mut open = vec![];
+        let mut inside_out = vec![];
+
+        for smodel in &self.submodels {
+            let weighed = self.header.detail_levels.first().is_some_and(|&detail_0| match mass_model {
+                MassModel::Retail { .. } => smodel.id == detail_0,
+                MassModel::Solid { .. } | MassModel::Shell => {
+                    self.is_model_id_ancestor(smodel.id, detail_0) && !self.is_hidden_when_intact(smodel.id)
+                }
+            });
+            if !weighed {
+                continue;
+            }
+
+            let offset = self.get_total_submodel_offset(smodel.id);
+            let get_vert = |vert: Vec3d| Vec3::from(vert + offset).cast::<f64>();
+            let mut triangles = vec![];
+
+            if let MassModel::Solid { cap_flat_holes, .. } | MassModel::Retail { cap_flat_holes } = mass_model {
+                // the polygons only enclose a volume if each of their edges is met by one running the other way
+                let mut edges: HashMap<[[u32; 3]; 2], i32> = HashMap::new();
+                for (_, poly) in smodel.bsp_data.collision_tree.leaves() {
+                    // verts are told apart by position, with -0.0 taken as 0.0
+                    let keys: Vec<_> = poly
+                        .verts
+                        .iter()
+                        .map(|vert| <[f32; 3]>::from(smodel.bsp_data.verts[vert.vertex_id.0 as usize]).map(|val| (val + 0.0).to_bits()))
+                        .collect();
+                    for (i, &key) in keys.iter().enumerate() {
+                        let next_key = keys[(i + 1) % keys.len()];
+                        *edges.entry([key, next_key]).or_default() += 1;
+                        *edges.entry([next_key, key]).or_default() -= 1;
+                    }
+                }
+
+                // those that aren't run around the holes, a hole being the edges that are joined to each other
+                let unmatched: Vec<_> = edges.into_iter().filter(|&(_, count)| count > 0).collect();
+                fn hole_of(hole_of_vert: &mut HashMap<[u32; 3], usize>, merged_into: &mut Vec<usize>, key: [u32; 3]) -> usize {
+                    let mut hole = *hole_of_vert.entry(key).or_insert_with(|| {
+                        merged_into.push(merged_into.len());
+                        merged_into.len() - 1
+                    });
+                    while merged_into[hole] != hole {
+                        merged_into[hole] = merged_into[merged_into[hole]];
+                        hole = merged_into[hole];
+                    }
+                    hole
+                }
+                let mut hole_of_vert = HashMap::new();
+                let mut merged_into = vec![];
+                for ([start, end], _) in &unmatched {
+                    let start_hole = hole_of(&mut hole_of_vert, &mut merged_into, *start);
+                    merged_into[start_hole] = hole_of(&mut hole_of_vert, &mut merged_into, *end);
+                }
+                let mut holes: HashMap<usize, Vec<([Vector3<f64>; 2], i32)>> = HashMap::new();
+                for ([start, end], count) in unmatched {
+                    let ends = [start, end].map(|key| get_vert(key.map(f32::from_bits).into()));
+                    holes
+                        .entry(hole_of(&mut hole_of_vert, &mut merged_into, start))
+                        .or_default()
+                        .push((ends, count));
+                }
+
+                // a hole that lies in a plane can be closed with no guessing at the shape of what is missing
+                let mut all_flat = true;
+                for hole in holes.values() {
+                    let center = hole.iter().map(|([start, _], _)| start).sum::<Vector3<f64>>() / hole.len() as f64;
+                    let spread = hole
+                        .iter()
+                        .map(|([start, _], _)| (start - center) * (start - center).transpose())
+                        .sum::<Matrix3<f64>>();
+                    let spreads = spread.symmetric_eigenvalues();
+                    all_flat &= spreads.min() <= FLAT_HOLE_TOLERANCE * FLAT_HOLE_TOLERANCE * spreads.max();
+
+                    for &([start, end], count) in hole {
+                        triangles.extend((0..count).map(|_| [center, end, start]));
+                    }
+                }
+
+                if !holes.is_empty() && !(cap_flat_holes && all_flat) {
+                    open.push(smodel.id);
+                    continue;
+                }
+            }
+
+            for (_, poly) in smodel.bsp_data.collision_tree.leaves() {
+                if let [first, rest @ ..] = &poly.verts[..] {
+                    triangles.extend(
+                        rest.windows(2)
+                            .map(|pair| [first, &pair[0], &pair[1]].map(|vert| get_vert(smodel.bsp_data.verts[vert.vertex_id.0 as usize]))),
+                    );
+                }
+            }
+
+            let mut this_total = 0.0;
+            let mut this_unsigned_total = 0.0;
+            let mut this_first_moment = Vector3::zeros();
+            let mut this_second_moment = Matrix3::zeros();
+            for [v1, v2, v3] in triangles {
+                // for a solid, each triangle stands for the tetrahedron between it and the origin
+                let (weight, first_scale, second_scale) = match mass_model {
+                    MassModel::Solid { .. } | MassModel::Retail { .. } => (v1.dot(&v2.cross(&v3)) / 6.0, 1.0 / 4.0, 1.0 / 20.0),
+                    MassModel::Shell => (0.5 * (v2 - v1).cross(&(v3 - v1)).magnitude(), 1.0 / 3.0, 1.0 / 12.0),
+                };
+                let sum = v1 + v2 + v3;
+                this_total += weight;
+                this_unsigned_total += weight.abs();
+                this_first_moment += sum * (weight * first_scale);
+                this_second_moment +=
+                    (v1 * v1.transpose() + v2 * v2.transpose() + v3 * v3.transpose() + sum * sum.transpose()) * (weight * second_scale);
+            }
+
+            // the margin is for a mesh with no volume to it, like a two sided fin, which won't quite sum to zero
+            if this_total < -1e-9 * this_unsigned_total {
+                inside_out.push(smodel.id);
+                continue;
+            }
+
+            total += this_total;
+            first_moment += this_first_moment;
+            second_moment += this_second_moment;
         }
 
-        if let Some(&detail_0) = self.header.detail_levels.first() {
-            let num_verts = sum_verts_recurse(&self.submodels, detail_0);
+        let skip_open = matches!(mass_model, MassModel::Solid { skip_open: true, .. });
+        if !inside_out.is_empty() || (!open.is_empty() && !skip_open) {
+            return Err(MassPropertiesError::BadMesh { open: if skip_open { vec![] } else { open }, inside_out });
+        }
 
-            fn add_point_mass_moi(moi: &mut Matrix3<f64>, pos: Vec3d) {
-                moi.column_mut(0).x += (pos.y * pos.y + pos.z * pos.z) as f64;
-                moi.column_mut(0).y -= (pos.x * pos.y) as f64;
-                moi.column_mut(0).z -= (pos.x * pos.z) as f64;
-                moi.column_mut(1).x -= (pos.x * pos.y) as f64;
-                moi.column_mut(1).y += (pos.x * pos.x + pos.z * pos.z) as f64;
-                moi.column_mut(1).z -= (pos.y * pos.z) as f64;
-                moi.column_mut(2).x -= (pos.x * pos.z) as f64;
-                moi.column_mut(2).y -= (pos.y * pos.z) as f64;
-                moi.column_mut(2).z += (pos.x * pos.x + pos.y * pos.y) as f64;
-            }
-
-            fn accumulate_moi_recurse(submodels: &SubmodelVec<Submodel>, id: SubmodelId, moi: &mut Matrix3<f64>) {
-                submodels[id].bsp_data.verts.iter().for_each(|vert| add_point_mass_moi(moi, *vert));
-                submodels[id].children.iter().for_each(|id| accumulate_moi_recurse(submodels, *id, moi));
-            }
-
-            let mut new_moi: Matrix3<f64> = Matrix3::zeros();
-
-            accumulate_moi_recurse(&self.submodels, detail_0, &mut new_moi);
-
-            let point_mass = self.header.mass as f64 / num_verts as f64;
-            new_moi *= point_mass;
-            new_moi = new_moi.try_inverse().unwrap();
-
-            Some(new_moi.cast::<f32>().into())
+        if total > 0.0 {
+            Ok((total, first_moment, second_moment, open))
         } else {
-            None
+            Err(MassPropertiesError::NothingToWeigh)
         }
+    }
+
+    /// The inertia tensor, inverted as the POF header stores it and FSO uses it, along with the open submodels that were left out of it.
+    /// Solid and Shell take it about the model origin. Retail takes it about the center of mass and adds to the diagonal.
+    pub fn recalc_moi(&self, mass_model: MassModel) -> Result<(Mat3d, Vec<SubmodelId>), MassPropertiesError> {
+        let (total, first_moment, mut second_moment, skipped) = self.mass_integrals(mass_model)?;
+
+        let mass = self.header.mass as f64;
+        if !(mass > 0.0 && mass.is_finite()) {
+            return Err(MassPropertiesError::InvalidMass);
+        }
+
+        second_moment *= mass / total;
+        let mut moi = Matrix3::identity() * second_moment.trace() - second_moment;
+        if let MassModel::Retail { .. } = mass_model {
+            // Volition's converter moved the tensor to the center of mass with the identity where |c|^2 times the identity belongs
+            let center = first_moment / total;
+            moi -= (Matrix3::identity() - center * center.transpose()) * mass;
+            if moi.symmetric_eigenvalues().min() <= 0.0 {
+                return Err(MassPropertiesError::TooSmall);
+            }
+        }
+        let inv_moi = moi.try_inverse().ok_or(MassPropertiesError::Degenerate)?.cast::<f32>();
+        if inv_moi.iter().all(|val| val.is_finite()) {
+            Ok((inv_moi.into(), skipped))
+        } else {
+            Err(MassPropertiesError::Degenerate)
+        }
+    }
+
+    /// The center of mass, along with the open submodels that were left out of it.
+    pub fn recalc_center_of_mass(&self, mass_model: MassModel) -> Result<(Vec3d, Vec<SubmodelId>), MassPropertiesError> {
+        let (total, first_moment, _, skipped) = self.mass_integrals(mass_model)?;
+        Ok(((first_moment / total).cast::<f32>().into(), skipped))
     }
 
     /// returns the surface area of detail0 and its children, and the average surface area position
@@ -2969,13 +3193,21 @@ impl Model {
             return (0.0, Vec3d::ZERO);
         };
 
-        self.do_for_recursive_smodel_children(*detail0, &mut |smodel| {
-            let (this_area, this_avg) = smodel.surface_area_average_pos();
-            weighted_avg += this_avg * this_area;
-            surface_area += this_area;
-        });
+        for smodel in &self.submodels {
+            if !self.is_model_id_ancestor(smodel.id, *detail0) || self.is_hidden_when_intact(smodel.id) {
+                continue;
+            }
 
-        (surface_area, weighted_avg / surface_area)
+            let (this_area, this_avg) = smodel.surface_area_average_pos();
+            weighted_avg += (this_avg + self.get_total_submodel_offset(smodel.id)) * this_area;
+            surface_area += this_area;
+        }
+
+        if surface_area > 0.0 {
+            (surface_area, weighted_avg / surface_area)
+        } else {
+            (0.0, Vec3d::ZERO)
+        }
     }
 
     pub fn recalc_all_children_ids(&mut self) {
@@ -3079,6 +3311,7 @@ impl Model {
 
     pub fn global_import(&mut self, mut import_model: Box<Model>) {
         self.header.mass = import_model.header.mass;
+        self.header.center_of_mass = import_model.header.center_of_mass;
         self.header.moment_of_inertia = import_model.header.moment_of_inertia;
         self.primary_weps = import_model.primary_weps;
         self.secondary_weps = import_model.secondary_weps;
@@ -3134,6 +3367,37 @@ pub enum Set<T> {
     One(T),
 }
 
+/// How the mass is taken to be distributed through the model.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum MassModel {
+    /// Evenly through its volume, which only a closed mesh has. `cap_flat_holes` closes the holes that lie in a plane,
+    /// and `skip_open` leaves out the submodels that still aren't closed.
+    Solid { cap_flat_holes: bool, skip_open: bool },
+    /// Evenly over its surface.
+    Shell,
+    /// As Volition's converter weighed the retail models: detail0 alone, as a solid, with its own formula for the tensor.
+    Retail { cap_flat_holes: bool },
+}
+impl Default for MassModel {
+    fn default() -> Self {
+        MassModel::Solid { cap_flat_holes: true, skip_open: false }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum MassPropertiesError {
+    /// Submodels that can't be treated as solid.
+    BadMesh {
+        open: Vec<SubmodelId>,
+        inside_out: Vec<SubmodelId>,
+    },
+    NothingToWeigh,
+    InvalidMass,
+    Degenerate,
+    /// The retail formula takes a square metre off each moment, which leaves a small model with no tensor.
+    TooSmall,
+}
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone)]
 pub enum Error {
     InvalidTurretGunSubmodel(usize), // turret index
@@ -3165,6 +3429,8 @@ pub enum Warning {
     TooManyTextures,
     InvalidDockParentSubmodel(usize),
     Detail0NonZeroOffset,
+    InvalidMomentOfInertia,
+    InvalidMass,
 
     PathNameTooLong(usize),
     SpecialPointNameTooLong(usize),

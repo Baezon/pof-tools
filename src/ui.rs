@@ -517,6 +517,7 @@ pub struct UiState {
     pub display_uvec_fvec: bool,
     pub move_only_offset: bool,
     pub auto_gen_paths_confirm: bool,
+    pub auto_gen_paths_regen_existing: bool,
 }
 
 pub(crate) struct PofToolsGui {

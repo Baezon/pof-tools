@@ -20,19 +20,19 @@ use eframe::egui::PointerButton;
 use egui::{Color32, RichText, TextEdit, ViewportId};
 use glium::{glutin::surface::WindowSurface, texture::SrgbTexture2d, BlendingFunction, Display, IndexBuffer, LinearBlendingFactor, VertexBuffer};
 use glm::{Mat4x4, TMat4};
-use native_dialog::FileDialog;
+use native_dialog::{FileDialog, MessageDialog, MessageType};
 use pof::{
-    properties_get_field, BspData, Insignia, NameLink, NormalId, NormalVec3, Parser, PolyVertex, Polygon, Set, ShieldData, Submodel, SubmodelId,
+    properties_get_field, BspData, Insignia, NameLink, NormalId, NormalVec3, Parser, PolyVertex, Polygon, ShieldData, Submodel, SubmodelId,
     SubmodelVec, TextureId, Vec3d, VertexId,
 };
 use simplelog::*;
 use std::{
     collections::HashMap,
     f32::consts::PI,
-    fs::File,
+    fs::{self, File},
     io::{Cursor, Read},
     ops::{Deref, DerefMut},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::mpsc::{Receiver, TryRecvError},
     time::Duration,
 };
@@ -436,30 +436,65 @@ impl Model {
 ///     * `Err(panic message)`: the loading failed! Probably while parsing the model
 type LoadingThread = Option<Receiver<Result<Option<Box<pof::Model>>, String>>>;
 
+/// A path as it should be shown to the user.
+fn display_path(path: &Path) -> String {
+    // canonicalize() gives Windows paths a verbatim prefix, which isn't meant for people to read
+    let shown = path.display().to_string();
+    match shown.strip_prefix(r"\\?\") {
+        Some(rest) => rest.strip_prefix(r"UNC\").map_or(rest.to_string(), |share| format!(r"\\{}", share)),
+        None => shown,
+    }
+}
+
 impl PofToolsGui {
-    fn save_model(model: &pof::Model) -> Option<String> {
+    /// Saves the model to the path, or to one chosen from a dialog if none is given. Returns where it was saved.
+    fn save_model(model: &pof::Model, path: Option<PathBuf>) -> Option<PathBuf> {
         let mut out = None;
         // use a scoped thread here, its ok to block the main window for now i guess
         crossbeam::thread::scope(|s| {
             s.spawn(|_| {
-                let path = FileDialog::new()
-                    .set_filename(&model.path_to_file.file_name().unwrap_or_default().to_string_lossy())
-                    .add_filter("All Supported Files", &["pof", "dae", "gltf", "glb"])
-                    .add_filter("Parallax Object File", &["pof"])
-                    .add_filter("Digital Asset Exchange file", &["dae"])
-                    .add_filter("GL Transmission Format (Embedded)", &["gltf"])
-                    .add_filter("GL Transmission Format (Binary)", &["glb"])
-                    .show_save_single_file();
-                if let Ok(Some(path)) = path {
-                    let mut file = File::create(path.clone()).unwrap();
-                    match path.extension().map(|ext| ext.to_ascii_lowercase()) {
-                        Some(s) if s == "glb" => model.write_gltf(&mut file, true).unwrap(),
-                        Some(s) if s == "gltf" => model.write_gltf(&mut file, false).unwrap(),
-                        Some(s) if s == "dae" => model.write_dae(&mut file).unwrap(),
-                        Some(s) if s == "pof" => model.write(&mut file).unwrap(),
-                        s => panic!("unexpected extension {:?}", s),
+                let path = path.or_else(|| {
+                    FileDialog::new()
+                        .set_filename(&model.path_to_file.file_name().unwrap_or_default().to_string_lossy())
+                        .add_filter("All Supported Files", &["pof", "dae", "gltf", "glb"])
+                        .add_filter("Parallax Object File", &["pof"])
+                        .add_filter("Digital Asset Exchange file", &["dae"])
+                        .add_filter("GL Transmission Format (Embedded)", &["gltf"])
+                        .add_filter("GL Transmission Format (Binary)", &["glb"])
+                        .show_save_single_file()
+                        .ok()
+                        .flatten()
+                });
+                if let Some(path) = path {
+                    // write beside the target and rename over it, so a failed write leaves the original intact
+                    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+                    tmp_name.push(".tmp");
+                    let tmp_path = path.with_file_name(tmp_name);
+
+                    let result = File::create(&tmp_path).map_err(|e| e.to_string()).and_then(|mut file| {
+                        match path.extension().map(|ext| ext.to_ascii_lowercase()) {
+                            Some(s) if s == "glb" => model.write_gltf(&mut file, true).map_err(|e| e.to_string()),
+                            Some(s) if s == "gltf" => model.write_gltf(&mut file, false).map_err(|e| e.to_string()),
+                            Some(s) if s == "dae" => model.write_dae(&mut file).map_err(|e| format!("{:?}", e)),
+                            Some(s) if s == "pof" => model.write(&mut file).map_err(|e| e.to_string()),
+                            s => Err(format!("unexpected extension {:?}", s)),
+                        }
+                    });
+                    let result = result.and_then(|()| fs::rename(&tmp_path, &path).map_err(|e| e.to_string()));
+
+                    match result {
+                        Ok(()) => out = Some(path),
+                        Err(err) => {
+                            let _ = fs::remove_file(&tmp_path);
+                            let shown = display_path(&path);
+                            error!("Failed to save {}: {}", shown, err);
+                            let _ = MessageDialog::new()
+                                .set_type(MessageType::Error)
+                                .set_title("Save failed")
+                                .set_text(&format!("Could not save {}:\n{}", shown, err))
+                                .show_alert();
+                        }
                     }
-                    out = Some(path.file_name().and_then(|f| f.to_str()).unwrap_or("").to_string());
                 }
             });
         })
@@ -757,24 +792,6 @@ fn main() {
                     let mut target = display.draw();
 
                     target.clear_color_and_depth((0.0, 0.0, 0.0, 1.0), 1.0);
-
-                    // undo/redo
-                    if egui.egui_ctx().input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Z)) {
-                        undo_history.undo(&mut *pt_gui.model);
-
-                        pt_gui.model.recalc_semantic_name_links();
-                        pt_gui.model.recheck_warnings(Set::All);
-                        pt_gui.model.recheck_errors(Set::All);
-                        pt_gui.sanitize_ui_state();
-                        pt_gui.ui_state.refresh_properties_panel(&pt_gui.model);
-                        if pt_gui
-                            .ui_state
-                            .last_selected_smodel
-                            .is_some_and(|id| id.0 as usize >= pt_gui.model.submodels.len())
-                        {
-                            pt_gui.ui_state.last_selected_smodel = pt_gui.model.header.detail_levels.first().copied();
-                        }
-                    }
 
                     let model = &pt_gui.model;
 

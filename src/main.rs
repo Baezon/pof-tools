@@ -558,23 +558,7 @@ impl PofToolsGui {
 
     // after the above thread has returned, stuffs the new model in
     fn finish_loading_model(&mut self, window: &Window, display: &Display<WindowSurface>) {
-        self.model.buffer_meshes.clear();
-        self.buffer_shield = None;
-        self.buffer_insignias.clear();
-
-        for submodel in &self.model.pof_model.submodels {
-            self.model
-                .buffer_meshes
-                .push(GlMeshBuffers::new(display, submodel, self.model.pof_model.textures.len()));
-        }
-
-        for insignia in &self.model.insignias {
-            self.buffer_insignias.push(GlBufferedInsignia::new(display, insignia));
-        }
-
-        if let Some(shield) = &self.model.shield_data {
-            self.buffer_shield = Some(GlBufferedShield::new(display, shield));
-        }
+        self.rebuild_3d_buffers(&display);
 
         for _ in 0..self.model.submodels.len() {
             self.model.submodel_transform_matrix.push(glm::identity());
@@ -602,6 +586,26 @@ impl PofToolsGui {
         window.set_title(&format!("Pof Tools v{} - {}", POF_TOOLS_VERSION, filename));
 
         info!("Loaded {}", filename);
+    }
+
+    fn rebuild_3d_buffers(&mut self, display: &Display<WindowSurface>) {
+        self.model.buffer_meshes.clear();
+        self.buffer_shield = None;
+        self.buffer_insignias.clear();
+
+        for submodel in &self.model.pof_model.submodels {
+            self.model
+                .buffer_meshes
+                .push(GlMeshBuffers::new(display, submodel, self.model.pof_model.textures.len()));
+        }
+
+        for insignia in &self.model.insignias {
+            self.buffer_insignias.push(GlBufferedInsignia::new(display, insignia));
+        }
+
+        if let Some(shield) = &self.model.shield_data {
+            self.buffer_shield = Some(GlBufferedShield::new(display, shield));
+        }
     }
 
     fn handle_texture_loading_thread(&mut self, display: &Display<WindowSurface>) {

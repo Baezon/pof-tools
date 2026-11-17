@@ -1115,6 +1115,7 @@ impl PofToolsGui {
     ) {
         let mut reload_textures = false;
         let mut merge_duplicate_textures = false;
+        let mut rebuild_3d_buffers = false;
 
         macro_rules! select_new_tree_val {
             ($x:expr) => {
@@ -1437,10 +1438,14 @@ impl PofToolsGui {
                 if let Some(matrix) = UiState::show_transform_window(ctx, transform_window, Some(text)) {
                     // this is way too complicated to undo...
                     undo_history.clear();
+
+                    // this doesnt use the submodel transform matrices!!!
+                    // this will actually just modify the entire mesh in place and rebuild all the buffers from scratch
                     self.model.apply_transform(&matrix);
                     self.ui_state.viewport_3d_dirty = true;
                     self.ui_state.properties_panel_dirty = true;
                     self.model.recheck_warnings(One(Warning::Detail0NonZeroOffset));
+                    rebuild_3d_buffers = true;
                 }
 
                 ui.add_space(10.0);
@@ -3849,6 +3854,10 @@ impl PofToolsGui {
 
         if reload_textures {
             self.load_textures();
+        }
+
+        if rebuild_3d_buffers {
+            self.rebuild_3d_buffers(&display);
         }
 
         if self.ui_state.properties_panel_dirty {
